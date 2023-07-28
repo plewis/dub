@@ -28,7 +28,7 @@ namespace proj {
             
             epoch_list_t & digest();
             //void insertSpeciationEpochAt(epoch_list_t & epochs, double h, unsigned species1, unsigned species2, unsigned new_species);
-            void insertSpeciationEpochAt(epoch_list_t & epochs, double h, Node::species_set_t species1, Node::species_set_t species2, Node::species_set_t new_species);
+            void insertSpeciationEpochAt(epoch_list_t & epochs, double h, Node::species_t species1, Node::species_t species2, Node::species_t new_species);
             double advanceSpeciesForest(unsigned particle, unsigned step);
             
             // NOTE: any variables added must be copied in operator=
@@ -54,7 +54,7 @@ namespace proj {
             _nodes[i]._name = Forest::_species_names[i];
             _nodes[i]._edge_length = 0.0;
             _nodes[i]._height = 0.0;
-            _nodes[i]._species_set = {i};
+            _nodes[i]._species = {i};
             _lineages.push_back(&_nodes[i]);
         }
         _forest_height = 0.0;
@@ -102,12 +102,12 @@ namespace proj {
                 //unsigned lnum = lchild->getNumber();
                 //unsigned rnum = rchild->getNumber();
                 //unsigned ndnum = nd->getNumber();
-                nd->setSpeciesSetToUnion(lchild->getSpeciesSet(), rchild->getSpeciesSet());
+                nd->setSpeciesToUnion(lchild->getSpecies(), rchild->getSpecies());
 
                 Epoch sepoch(Epoch::speciation_epoch, h);
-                sepoch._left_species  = lchild->getSpeciesSet();
-                sepoch._right_species = rchild->getSpeciesSet();
-                sepoch._anc_species   = nd->getSpeciesSet();
+                sepoch._left_species  = lchild->getSpecies();
+                sepoch._right_species = rchild->getSpecies();
+                sepoch._anc_species   = nd->getSpecies();
                 //sepoch._left_species = lnum;
                 //sepoch._right_species = rnum;
                 //sepoch._anc_species = ndnum;
@@ -117,7 +117,7 @@ namespace proj {
             else {
                 // nd is a leaf
                 nd->setHeight(0.0);
-                nd->setSpeciesSetFromUnsigned((unsigned)nd->_number);
+                nd->setSpeciesFromUnsigned((unsigned)nd->_number);
             }
         }
 
@@ -180,22 +180,22 @@ namespace proj {
             Node * first_node  = _lineages[chosen_pair.first];
             Node * second_node = _lineages[chosen_pair.second];
             Node * anc_node    = joinLineagePair(first_node, second_node);
-            anc_node->setSpeciesSetToUnion(first_node->getSpeciesSet(), second_node->getSpeciesSet());
+            anc_node->setSpeciesToUnion(first_node->getSpecies(), second_node->getSpecies());
             
             // Update lineage vector
             removeTwoAddOne(_lineages, first_node, second_node, anc_node);
             
             Epoch epoch(Epoch::speciation_epoch, _forest_height);
-            epoch._left_species  = first_node->getSpeciesSet();
-            epoch._right_species = second_node->getSpeciesSet();
-            epoch._anc_species   = anc_node->getSpeciesSet();
+            epoch._left_species  = first_node->getSpecies();
+            epoch._right_species = second_node->getSpecies();
+            epoch._anc_species   = anc_node->getSpecies();
             pushBackEpoch(epochs, epoch);
         }
         
         heightsInternalsPreorders();
     }
     
-    inline void SpeciesForest::insertSpeciationEpochAt(epoch_list_t & epochs, double h, Node::species_set_t species1, Node::species_set_t species2, Node::species_set_t new_species) {
+    inline void SpeciesForest::insertSpeciationEpochAt(epoch_list_t & epochs, double h, Node::species_t species1, Node::species_t species2, Node::species_t new_species) {
         // Find iterator pointing to first epoch with height > h
         auto it = epochs.begin();
         for (; it != epochs.end(); ++it) {
@@ -212,8 +212,6 @@ namespace proj {
         spp_epoch._anc_species   = new_species;
         it = epochs.insert(it, spp_epoch);
         
-        Forest::debugShowEpochs(epochs);
-        
         // it now points to the inserted spp_epoch, so advance
         ++it;
             
@@ -222,8 +220,8 @@ namespace proj {
         for (; it != epochs.end(); ++it) {
             assert(it->isCoalescentEpoch());
                          
-            // Let ss be an alias for the epoch's species set
-            Node::species_set_t & ss = it->_species_set;
+            // Let ss be an alias for the epoch's species
+            Node::species_t & ss = it->_species;
 
             // Remove all elements of species1 from the set if found
             unsigned n1 = 0;
@@ -251,7 +249,7 @@ namespace proj {
             // Check to make sure that if one element of species2 was found then they all were found
             assert(n2 == 0 || n2 == species2.size());
 
-            // If either species1 or species1 was found in species set (and removed), need
+            // If either species1 or species1 was found in species (and removed), need
             // to add new_species to the set
             if (n1 > 0 || n2 > 0) {
                 ss.insert(new_species.begin(), new_species.end());
@@ -262,6 +260,8 @@ namespace proj {
             it->_lineage_counts[species1] = 0;
             it->_lineage_counts[species2] = 0;
         }
+        
+        debugShowEpochs(epochs);
     }
     
     inline double SpeciesForest::advanceSpeciesForest(unsigned particle, unsigned step) {
@@ -303,8 +303,7 @@ namespace proj {
         //       C       15      0    0,1,2
         //       C       17      1    0,1,2
         //
-        //    Species 0 and 1 are joined at height 4.5 to create species 01.
-        //    All epochs downstream replace species 0 and species 1 with 01.
+        //    Increment chosen at height 4.5, but no join performed first step.
         //    Coalescent likelihood returned after step 0 considers all coalescent
         //    events with heights > 4.5 to be in a single population.
         //
@@ -349,8 +348,9 @@ namespace proj {
         //       C       15      0    01,2
         //       C       17      1    01,2
         //
-        //    Species 01 and 2 are joined at height 5.5 to create species 012.
-        //    All epochs downstream replace species 01 and species 2 with 012.
+        //    Species 0 and 1 joined to create species 01.
+        //    All epochs downstream replace species 0 and species 1 with 01.
+        //    New increment chosen taking us to height 5.5.
         //    Coalescent likelihood returned after step 1 considers all coalescent
         //    events with heights > 5.5 to be in a single population.
         //
@@ -397,8 +397,10 @@ namespace proj {
         //       C       15      0      012
         //       C       17      1      012
         //
-        //  No more increments or joins are possible, so finish calculating the
-        //  coalescent likelihood by considering the remaining coalescent epochs.
+        //    Species 01 and 2 are joined at height 5.5 to create species 012.
+        //    All epochs downstream replace species 01 and species 2 with 012.
+        //    No more increments or joins are possible, so finish calculating the
+        //    coalescent likelihood by considering the remaining coalescent epochs.
         
         // This is the return value
         double log_weight = 0.0;
@@ -406,10 +408,38 @@ namespace proj {
         unsigned nlineages = (unsigned)_lineages.size();
         assert(nlineages > 1);
         
+        if (step > 0) {
+            pair<unsigned,unsigned> chosen_pair = rng.nchoose2(nlineages);
+            Node * first_node  = _lineages[chosen_pair.first];
+            Node * second_node = _lineages[chosen_pair.second];
+            Node * anc_node    = joinLineagePair(first_node, second_node);
+            anc_node->setSpeciesToUnion(first_node->getSpecies(), second_node->getSpecies());
+            
+            // Insert a speciation epoch and revise subsequent coalescent epochs to replace the two
+            // old species with the new species
+            Node::species_t oldspp1 = first_node->getSpecies();
+            Node::species_t oldspp2 = second_node->getSpecies();
+            Node::species_t newspp  = anc_node->getSpecies();
+            insertSpeciationEpochAt(_epochs, _forest_height, oldspp1, oldspp2, newspp);
+
+            // Update lineage vector
+            removeTwoAddOne(_lineages, first_node, second_node, anc_node);
+            --nlineages;
+        }
+
+        // Create a set of all species that currently (looking backward in time)
+        // exist in species tree lineages
+        set<Node::species_t> current_species;
+        for (auto lit = _lineages.begin(); lit != _lineages.end(); lit++) {
+            Node * nd = *lit;
+            current_species.insert(nd->_species);
+        }
+        assert(current_species.size() == nlineages);
+        
         // Find next coalescent event (over all gene trees) involving more than one species
         // That sets an upper bound on the time of the next speciation event, regardless of
         // which two species ultimately end up being joined.
-        double maxT = Forest::calcMaxT(_epochs, _forest_height);
+        double maxT = calcMaxT(_epochs, _forest_height, current_species);
         double max_waiting_time = maxT - _forest_height;
             
         // Choose waiting time until the next speciation event (conditional on maxT)
@@ -420,34 +450,39 @@ namespace proj {
         // Increment height of forest
         advanceAllLineagesBy(t);
         
-        pair<unsigned,unsigned> chosen_pair = rng.nchoose2(nlineages);
-        Node * first_node  = _lineages[chosen_pair.first];
-        Node * second_node = _lineages[chosen_pair.second];
-        Node * anc_node    = joinLineagePair(first_node, second_node);
-        anc_node->setSpeciesSetToUnion(first_node->getSpeciesSet(), second_node->getSpeciesSet());
-        
-        // Insert a speciation epoch and revise subsequent coalescent epochs to replace the two
-        // old species with the new species
-        Node::species_set_t oldspp1 = first_node->getSpeciesSet();
-        Node::species_set_t oldspp2 = second_node->getSpeciesSet();
-        Node::species_set_t newspp  = anc_node->getSpeciesSet();
-        insertSpeciationEpochAt(_epochs, _forest_height, oldspp1, oldspp2, newspp);
+        if (nlineages == 2) {
+            // Down to final 2 lineages; go ahead and join them to complete the species tree
+            Node * first_node  = _lineages[0];
+            Node * second_node = _lineages[1];
+            Node * anc_node    = joinLineagePair(first_node, second_node);
+            anc_node->setSpeciesToUnion(first_node->getSpecies(), second_node->getSpecies());
+            
+            // Insert a speciation epoch and revise subsequent coalescent epochs to replace the two
+            // old species with the new species
+            Node::species_t oldspp1 = first_node->getSpecies();
+            Node::species_t oldspp2 = second_node->getSpecies();
+            Node::species_t newspp  = anc_node->getSpecies();
+            insertSpeciationEpochAt(_epochs, _forest_height, oldspp1, oldspp2, newspp);
 
-        // Update lineage vector
-        removeTwoAddOne(_lineages, first_node, second_node, anc_node);
-        
+            // Update lineage vector
+            removeTwoAddOne(_lineages, first_node, second_node, anc_node);
+            --nlineages;
+        }
+                
         // Compute coalescent likelihood
         double log_coalescent_likelihood = 0.0;
-        for (unsigned g = 0; g < Forest::_ngenes; g++)
+        for (unsigned g = 0; g < Forest::_ngenes; g++) {
             log_coalescent_likelihood += calcLogCoalescentLikelihood(_epochs, g);
+            _debug_coal_like = false;
+        }
         
-        //temporary!
-        _debug_coal_like = false;
-
+        // //temporary!
+        //_debug_coal_like = false;
+        
         log_weight = log_coalescent_likelihood - _prev_log_coalescent_likelihood;
         _prev_log_coalescent_likelihood = log_coalescent_likelihood;
-        
-        Forest::debugShowEpochs(_epochs);
+
+        debugShowEpochs(_epochs);
         debugShow(format("Species forest in particle %d after step %d (height = %.5f)\n    %s") % particle % step % _forest_height % makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false));
         
         return log_weight;

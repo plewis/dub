@@ -4,7 +4,7 @@ namespace proj {
 
     struct Epoch  {
         //typedef vector<unsigned> lineage_counts_t;
-        typedef map<Node::species_set_t, unsigned> lineage_counts_t;
+        typedef map<Node::species_t, unsigned> lineage_counts_t;
 
         enum epoch_t {
             init_epoch       = 0x01,
@@ -25,7 +25,7 @@ namespace proj {
         string leftSpeciesAsStr()  const {return speciesSetToStr(_left_species);}
         string rightSpeciesAsStr() const {return speciesSetToStr(_right_species);}
         string ancSpeciesAsStr()   const {return speciesSetToStr(_anc_species);}
-        string speciesSetAsStr()   const {return speciesSetToStr(_species_set);}
+        string speciesSetAsStr()   const {return speciesSetToStr(_species);}
             
         int                 _type;
         double              _height;
@@ -35,8 +35,8 @@ namespace proj {
         lineage_counts_t    _lineage_counts;    // counts of the number of lineages in each species just prior to coalescence
         
         // Used only for coalescent_epoch
-        int                 _coalescence_node_number;   // number of the coalescent node created by the coalescence event
-        Node::species_set_t _species_set;               // species set of coalescent node
+        Node *              _coalescence_node;   // the coalescent node created by the coalescence event
+        Node::species_t _species;               // species of coalescent node
         
         // Used only for init_epoch and coalescent_epoch
         int                 _gene;              // index of gene in which coalescence occurred
@@ -45,12 +45,12 @@ namespace proj {
         //unsigned _left_species;
         //unsigned _right_species;
         //unsigned _anc_species;
-        Node::species_set_t _left_species;
-        Node::species_set_t _right_species;
-        Node::species_set_t _anc_species;
+        Node::species_t _left_species;
+        Node::species_t _right_species;
+        Node::species_t _anc_species;
         
         private:
-            string speciesSetToStr(const Node::species_set_t & s) const;
+            string speciesSetToStr(const Node::species_t & s) const;
     };
     
     typedef list<Epoch> epoch_list_t;
@@ -60,7 +60,7 @@ namespace proj {
         _height                     = h;
         _valid                      = false;
         _gene                       = -1;
-        _coalescence_node_number    = -1;
+        _coalescence_node           = nullptr;
         //_left_species               = -1;
         //_right_species              = -1;
         //_anc_species                = -1;
@@ -74,29 +74,24 @@ namespace proj {
         eq = eq && _height                  == other._height;
         eq = eq && _valid                   == other._valid;
         eq = eq && _gene                    == other._gene;
-        eq = eq && _coalescence_node_number == other._coalescence_node_number;
+        eq = eq && _coalescence_node        == other._coalescence_node;
         eq = eq && _left_species            == other._left_species;
         eq = eq && _right_species           == other._right_species;
         eq = eq && _anc_species             == other._anc_species;
-        eq = eq && _species_set             == other._species_set;
+        eq = eq && _species             == other._species;
         eq = eq && _lineage_counts          == other._lineage_counts;
         return eq;
     }
     
-    inline string Epoch::speciesSetToStr(const Node::species_set_t & s) const {
+    inline string Epoch::speciesSetToStr(const Node::species_t & s) const {
         ostringstream oss;
         copy(s.begin(), s.end(), ostream_iterator<unsigned>(oss, "+"));
 
-        //string tmp = oss.str();
-        //cerr << tmp << endl;
-        
         // Remove the trailing '+'
-        oss.seekp(-1, oss.end); oss.put('\0');
+        string returned_str(oss.str());
+        returned_str.pop_back();
         
-        //string tmp2 = oss.str();
-        //cerr << tmp2 << endl;
-        
-        return oss.str();
+        return returned_str;
     }
 
     inline bool epochLess (const Epoch & i, const Epoch & j) {

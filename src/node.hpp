@@ -31,7 +31,7 @@ namespace proj {
                                         ~Node();
 
                     typedef vector<Node *>  ptr_vect_t;
-                    typedef set<unsigned>   species_set_t;
+                    typedef set<unsigned>   species_t;
         
                     Node *              getParent()                 {return _parent;}
                     Node *              getLeftChild()              {return _left_child;}
@@ -66,11 +66,11 @@ namespace proj {
                     double              getEdgeLength() const       {return _edge_length;}
                     void                setEdgeLength(double v);
                     
-                    const species_set_t &   getSpeciesSet() const {return _species_set;}
-                    species_set_t &         getSpeciesSet() {return _species_set;}
-                    void                    setSpeciesSet(const species_set_t & other);
-                    void                    setSpeciesSetToUnion(const species_set_t & left, const species_set_t & right);
-                    void                    setSpeciesSetFromUnsigned(unsigned spp);
+                    const species_t &   getSpecies() const {return _species;}
+                    species_t &         getSpecies() {return _species;}
+                    void                setSpecies(const species_t & other);
+                    void                setSpeciesToUnion(const species_t & left, const species_t & right);
+                    void                setSpeciesFromUnsigned(unsigned spp);
         
                     double              getHeight() const       {return _height;}
                     void                setHeight(double v);
@@ -104,7 +104,7 @@ namespace proj {
             string          _name;
             double          _edge_length;
             double          _height;         // distance from node to any leaf
-            species_set_t   _species_set;    // set of species (indices) compatible with this node
+            species_t       _species;    // set of species (indices) compatible with this node
             Split           _split;
             int             _flags;
             
@@ -131,7 +131,7 @@ namespace proj {
         _name = "";
         _edge_length = _smallest_edge_length;
         _height = 0.0;
-        _species_set.clear();
+        _species.clear();
         _partial = nullptr;
     }   
 
@@ -151,24 +151,24 @@ namespace proj {
         return n_children;
     }
     
-    inline void Node::setSpeciesSet(const species_set_t & other) {
-        _species_set = other;
+    inline void Node::setSpecies(const species_t & other) {
+        _species = other;
     }
     
-    inline void Node::setSpeciesSetToUnion(const species_set_t & left, const species_set_t & right) {
-        _species_set = left;
-        _species_set.insert(right.begin(), right.end());
+    inline void Node::setSpeciesToUnion(const species_t & left, const species_t & right) {
+        _species = left;
+        _species.insert(right.begin(), right.end());
         
-        // Internal nodes can have species sets composed of more than one species, but
+        // Internal nodes can have species that are unions and hence have size > 1, but
         // leaf nodes should be assigned to just a single species. This function should only
         // be called for internal nodes.
         assert(_left_child);
     }
     
-    inline void Node::setSpeciesSetFromUnsigned(unsigned spp) {
-        _species_set = {spp};
+    inline void Node::setSpeciesFromUnsigned(unsigned spp) {
+        _species = {spp};
         
-        // Internal nodes can have species sets composed of more than one species, but
+        // Internal nodes can have species that are unions and hence have size > 1, but
         // leaf nodes should be assigned to just a single species. This function should only
         // be called for leaf nodes.
         assert(!_left_child);

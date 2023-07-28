@@ -9,10 +9,13 @@ namespace proj {
                                     ~PartialStore();
             
             typedef shared_ptr<vector<double> > partial_t;
+            typedef vector<partial_t>           vect_partial_t;
             
-            partial_t               getPartial();
-            void                    stowPartial(partial_t p);
-            void                    setNElements(unsigned nelements);
+            partial_t  getPartial();
+            void       getVectorOfPartials(unsigned n, PartialStore::vect_partial_t & v);
+            void       stowPartial(partial_t p);
+            void       setNElements(unsigned nelements);
+            unsigned   getNElements() const {return _nelements;}
             
         private:
         
@@ -44,7 +47,26 @@ namespace proj {
             return partial_t(new vector<double>(_nelements));
     }
     
+    inline void PartialStore::getVectorOfPartials(unsigned n, PartialStore::vect_partial_t & v) {
+        assert(_nelements > 0);
+        v.resize(n);
+        unsigned i = 0;
+        
+        // First use up any stored partials
+        while (storage.size() > 0) {
+            partial_t last = storage.back();
+            storage.pop_back();
+            v[i++] = last;
+        }
+        
+        // Allocate remaining partials if necessary
+        while (i < n) {
+            v[i++] = partial_t(new vector<double>(_nelements));
+        }
+    }
+    
     inline void PartialStore::stowPartial(partial_t p) {
+        fill(p->begin(), p->end(), 0.0);
         storage.push_back(p);
     }
     

@@ -87,6 +87,8 @@ double                              Forest::_negative_infinity = -numeric_limits
 
 vector<double>                      Forest::_cumprobs;
 
+PartialStore::vect_partial_t        GeneForest::_leaf_partials;
+
 const double                        Node::_smallest_edge_length = 1.0e-12;
 
 string                              Proj::_program_name         = "proj";

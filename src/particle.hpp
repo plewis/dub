@@ -11,16 +11,17 @@ namespace proj {
         public:
         
             Particle();
+            Particle(const Particle & other);
             ~Particle();
 
             void clear();
             void setData(Data::SharedPtr data);
             void initSpeciesForest(string newick);
-            void initGeneForests();
+            void initGeneForests(vector<string> & newicks);
             void resetSpeciesForest();
+            void resetGeneForests();
             void digestSpeciesTree();
             void digestGeneTrees();
-            //void copyFrom(const Particle & other);
             double advanceGeneForest(unsigned particle, unsigned gene, unsigned step);
             double advanceSpeciesForest(unsigned particle, unsigned step);
             SpeciesForest & getSpeciesForest() {return _species_forest;}
@@ -29,11 +30,12 @@ namespace proj {
             const epoch_list_t & getEpochs() const {return _epochs;}
             epoch_list_t       & getEpochs()       {return _epochs;}
             
-            void debugSaveTreesAsJavascript(string fnprefix) const;
+            double debugSaveTreesAsJavascript(string fnprefix) const;
 
             static void outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric, const vector<string> & newick_gene_trees_numeric);
             
-            void operator=(const Particle & other);
+            void copyFrom(const Particle & other);
+            void operator=(const Particle & other) {copyFrom(other);}
                                 
         protected:
                 
@@ -45,9 +47,16 @@ namespace proj {
     };
     
     inline Particle::Particle() {
+        //cerr << "Particle constructor" << endl;
+    }
+
+    inline Particle::Particle(const Particle & other) {
+        //cerr << "Particle copy constructor" << endl;
+        copyFrom(other);
     }
 
     inline Particle::~Particle() {
+        //cerr << "Particle destructor" << endl;
         clear();
     }
 
@@ -59,10 +68,28 @@ namespace proj {
     }
             
     inline void Particle::initSpeciesForest(string newick) {
+        assert(newick.size() > 0);
         _species_forest.buildFromNewick(newick);
     }
     
-    inline void Particle::initGeneForests() {
+    inline void Particle::initGeneForests(vector<string> & newicks) {
+        assert(Forest::_ntaxa > 0);
+        assert(Forest::_ngenes > 0);
+        assert(Forest::_ngenes == newicks.size());
+        _gene_forests.clear();
+        _gene_forests.resize(Forest::_ngenes);
+        for (unsigned i = 0; i < Forest::_ngenes; i++) {
+            _gene_forests[i].setData(_data);
+            _gene_forests[i].setGeneIndex(i);
+            _gene_forests[i].buildFromNewick(newicks[i]);
+        }
+    }
+    
+    inline void Particle::resetSpeciesForest() {
+        _species_forest.createTrivialForest();
+    }
+
+    inline void Particle::resetGeneForests() {
         assert(Forest::_ntaxa > 0);
         assert(Forest::_ngenes > 0);
         _gene_forests.clear();
@@ -72,10 +99,6 @@ namespace proj {
             _gene_forests[i].setGeneIndex(i);
             _gene_forests[i].createTrivialForest();
         }
-    }
-    
-    inline void Particle::resetSpeciesForest() {
-        _species_forest.createTrivialForest();
     }
 
     inline void Particle::digestSpeciesTree() {
@@ -95,8 +118,6 @@ namespace proj {
         // Sort all gene tree epochs by height (note: epochs
         // is actually _species_forest._epochs)
         _epochs.sort(epochLess);
-        
-        Forest::debugShowEpochs(_epochs);
     }
 
     inline double Particle::advanceGeneForest(unsigned particle, unsigned gene, unsigned step) {
@@ -139,8 +160,9 @@ namespace proj {
         return _gene_forests[gene];
     }
 
-    //inline void Particle::copyFrom(const Particle & other) {
-    inline void Particle::operator=(const Particle & other) {
+    inline void Particle::copyFrom(const Particle & other) {
+        //cerr << "in Particle::copyFrom" << endl;
+
         // Performs a deep copy of other to this particle
         _data = other._data;
         
@@ -189,7 +211,7 @@ namespace proj {
     
     }
     
-    inline void Particle::debugSaveTreesAsJavascript(string fnprefix) const {
+    inline double Particle::debugSaveTreesAsJavascript(string fnprefix) const {
         string newick_species_tree_numeric = _species_forest.makeNewick(/*precision*/9, /*use names*/false, /*coal edge lengths*/false);
         vector<string> newick_gene_trees_numeric;
         for (unsigned g = 0; g < Forest::_ngenes; ++g) {
@@ -201,7 +223,8 @@ namespace proj {
         double log_coalescent_likelihood = 0.0;
         for (unsigned g = 0; g < Forest::_ngenes; g++)
             _species_forest.calcLogCoalescentLikelihood(_species_forest._epochs, g);
-        cout << str(format("\nlog(coal. like.) = %.9f\n") % log_coalescent_likelihood);
+
+        return log_coalescent_likelihood;
     }
-        
+    
 }

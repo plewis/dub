@@ -12,6 +12,7 @@ using boost::program_options::parse_config_file;
 using boost::program_options::reading_file;
 using boost::program_options::notify;
 
+extern proj::PartialStore ps;
 extern proj::Lot rng;
 
 namespace proj {
@@ -27,37 +28,46 @@ namespace proj {
 
         private:
             
-            void                        debugShowStringVector(string title, const vector<string> & svect) const;
-            void                        debugShowStringUnsignedMap(string title, const map<string, unsigned> & sumap) const;
+            void                       debugShowStringVector(string title, const vector<string> & svect) const;
+            void                       debugShowStringUnsignedMap(string title, const map<string, unsigned> & sumap) const;
 
             static string              inventName(unsigned k, bool lower_case);
             
             void                       simulateData();
             void                       readData();
             unsigned                   buildSpeciesMap();
+            void                       drawStartingSpeciesTree();
             void                       readStartingSpeciesTree();
-            //void                       readGeneTrees();
+            void                       readStartingGeneTrees();
             void                       clearParticles();
-            void                       initializeParticles();
+            void                       initializeParticles(bool start_with_species_tree);
             void                       filterParticles(const vector<double> & log_weights, vector<unsigned> & counts);
-            void                       saveGeneTrees(string filename, Particle & p);
-            void                       growGeneTrees();
+            void                       saveGeneTreesUsingNames(string filename, Particle & p);
+            void                       saveGeneTreesUsingNumbers(string filename, Particle & p);
+            void                       growGeneTrees(unsigned iter);
+            void                       propagateSampledParticle();
             void                       debugCheckGeneTrees() const;
-            void                       growSpeciesTrees(vector<string> species_tree_newicks);
+            void                       growSpeciesTrees(unsigned iter);
+            void                       saveSpeciesTreeUsingNames(string fn, Particle & p);
+            void                       saveSpeciesTreeUsingNumbers(string fn, Particle & p);
             void                       saveUniqueSpeciesTrees(string fn, const vector<unsigned> & counts);
             void                       showSettings() const;
+            void                       outputGeneTreesToFile(string fn, const vector<string> & newicks) const;
             void                       outputNexusTreefile(string fn, const vector<string> & newicks) const;
             void                       outputAnnotatedNexusTreefile(string fn, const vector<string> & newicks, const vector<string> & treenames, const vector<string> & annotations) const;
             
             string                     _data_file_name;
             string                     _species_tree_file_name;
             string                     _gene_tree_file_name;
+            string                     _start_mode;
+            unsigned                   _niter;
             Partition::SharedPtr       _partition;
             Data::SharedPtr            _data;
             
             //TreeSummary                _starting_gene_trees;
             //vector<Tree::SharedPtr>    _gene_trees;
             string                      _starting_species_newick;
+            vector<string>              _starting_gene_newicks;
             
             bool                       _use_gpu;
             bool                       _ambig_missing;
@@ -73,7 +83,6 @@ namespace proj {
             double                     _visualization_cutoff;
                         
             vector<Particle>            _particles;
-
 
             static string               _program_name;
             static unsigned             _major_version;
@@ -97,8 +106,10 @@ namespace proj {
         // data related
         _data                   = nullptr;
         _data_file_name         = "";
-        _species_tree_file_name    = "stree.tre";
+        _species_tree_file_name = "stree.tre";
         _gene_tree_file_name    = "gtrees.tre";
+        _start_mode             = "random"; // "random" (random species tree), "species" (species tree from file), "gene" (gene trees from file)
+        _niter                  = 1;
         _partition.reset(new Partition());
 
         // simulation related
@@ -115,8 +126,10 @@ namespace proj {
         ("help,h", "produce help message")
         ("version,v", "show program version")
         ("datafile",  value(&_data_file_name)->required(), "name of a data file in NEXUS format")
-        ("speciestreefile",  value(&_species_tree_file_name)->required(), "name of a tree file in NEXUS format containing an ultrametric starting species tree (also used to store simulated species tree if simulate is true)")
-        ("genetreefile",  value(&_gene_tree_file_name), "name of a tree file for storing true gene trees for each gene (ignored if simulate is false)")
+        ("speciestreefile",  value(&_species_tree_file_name), "name of a tree file in NEXUS format containing an ultrametric starting species tree (also used to store simulated species tree if simulate is true)")
+        ("genetreefile",  value(&_gene_tree_file_name), "name of a tree file for: (1) obtaining starting gene trees (startspeciestree false); (2) storing gene trees (startspeciestree true); or (3) storing true gene trees for each gene (if simulate true)")
+        ("startmode", value(&_start_mode), "if 'random', start with species tree drawn from prior; if 'species', start with first species tree defined in speciestreefile; if 'gene', start with gene trees defined in genetreefile")
+        ("niter", value(&_niter), "number of iterations, where one iteration involves SMC of gene trees give species tree combined with an SMC of species tree given gene trees")
         ("subset",  value(&partition_subsets), "a string defining a partition subset, e.g. 'first:1-1234\3' or 'default[codon:standard]:1-3702'")
         ("gpu",           value(&_use_gpu)->default_value(true), "use GPU if available")
         ("ambigmissing",  value(&_ambig_missing)->default_value(true), "treat all ambiguities as missing data")
@@ -239,30 +252,40 @@ namespace proj {
         cout << "\nReading and storing the species tree in the file " << _species_tree_file_name << endl;
         vector<string> tree_names;
         vector<string> newicks;
-        Forest::readTreefile(_species_tree_file_name, 0, Forest::_species_names, Forest::_nexus_taxon_map, tree_names, newicks);
+        // _nexus_taxon_map[k] provides 0-based index (into _species_names vector) of
+        // the taxon having 1-based index k in the tree description
+        Forest::readTreefile(   _species_tree_file_name,
+                                0,
+                                Forest::_species_names,
+                                Forest::_nexus_taxon_map,
+                                tree_names,
+                                newicks);
         _starting_species_newick = newicks[0];
     }
     
-    //inline void Proj::readGeneTrees() {
-    //    cout << "\nReading and storing the gene trees in the file " << _gene_tree_file_name << endl;
-    //
-    //    TreeManip tm;
-    //    _gene_trees.clear();
-    //
-    //    _starting_gene_trees.readTreefile(_gene_tree_file_name, 0);
-    //    unsigned ntrees = _starting_gene_trees.getNumTrees();
-    //    cout << "  no. trees: " << ntrees << endl;
-    //    for (unsigned i = 0; i < ntrees; i++) {
-    //        string tree_name = _starting_gene_trees.getTreeName(i);
-    //        string gene_name = Forest::_gene_names[i];
-    //        if (gene_name != tree_name) {
-    //            throw XProj(format("Expecting name of %dth gene tree to be \"%s\" but it was instead \"%s\"") % i % gene_name % tree_name);
-    //        }
-    //        tm.buildFromNewick( _starting_gene_trees.getNewick(i), /*rooted*/true, /*polytomies*/false);
-    //        _gene_trees.push_back(tm.getTree());
-    //        cout << "  tree " << (i+1) << " has name " << tree_name << endl;
-    //    }
-    //}
+    inline void Proj::readStartingGeneTrees() {
+        cout << "\nReading and storing the gene trees in the file " << _gene_tree_file_name << endl;
+        vector<string> tree_names;
+        // _nexus_taxon_map[k] provides 0-based index (into _taxon_names vector) of
+        // the taxon having 1-based index k in the tree description
+        Forest::readTreefile(   _gene_tree_file_name,       // tree file name
+                                0,                          // skip
+                                Forest::_taxon_names,       // leaf names
+                                Forest::_nexus_taxon_map,   // taxon map
+                                tree_names,                 // container for tree names
+                                _starting_gene_newicks);    // container for tree descriptions
+    
+        unsigned ntrees = (unsigned)_starting_gene_newicks.size();
+        cout << "  no. trees: " << ntrees << endl;
+        for (unsigned i = 0; i < ntrees; i++) {
+            string tree_name = tree_names[i];
+            string gene_name = Forest::_gene_names[i];
+            if (gene_name != tree_name) {
+                throw XProj(format("Expecting name of %dth gene tree to be \"%s\" but it was instead \"%s\"") % i % gene_name % tree_name);
+            }
+            cout << "  tree " << (i+1) << " has name " << tree_name << endl;
+        }
+    }
     
     inline void Proj::showSettings() const {
         cout << "Speciation rate (lambda): " << Forest::_lambda << endl;
@@ -270,7 +293,7 @@ namespace proj {
         cout << "Number of particles: " << _nparticles << endl;
     }
     
-    inline void Proj::initializeParticles() {
+    inline void Proj::initializeParticles(bool start_with_species_tree) {
         assert(_data);
         
         cout << str(format("\nInitializing %d particles...") % _nparticles) << endl;
@@ -279,38 +302,78 @@ namespace proj {
         
         _particles.resize(_nparticles);
 
-#if 1
         // Set up a "template" particle the hard way
         Particle template_particle;
         template_particle.setData(_data);
-        template_particle.initSpeciesForest(_starting_species_newick);
-        template_particle.initGeneForests();
+        if (start_with_species_tree) {
+            template_particle.initSpeciesForest(_starting_species_newick);
+            template_particle.resetGeneForests();
+        }
+        else {
+            template_particle.resetSpeciesForest();
+            template_particle.initGeneForests(_starting_gene_newicks);
+        }
         
         // Now use first as a template and copy to all other particles
         // Saves recalculating partials many times
         fill(_particles.begin(), _particles.end(), template_particle);
-#else
-        unsigned i = 0;
-        for (auto & p : _particles ) {
-            p.setData(_data);
-            p.initSpeciesForest(_starting_species_newick);
-            p.initGeneForests();
-        }
-#endif
     }
     
-    inline void Proj::saveGeneTrees(string treefname, Particle & p) {
+    inline void Proj::saveSpeciesTreeUsingNames(string treefname, Particle & p) {
+        SpeciesForest & sf = p.getSpeciesForest();
         ofstream tmpf(treefname);
-        tmpf << "#nexus\n";
-        tmpf << "\n";
+        tmpf << "#nexus\n\n";
         tmpf << "begin trees;\n";
+        tmpf << str(format("  tree species_tree = [&R] %s;\n") % sf.makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false));
+        tmpf << "end;\n";
+        tmpf.close();
+    }
+    
+    inline void Proj::saveSpeciesTreeUsingNumbers(string treefname, Particle & p) {
+        SpeciesForest & sf = p.getSpeciesForest();
+        ofstream tmpf(treefname);
+        tmpf << "#nexus\n\n";
+        tmpf << "begin trees;\n";
+        tmpf << "  translate\n";
+        for (unsigned s = 0; s < Forest::_nspecies; ++s) {
+            tmpf << str(format("    %d %s%s\n") % (s+1) % Forest::_species_names[s] % (s == Forest::_nspecies - 1 ? ";" : ","));
+        }
+        tmpf << str(format("  tree species_tree = [&R] %s;\n") % sf.makeNewick(/*precision*/9, /*use names*/false, /*coalescent units*/false));
+        tmpf << "end;\n";
+        tmpf.close();
+    }
+    
+    inline void Proj::saveGeneTreesUsingNames(string treefname, Particle & p) {
         vector<string> log_likes;
+        ofstream tmpf(treefname);
+        tmpf << "#nexus\n\n";
+        tmpf << "begin trees;\n";
         for (unsigned g = 0; g < Forest::_ngenes; g++) {
             string gene_name = Forest::_gene_names[g];
             GeneForest & gf = p.getGeneForest(g);
             double lnL = gf.calcLogLikelihood();
             log_likes.push_back(str(format("%.9f") % lnL));
             tmpf << str(format("  tree %s = [lnL = %.5f] [&R] %s;\n") % gene_name % lnL % gf.makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false));
+        }
+        tmpf << "end;\n";
+        tmpf.close();
+    }
+        
+    inline void Proj::saveGeneTreesUsingNumbers(string treefname, Particle & p) {
+        vector<string> log_likes;
+        ofstream tmpf(treefname);
+        tmpf << "#nexus\n\n";
+        tmpf << "begin trees;\n";
+        tmpf << "  translate\n";
+        for (unsigned t = 0; t < Forest::_ntaxa; ++t) {
+            tmpf << str(format("    %d %s%s\n") % (t+1) % Forest::_taxon_names[t] % (t == Forest::_ntaxa - 1 ? ";" : ","));
+        }
+        for (unsigned g = 0; g < Forest::_ngenes; g++) {
+            string gene_name = Forest::_gene_names[g];
+            GeneForest & gf = p.getGeneForest(g);
+            double lnL = gf.calcLogLikelihood();
+            log_likes.push_back(str(format("%.9f") % lnL));
+            tmpf << str(format("  tree %s = [lnL = %.5f] [&R] %s;\n") % gene_name % lnL % gf.makeNewick(/*precision*/9, /*use names*/false, /*coalescent units*/false));
         }
         tmpf << "end;\n";
         tmpf.close();
@@ -344,7 +407,7 @@ namespace proj {
 #endif
     }
         
-    inline void Proj::growGeneTrees() {
+    inline void Proj::growGeneTrees(unsigned iter) {
         // Grows all gene trees conditional on the species tree stored in each particle
         
         cout << "Growing gene trees..." << endl;
@@ -356,9 +419,9 @@ namespace proj {
         // for each particle. This info will be used in Particle::advanceGeneForest.
         //TODO: if there is just one species tree used for all particles, just digest the species tree once and copy to all particles
         for (auto & particle : _particles) {
+            particle.resetGeneForests();
             particle.digestSpeciesTree();
             resetAllEpochs(particle.getEpochs());
-            Forest::debugShowEpochs(particle.getEpochs());
         }
         
         // Loop over steps
@@ -375,7 +438,7 @@ namespace proj {
                 // Loop over genes
                 for (unsigned g = 0; g < Forest::_ngenes; g++) {
 
-                    //temporary!
+                    // //temporary!
                     //cout << "\n##### \n";
                     //cout << "##### Particle " << p << ", step " << step << ", gene = " << g << "\n";
                     //cout << "##### \n" << endl;
@@ -391,8 +454,25 @@ namespace proj {
             filterParticles(logw, counts);
 
         } // step loop
-                
-        saveGeneTrees("tmp-gene-trees.tre", _particles[0]);
+        
+        // Choose one particle at random and propagate it to all other particles
+        propagateSampledParticle();
+             
+        string fn = str(format("gene-trees-chosen-iter-%d.tre") % iter);
+        saveGeneTreesUsingNames(fn, _particles[0]);
+        //fn = str(format("gene-trees-chosen-iter-%d-numbers.tre") % iter);
+        //saveGeneTreesUsingNumbers(fn, _particles[0]);
+    }
+    
+    inline void Proj::propagateSampledParticle() {
+        // Choose one particle at random
+        assert(_nparticles == _particles.size());
+        
+        // Copy that particle to all particles
+        unsigned which = rng.randint(0, _nparticles - 1);
+        Particle & other = _particles[which];
+        Particle p(other);
+        fill(_particles.begin(), _particles.end(), p);
     }
     
     inline void Proj::debugCheckGeneTrees() const {
@@ -406,7 +486,7 @@ namespace proj {
 #endif
     }
     
-    inline void Proj::growSpeciesTrees(vector<string> species_tree_newicks) {
+    inline void Proj::growSpeciesTrees(unsigned iter) {
         // Grows species trees conditional on the gene trees stored in each particle
 
         cout << "Growing species tree..." << endl;
@@ -424,6 +504,7 @@ namespace proj {
         // Loop over steps
         vector<unsigned> counts;
         for (unsigned step = 0; step < nsteps; step++) {
+            cout << "  step " << (step + 1) << " of " << nsteps << "\n";
             vector<double> logw(_particles.size(), 0.0);
 
             // Loop over particles, advancing species forest one step in each
@@ -434,29 +515,23 @@ namespace proj {
             
                 ++p;
             }
-            
-            // temporary!
-            //cout << "Heights and coal. like. of species forest in each particle:\n";
-            //p = 0;
-            //for (auto & part : _particles) {
-            //    double h = part.getSpeciesForest().getHeight();
-            //    cout << str(format("%d: h = %.9f, l = %.9f") % p % h % logw[p]) << endl;
-            //    ++p;
-            //}
-            
+                        
             // Filter particles
             filterParticles(logw, counts);
-
-            //temporary!
-            //cout << "\nDart counts:\n";
-            //copy(counts.begin(), counts.end(), ostream_iterator<unsigned>(cout, " "));
-            //cout << endl;
         }
         
-        //temporary!
-        _particles[0].debugSaveTreesAsJavascript("debug-newicks");
+        string fn = str(format("species-trees-after-iter-%d.tre") % iter);
+        saveUniqueSpeciesTrees(fn, counts);
+
+        // Choose one particle at random and propagate it to all other particles
+        propagateSampledParticle();
         
-        saveUniqueSpeciesTrees("final_species_trees.tre", counts);
+        fn = str(format("species-tree-chosen-iter-%d.tre") % iter);
+        saveSpeciesTreeUsingNames(fn, _particles[0]);
+        
+        fn = str(format("newicks-%d.tre") % iter);
+        double log_coal_like = _particles[0].debugSaveTreesAsJavascript(fn);
+        cout << str(format("\nlog(coal. like.) after iter %d = %.9f\n") % iter % log_coal_like);
     }
     
     inline void Proj::saveUniqueSpeciesTrees(string fn, const vector<unsigned> & counts) {
@@ -519,7 +594,7 @@ namespace proj {
         while (copy_from_iter != working_counts.end()) {
             unsigned index_from = (unsigned)distance(working_counts.begin(), copy_from_iter);
             
-            //temporary!
+            // //temporary!
             //cout << "index_from = " << index_from << endl;
             
             // n is the count for the particle
@@ -531,7 +606,7 @@ namespace proj {
                 // Find index of particle to copy to
                 unsigned index_to = (unsigned)distance(working_counts.begin(), copy_to_iter);
                 
-                //temporary!
+                // //temporary!
                 //cout << "index_to = " << index_to << endl;
 
                 // Copy the "from" particle to the "to" partcle
@@ -545,7 +620,7 @@ namespace proj {
                 // Advance iterator to the next "to" particle
                 copy_to_iter = find_if(++copy_to_iter, working_counts.end(), [](unsigned c){return c == 0;});
                 
-                //temporary!
+                // //temporary!
                 //copy(working_counts.begin(), working_counts.end(), ostream_iterator<unsigned>(cout, " "));
                 //cout << endl;
             }
@@ -580,17 +655,37 @@ namespace proj {
                 Forest::_nspecies = buildSpeciesMap();
                 debugShowStringVector("Species names", Forest::_species_names);
                 
-                readStartingSpeciesTree();
-                initializeParticles();
+                GeneForest::computeLeafPartials(_data);
                 
-                growGeneTrees();
-                //debugCheckGeneTrees();
-                
-                vector<string> species_tree_newicks;
-                growSpeciesTrees(species_tree_newicks);
-                
-                outputNexusTreefile("species_trees.tre", species_tree_newicks);
-                
+                if (_start_mode == "random") {
+                    drawStartingSpeciesTree();
+                    initializeParticles(/*start with species tree*/true);
+                    for (unsigned i = 0; i < _niter; ++i) {
+                        cout << str(format("\nIteration %d of %d...") % (i+1) % _niter) << endl;
+                        growGeneTrees(i+1);
+                        growSpeciesTrees(i+1);
+                    }
+                }
+                else if (_start_mode == "species") {
+                    readStartingSpeciesTree();
+                    initializeParticles(/*start with species tree*/true);
+                    for (unsigned i = 0; i < _niter; ++i) {
+                        cout << str(format("\nIteration %d of %d...") % (i+1) % _niter) << endl;
+                        growGeneTrees(i+1);
+                        growSpeciesTrees(i+1);
+                    }
+                }
+                else {
+                    readStartingGeneTrees();
+                    initializeParticles(/*start with species tree*/false);
+                    for (unsigned i = 0; i < _niter; ++i) {
+                        cout << str(format("\nIteration %d of %d...") % (i+1) % _niter) << endl;
+                        growSpeciesTrees(i+1);
+                        growGeneTrees(i+1);
+                    }
+                    cout << "\nFinal species tree SMC..." << endl;
+                    growSpeciesTrees(_niter+1);
+                }
             }
         }
         catch (XProj & x) {
@@ -632,6 +727,19 @@ namespace proj {
         return species_name;
     }
     
+    inline void Proj::outputGeneTreesToFile(string fn, const vector<string> & newicks) const {
+        assert(Forest::_ngenes == newicks.size());
+        ofstream streef(fn);
+        streef << "#NEXUS\n\n";
+        streef << "begin trees;\n";
+        unsigned t = 0;
+        for (auto newick : newicks) {
+            streef << str(format("  tree %s = [&R] %s;\n") % Forest::_gene_names[t++] % newick);
+        }
+        streef << "end;\n";
+        streef.close();
+    }
+    
     inline void Proj::outputNexusTreefile(string fn, const vector<string> & newicks) const {
         ofstream streef(fn);
         streef << "#NEXUS\n\n";
@@ -655,6 +763,28 @@ namespace proj {
         }
         streef << "end;\n";
         streef.close();
+    }
+    
+    inline void Proj::drawStartingSpeciesTree() {
+        // This should be a setting
+        bool edgelens_in_coalescent_units = false;
+
+        cout << "Drawing starting species tree from prior:\n";
+        cout << str(format("  theta  = %.5f\n") % Forest::_theta);
+        cout << str(format("  lambda = %.5f\n") % Forest::_lambda);
+        cout << str(format("  no. species = %d\n") % _nsimspecies);
+
+        // Create species tree
+        SpeciesForest sf;
+        epoch_list_t epochs;
+        sf.simulateSpeciesTree(epochs);
+        _starting_species_newick = sf.makeNewick(/*precision*/9, /*use names*/false, edgelens_in_coalescent_units);
+        Forest::createDefaultSpeciesTreeNexusTaxonMap();
+
+        // Output tree file containing starting species tree
+        string newick_with_names = sf.makeNewick(/*precision*/9, /*use names*/true, edgelens_in_coalescent_units);
+        outputNexusTreefile("starting-species-tree.tre", {newick_with_names});
+        cout << "  Species tree saved in file\"starting-species-tree.tre\"\n";
     }
     
     inline void Proj::simulateData() {
@@ -747,7 +877,7 @@ namespace proj {
         cout << "  Sequence data saved to file\"" << _data_file_name << "\"\n";
          
         // Output tree file containing true gene trees
-        outputNexusTreefile(_gene_tree_file_name, newick_gene_trees_alpha);
+        outputGeneTreesToFile(_gene_tree_file_name, newick_gene_trees_alpha);
         cout << "  Gene trees saved in file\"" << _gene_tree_file_name << "\"\n";
         
         // Output a PAUP* command file for estimating the species tree using
