@@ -1,4 +1,6 @@
 // Currently this is the only model implemented - do not uncomment!
 #define USE_JUKE_CANTOR_MODEL
 //#define DEBUGGING
-#define DEBUG_COAL_LIKE
+//#define DEBUG_COAL_LIKE
+#define POLTMP
+//#define DEBUG_PARTIAL_STORE

@@ -30,6 +30,8 @@ namespace proj {
             const epoch_list_t & getEpochs() const {return _epochs;}
             epoch_list_t       & getEpochs()       {return _epochs;}
             
+            double calcLogCoalLikeGivenTheta(double theta);
+            
             double debugSaveTreesAsJavascript(string fnprefix) const;
 
             static void outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric, const vector<string> & newick_gene_trees_numeric);
@@ -42,7 +44,6 @@ namespace proj {
             Data::SharedPtr _data;
             vector<GeneForest> _gene_forests;
             SpeciesForest _species_forest;
-            
             epoch_list_t _epochs;
     };
     
@@ -61,6 +62,11 @@ namespace proj {
     }
 
     inline void Particle::clear() {
+#if defined(POLTMP)
+        _gene_forests.clear();
+        _species_forest.clear();
+        _epochs.clear();
+#endif
     }
     
     inline void Particle::setData(Data::SharedPtr data) {
@@ -125,7 +131,6 @@ namespace proj {
         GeneForest & gf = _gene_forests[gene];
         if (step == 0) {
             // Each gene forest gets a copy of the species tree epochs
-            gf.createTrivialForest();
             gf.copyEpochsFrom(_epochs);
             gf.createInitEpoch();
             resetAllEpochs(gf._epochs);
@@ -162,6 +167,9 @@ namespace proj {
 
     inline void Particle::copyFrom(const Particle & other) {
         //cerr << "in Particle::copyFrom" << endl;
+#if defined(POLTMP)
+        clear();
+#endif
 
         // Performs a deep copy of other to this particle
         _data = other._data;
@@ -221,10 +229,23 @@ namespace proj {
         outputJavascriptTreefile(fn, newick_species_tree_numeric, newick_gene_trees_numeric);
 
         double log_coalescent_likelihood = 0.0;
-        for (unsigned g = 0; g < Forest::_ngenes; g++)
-            _species_forest.calcLogCoalescentLikelihood(_species_forest._epochs, g);
+        for (unsigned g = 0; g < Forest::_ngenes; g++) {
+            log_coalescent_likelihood += _species_forest.calcLogCoalescentLikelihood(_species_forest._epochs, g);
+        }
 
         return log_coalescent_likelihood;
     }
-    
+   
+   inline double Particle::calcLogCoalLikeGivenTheta(double theta) {
+        double prev_theta = Forest::_theta;
+        Forest::_theta = theta;
+        
+        double log_coal_like = 0.0;
+        for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+            log_coal_like += _species_forest.calcLogCoalescentLikelihood(_species_forest._epochs, g);
+        }
+        
+        Forest::_theta = prev_theta;
+        return log_coal_like;
+   }
 }

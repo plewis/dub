@@ -153,8 +153,6 @@ namespace proj {
     //}
     
     inline void SpeciesForest::simulateSpeciesTree(epoch_list_t & epochs) {
-        cout << str(format("\nSimulating the species tree (lambda = %.5f):\n") % Forest::_lambda);
-        
         createTrivialForest();
         unsigned nsteps = Forest::_nspecies - 1;
         for (unsigned i = 0; i < nsteps; ++i) {
@@ -165,7 +163,7 @@ namespace proj {
             double u = rng.uniform();
             double r = Forest::_lambda*nlineages;
             double t = -log(1.0 - u)/r;
-            cout << str(format("  t = %g (u = %g, nlineages = %d, r = %g)\n") % t % u % nlineages % r);
+            //cout << str(format("  t = %g (u = %g, nlineages = %d, r = %g)\n") % t % u % nlineages % r);
                 
             // Increment height of forest
             _forest_height += t;
@@ -476,9 +474,6 @@ namespace proj {
             _debug_coal_like = false;
         }
         
-        // //temporary!
-        //_debug_coal_like = false;
-        
         log_weight = log_coalescent_likelihood - _prev_log_coalescent_likelihood;
         _prev_log_coalescent_likelihood = log_coalescent_likelihood;
 
@@ -490,6 +485,13 @@ namespace proj {
     
     inline void SpeciesForest::operator=(const SpeciesForest & other) {
         Forest::operator=(other);
+        
+#if !defined(NDEBUG)
+        // Sanity check: make sure that _partials do not exist for either this nor other
+        for (unsigned i = 0; i < _nodes.size(); i++) {
+            assert((_nodes[i]._partial == nullptr && other._nodes[i]._partial == nullptr));
+        }
+#endif
     }
 
 }

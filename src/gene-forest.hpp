@@ -40,15 +40,14 @@ namespace proj {
             Epoch & createInitEpoch();
             epoch_list_t & digest();
             double calcTransitionProbability(unsigned from, unsigned to, double edge_length);
-            //void computeLeafPartials(Node & nd);
             void debugComputeLeafPartials(unsigned gene, int number, PartialStore::partial_t partial);
             void calcPartialArray(Node * new_nd);
             void initSpeciesLineageCountsVector(Epoch::lineage_counts_t & species_lineage_counts) const;
             void buildLineagesWithinSpeciesMap();
-            //void updateLineageCountsVector(Epoch::lineage_counts_t & slc, unsigned slc_size);
+            double computeCoalRatesForSpecies(vector<Node::species_t> & species, vector<double> & rates);
             void updateLineageCountsVector(Epoch::lineage_counts_t & slc);
             
-            static PartialStore::vect_partial_t _leaf_partials;
+            static PartialStore::leaf_partials_t _leaf_partials;
             
             // NOTE: any variables added must be copied in operator=
             
@@ -69,8 +68,10 @@ namespace proj {
     inline void GeneForest::clear() {
         // Return partials to PartialStore
         for (auto & nd : _nodes) {
-            if (nd._partial)
-                ps.stowPartial(nd._partial);
+            if (nd._partial) {
+                ps.stowPartial(nd._partial, _gene_index);
+                nd._partial.reset();
+            }
         }
         
         Forest::clear();
@@ -180,17 +181,20 @@ namespace proj {
             _nodes[i]._species = {Forest::_taxon_to_species[taxon_name]};
             if (compute_partials) {
                 assert(_data);
-                assert(_leaf_partials.size() > i);
-                _nodes[i]._partial = ps.getPartial();
-                (*_nodes[i]._partial) = (*_leaf_partials[i]);
-                //computeLeafPartials(_nodes[i]);
+                assert(_leaf_partials[_gene_index].size() > i);
+                _nodes[i]._partial = ps.getPartial(_gene_index);
+                (*_nodes[i]._partial) = (*_leaf_partials[_gene_index][i]);
             }
             _lineages.push_back(&_nodes[i]);
         }
         _forest_height = 0.0;
         _next_node_index = Forest::_ntaxa;
         _next_node_number = Forest::_ntaxa;
-        _prev_log_likelihood = calcLogLikelihood();
+        
+         //temporary!
+        //_prev_log_likelihood = calcLogLikelihood();
+        _prev_log_likelihood = 0.0;
+        
         _prev_log_coalescent_likelihood = 0.0;
     }
     
@@ -278,30 +282,6 @@ namespace proj {
         
         return _epochs;
     }
-
-    //inline void GeneForest::computeLeafPartials(Node & nd) {
-    //    assert(_data);
-    //    assert(!nd._left_child);
-    //
-    //    unsigned npatterns = _data->getNumPatternsInSubset(_gene_index);
-    //    Data::begin_end_pair_t be = _data->getSubsetBeginEnd(_gene_index);
-    //    unsigned first_pattern = be.first;
-    //    //unsigned last_pattern = be.second;
-    //
-    //    // Set each partial according to the observed data for this leaf
-    //    auto data_matrix=_data->getDataMatrix();
-    //    for (unsigned p = 0; p < npatterns; p++) {
-    //        unsigned pp = first_pattern + p;
-    //        for (unsigned s = 0; s < Forest::_nstates; s++) {
-    //            Data::state_t state = (Data::state_t)1 << s;
-    //            Data::state_t d = data_matrix[nd._number][pp];
-    //            double result = state & d;
-    //            (*nd._partial)[pp*Forest::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
-    //        }
-    //        // Ensure that the _nstates partials add up to at least 1
-    //        assert(accumulate(nd._partial->begin()+pp*Forest::_nstates, nd._partial->begin()+pp*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
-    //    }
-    //}
     
     inline void GeneForest::debugComputeLeafPartials(unsigned gene, int number, PartialStore::partial_t partial) {
         assert(_data);
@@ -318,10 +298,10 @@ namespace proj {
                 Data::state_t state = (Data::state_t)1 << s;
                 Data::state_t d = data_matrix[number][pp];
                 double result = state & d;
-                (*partial)[pp*Forest::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
+                (*partial)[p*Forest::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
             }
             // Ensure that the _nstates partials add up to at least 1
-            assert(accumulate(partial->begin()+pp*Forest::_nstates, partial->begin()+pp*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
+            assert(accumulate(partial->begin()+p*Forest::_nstates, partial->begin()+p*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
         }
     }
     
@@ -408,26 +388,24 @@ namespace proj {
     inline void GeneForest::calcPartialArray(Node * new_nd) {
         auto & parent_partial_array = *(new_nd->_partial);
         unsigned npatterns = _data->getNumPatternsInSubset(_gene_index);
-        Data::begin_end_pair_t be = _data->getSubsetBeginEnd(_gene_index);
-        unsigned first_pattern = be.first;
-        //unsigned last_pattern = be.second;
         for (Node * child = new_nd->_left_child; child; child = child->_right_sib) {
-        
             auto & child_partial_array = *(child->_partial);
-            
+
             for (unsigned p = 0; p < npatterns; p++) {
-                unsigned pp = first_pattern + p;
+
                 for (unsigned s = 0; s < Forest::_nstates; s++) {
+
                     double sum_over_child_states = 0.0;
                     for (unsigned s_child = 0; s_child < Forest::_nstates; s_child++) {
                         double child_transition_prob = calcTransitionProbability(s, s_child, child->_edge_length);
-                        double child_partial = child_partial_array[pp*Forest::_nstates + s_child];
+                        double child_partial = child_partial_array[p*Forest::_nstates + s_child];
                         sum_over_child_states += child_transition_prob * child_partial;
                     }   // child state loop
+                    
                     if (child == new_nd->_left_child)
-                        parent_partial_array[pp*Forest::_nstates+s] = sum_over_child_states;
+                        parent_partial_array[p*Forest::_nstates + s] = sum_over_child_states;
                     else
-                        parent_partial_array[pp*Forest::_nstates+s] *= sum_over_child_states;
+                        parent_partial_array[p*Forest::_nstates + s] *= sum_over_child_states;
                 }   // parent state loop
             }   // pattern loop
         }   // child loop
@@ -459,38 +437,46 @@ namespace proj {
         
         // Sum log likelihood across all lineages. If forest is a tree, there will
         // be just one lineage, which represents the root of the gene tree.
+        unsigned tmp = 0;
         for (auto nd : _lineages) {
         
             double log_like = 0.0;
             for (unsigned p = 0; p < npatterns; p++) {
                 unsigned pp = first_pattern + p;
-        
                 double site_like = 0.0;
                 for (unsigned s = 0; s < Forest::_nstates; s++) {
-                    double child_partial = (*nd->_partial)[pp*Forest::_nstates+s];
+                    double child_partial = (*nd->_partial)[p*Forest::_nstates+s];
                     site_like += 0.25*child_partial;
                 }
                 
                 // //temporary!
                 //if (site_like == 0.0) {
-                //    cout << "site_like is zero for pattern " << pp << endl; // 26
-                //    cout << "   count = " << counts[pp] << endl; // 1
-                //    cout << "   child_partial[0] = " << (*nd->_partial)[pp*Forest::_nstates+0] << endl; // 0
-                //    cout << "   child_partial[1] = " << (*nd->_partial)[pp*Forest::_nstates+1] << endl; // 0
-                //    cout << "   child_partial[2] = " << (*nd->_partial)[pp*Forest::_nstates+2] << endl; // 0
-                //    cout << "   child_partial[3] = " << (*nd->_partial)[pp*Forest::_nstates+3] << endl; // 0
-                //    cout << "   gene_name = " << gene_name << endl; // ATP
-                //    cout << "   npatterns = " << npatterns << endl; // 114
-                //    cout << "   pattern: " << _data->getPatternAsString(pp) << endl; // AACCTTCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
-                //    cout <<  "  original sites corresponding to this pattern: \n  ";
-                //    vector<unsigned> & v = _data->_orig_site_lookup[pp];
-                //    copy(v.begin(), v.end(), ostream_iterator<unsigned>(cout, " "));
+                //    cout << "site_like is zero for pattern " << pp << endl;
+                //    cout << "   nd->_name = " << nd->_name << endl;
+                //    cout << "   nd->_number = " << nd->_number << endl;
+                //    cout << "   count = " << counts[pp] << endl;
+                //    vector<double> & v = *(nd->_partial);
+                //    auto it = max_element(v.begin(), v.end());
+                //    if (it != v.end()) {
+                //        cout << "   maximum partial element = " << (*it) << endl;
+                //    }
+                //    cout << "   child_partial[0] = " << (*nd->_partial)[p*Forest::_nstates+0] << endl;
+                //    cout << "   child_partial[1] = " << (*nd->_partial)[p*Forest::_nstates+1] << endl;
+                //    cout << "   child_partial[2] = " << (*nd->_partial)[p*Forest::_nstates+2] << endl;
+                //    cout << "   child_partial[3] = " << (*nd->_partial)[p*Forest::_nstates+3] << endl;
+                //    cout << "   gene_name = " << gene_name << endl;
+                //    cout << "   npatterns = " << npatterns << endl;
+                //    cout << "   pattern: " << _data->getPatternAsString(pp) << endl;
+                //    //cout <<  "  original sites corresponding to this pattern: \n  ";
+                //    //vector<unsigned> & v = _data->_orig_site_lookup[pp];
+                //    //copy(v.begin(), v.end(), ostream_iterator<unsigned>(cout, " "));
                 //    cout << "\nNewick:" << endl;
                 //    cout << makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false) << endl;
                 //}
                 log_like += log(site_like)*counts[pp];
             }
             total_log_likelihood += log_like;
+            tmp++;
         }
 
         return total_log_likelihood;
@@ -573,6 +559,30 @@ namespace proj {
         }
     }
     
+    inline double GeneForest::computeCoalRatesForSpecies(vector<Node::species_t> & species, vector<double> & rates) {
+        unsigned i = 0;
+        for (auto & x : _lineages_within_species) {
+            // Key is the species s (a set containing one or more integer values)
+            Node::species_t s = x.first;
+            species[i] = s;
+            
+            // Value is vector of node pointers belonging to species s
+            unsigned n = (unsigned)x.second.size();
+            assert(n > 0);
+            
+            // Rate of coalescence in species s is n choose 2 divided by theta/2
+            // or, equivalently, n*(n-1)/theta
+            double coal_rate = float(n)*(n-1)/Forest::_theta;
+            rates[i] = coal_rate;
+            
+            ++i;
+        }
+
+        // The total coalescence rate is the sum of individual species-specific rates
+        double total_rate = accumulate(rates.begin(), rates.end(), 0.0);
+        return total_rate;
+    }
+    
     inline pair<bool,double> GeneForest::advanceGeneForest(unsigned step, unsigned particle, unsigned gene, bool simulating) {
         // Returns true if a coalescent event was realized, false if chosen coalescence was
         // deep or if all species have only one lineaged.
@@ -586,8 +596,6 @@ namespace proj {
         
         // Create vector of lineage counts within species to use in
         // creating CoalescentEpoch entries
-        //unsigned slc_size = 2*Forest::_nspecies - 1;
-        //Epoch::lineage_counts_t species_lineage_counts(slc_size, 0);
         Epoch::lineage_counts_t species_lineage_counts;
         
         // Build _lineages_within_species, a map that provides a vector
@@ -615,26 +623,7 @@ namespace proj {
         // the time to the next coalescence event.
         vector<Node::species_t> species(sz);
         vector<double> rates(sz);
-        unsigned i = 0;
-        for (auto & x : _lineages_within_species) {
-            // Key is the species s (a set containing one or more integer values)
-            Node::species_t s = x.first;
-            species[i] = s;
-            
-            // Value is vector of node pointers belonging to species s
-            unsigned n = (unsigned)x.second.size();
-            assert(n > 0);
-            
-            // Rate of coalescence in species s is n choose 2 divided by theta/2
-            // or, equivalently, n*(n-1)/theta
-            double coal_rate = float(n)*(n-1)/Forest::_theta;
-            rates[i] = coal_rate;
-            
-            ++i;
-        }
-        
-        // The total coalescence rate is the sum of individual species-specific rates
-        double total_rate = accumulate(rates.begin(), rates.end(), 0.0);
+        double total_rate = computeCoalRatesForSpecies(species, rates);
         
         // A negative value for coalecence time t means all species are
         // represented by just one lineage and thus coalescence is not
@@ -647,19 +636,14 @@ namespace proj {
             t = -log(1 - rng.uniform())/total_rate;
         }
         
-        //bool coal_in_ancpop    = t < 0.0 && isinf(time_to_next_speciation);
         // Four possibilities:
-        // Case 1: t == -1 && speciation_found (time_to_next_speciation finite)
-        //    No coalescence because each species is represented by just one lineage
-        //          and these must all wait until the next speciation event
-        // Case 2: t > 0 && speciation_found (time_to_next_speciation finite)
-        //    2a. Coalescence if t < time_to_next_speciation
-        //    2b. No coalescence if t > time_to_next_speciation
-        // Case 3: t == -1 && !speciation_found (time_to_next_speciation infinite)
-        //    Shouldn't happen: each species is represented by just one lineage but
-        //          there are no more species boundaries to get past
-        // Case 4: t > 0 && !speciation_found (time_to_next_speciation infinite)
-        //    Coalescence in the ancestral population (we're beyond all species boundaries)
+        //  case    t  speciation_found   description
+        //  ----  ---  ----------------   ---------------------------------------------------------
+        //    1    -1       true          No coalescence (each species just 1 lineage)
+        //    2    >0       true          a. Coalescence if t < time_to_next_speciation
+        //                                b. No coalescence if t > time_to_next_speciation
+        //    3    -1       false         Should never happen (multiple species in final ancestor)
+        //    4    >0       false         Coalescence in the ancestral population
         assert(t > -1.0 || speciation_found);   // check for case 3
 
         // coalescence_occurred is true if case 2a or 4, false if case 1 or 2b
@@ -673,14 +657,21 @@ namespace proj {
             transform(rates.begin(), rates.end(), probs.begin(), [total_rate](double r){return r/total_rate;});
             
             // Choose in which species the next coalescence event occurs
-            unsigned k = multinomialDraw(probs);
+            unsigned k = Forest::multinomialDraw(probs);
             Node::species_t s = species[k];
             
             // Get number of lineages in the chosen species
             unsigned n = (unsigned)_lineages_within_species[s].size();
-            probs.clear();
+            
+            // Perform prior-post (multinomial draw from all n-choose-2 possible joins in species s)
+            unsigned npairs = n*(n-1)/2;
+            vector<double> log_weights;
             vector<pair<unsigned,unsigned> > pairs;
-            vector<PartialStore::partial_t> partials;
+            vector<PartialStore::partial_t> partials(npairs);
+            
+            vector<double> log_likelihoods;
+            vector<double> log_coalescent_likelihoods;
+            unsigned the_pair = 0;
             for (unsigned i = 0; i < n - 1; i++) {
                 for (unsigned j = i + 1; j < n; j++) {
                     Node * first_node  = _lineages_within_species[s][i];
@@ -689,7 +680,6 @@ namespace proj {
                     removeTwoAddOne(_lineages, first_node, second_node, anc_node);
                     anc_node->setSpecies(s);
                     
-                    //updateLineageCountsVector(species_lineage_counts, slc_size);
                     updateLineageCountsVector(species_lineage_counts);
                     Epoch cepoch(Epoch::coalescent_epoch, _forest_height);
                     cepoch._gene = gene;
@@ -700,7 +690,9 @@ namespace proj {
                     
                     // Compute partial likelihood array
                     assert(anc_node->_partial == nullptr);
-                    anc_node->_partial = ps.getPartial();
+                    anc_node->_partial = ps.getPartial(_gene_index);
+                                                            
+                    assert(anc_node->_left_child);
                     assert(anc_node->_left_child->_right_sib);
                     if (!simulating) {
                         assert(_data);
@@ -714,7 +706,7 @@ namespace proj {
                         // Compute log Felsenstein likelihood
                         log_likelihood = calcLogLikelihood();
                         log_weight = log_likelihood - _prev_log_likelihood;
-                    
+                
                         // Compute log coalescent likelihood
                         log_coalescent_likelihood = calcLogCoalescentLikelihood(_epochs, gene);
                         log_weight += log_coalescent_likelihood - _prev_log_coalescent_likelihood;
@@ -722,27 +714,36 @@ namespace proj {
                     
                     // Store all relevant information about this pair
                     pairs.push_back(make_pair(i,j));
-                    probs.push_back(log_weight);
-                    partials.push_back(anc_node->_partial);
+                    
+                    partials[the_pair++] = anc_node->_partial;
+                    anc_node->_partial.reset();
+
+                    log_weights.push_back(log_weight);
+                    log_likelihoods.push_back(log_likelihood);
+                    log_coalescent_likelihoods.push_back(log_coalescent_likelihood);
                     
                     // Unjoin lineage pair
                     unjoinLineagePair(anc_node, first_node, second_node);
                     addTwoRemoveOne(_lineages, first_node, second_node, anc_node);
-                    anc_node->_partial = nullptr;
-                    
+                                        
                     removeEpochAt(_epochs, eit);
                 }
             }
 
             // Compute sum of weights on log scale
-            log_sum_weights = calcLogSum(probs);
+            log_sum_weights = calcLogSum(log_weights);
             
-            // Convert each prob from a log weight to a probability
-            transform(probs.begin(), probs.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
+            // Normalize log weights to create a discrete probability distribution
+            probs.resize(log_weights.size());
+            transform(log_weights.begin(), log_weights.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
             
             // Choose one pair to join
-            unsigned which_pair = multinomialDraw(probs);
+            unsigned which_pair = Forest::multinomialDraw(probs);
             auto chosen_pair = pairs[which_pair];
+            
+            // Update previous log-likelihood and log-coalescent-likelihood values
+            _prev_log_likelihood            = log_likelihoods[which_pair];
+            _prev_log_coalescent_likelihood = log_coalescent_likelihoods[which_pair];
             
             Node * first_node  = _lineages_within_species[s][chosen_pair.first];
             Node * second_node = _lineages_within_species[s][chosen_pair.second];
@@ -751,18 +752,22 @@ namespace proj {
             // Ancestral node is in the same species as the nodes that were joined
             anc_node->setSpecies(s);
             
-            // Compute partial likelihood array
+            // Set ancestral node partial likelihood array to the one already calculated
             if (!simulating) {
                 assert(_data);
                 assert(anc_node->_partial == nullptr);
-                anc_node->_partial = ps.getPartial();
+                anc_node->_partial = ps.getPartial(_gene_index); //bug: just transfer existing, no need to allocate anew
+                assert(anc_node->_left_child);
                 assert(anc_node->_left_child->_right_sib);
                 anc_node->_partial = partials[which_pair];
-                
+                partials[which_pair].reset();
+                            
                 // Store unused partials
                 for (unsigned p = 0; p < partials.size(); p++) {
-                    if (p != which_pair)
-                        ps.stowPartial(partials[p]);
+                    if (p != which_pair) {
+                        ps.stowPartial(partials[p], _gene_index);
+                        partials[p].reset();
+                    }
                 }
             }
             
@@ -770,11 +775,7 @@ namespace proj {
             removeTwoAddOne(_lineages_within_species[s], first_node, second_node, anc_node);
             removeTwoAddOne(_lineages, first_node, second_node, anc_node);
             
-            // //temporary!
-            debugShowEpochs(_epochs);
-            
             // Create entry in _epochs for this coalescent event
-            //updateLineageCountsVector(species_lineage_counts, slc_size);
             updateLineageCountsVector(species_lineage_counts);
             Epoch cepoch(Epoch::coalescent_epoch, _forest_height);
             cepoch._gene = gene;
@@ -785,32 +786,25 @@ namespace proj {
                 insertEpochBefore(_epochs, cepoch, sit);
             else
                 pushBackEpoch(_epochs, cepoch);
-            //_epochs.insert(sit, ce);
 
-            // //temporary!
-            debugShowEpochs(_epochs);
-            
             debugShow(format("    coalesced %d and %d in species %d at height %.5f\n    %s") % chosen_pair.first % chosen_pair.second % *(s.begin()) % _forest_height % makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false));
         }
         else {
             // No gene tree coalescence before the end of the species tree epoch
             // Extend all lineages by time_to_next_speciation
+            assert(speciation_found);
             assert(time_to_next_speciation != Forest::_infinity);
             advanceAllLineagesBy(time_to_next_speciation);
             
-            // Merge species as indicated by species tree epoch entry
-            assert(speciation_found);
-
-            // Ensure that this epoch will not be used again until it is reset
+            // Ensure that this speciation epoch will not be used again until it is reset
             sit->_valid = false;
             
             // Every lineage previously assigned to left_species or right_species
             // should be reassigned to anc_species
-            //auto reassign = [left_species, right_species, anc_species](Node * nd){
             Node::species_t left_species  = sit->_left_species;
             Node::species_t right_species = sit->_right_species;
             Node::species_t anc_species   = sit->_anc_species;
-            auto reassign = [left_species, right_species, anc_species](Node * nd) {
+            auto reassign = [&left_species, &right_species, &anc_species](Node * nd) {
                 Node::species_t & ndsppset = nd->getSpecies();
                 if (ndsppset == left_species || ndsppset == right_species)
                     nd->setSpecies(anc_species);
@@ -827,6 +821,45 @@ namespace proj {
         Forest::operator=(other);
         _data = other._data;
         _gene_index = other._gene_index;
+
+        // Node _partial data members not copied in base class because
+        // partials are only relevant for gene forests (and gene index
+        // must be known
+        for (unsigned i = 0; i < other._nodes.size(); ++i) {
+            // Find out whether this and other have partials
+            bool this_partial_exists = (_nodes[i]._partial != nullptr);
+            bool other_partial_exists = (other._nodes[i]._partial != nullptr);
+            
+            if (this_partial_exists && other_partial_exists) {
+                // Sanity check: make sure _partials are both of the correct length
+                assert(other._nodes[i]._partial->size() == ps.getNElements(_gene_index));
+                assert(_nodes[i]._partial->size() == ps.getNElements(_gene_index));
+                
+                // OK to copy
+                *(_nodes[i]._partial)  = *(other._nodes[i]._partial);
+            }
+            else if (this_partial_exists && !other_partial_exists) {
+                // Sanity check: make sure this _partial is of the correct length
+                assert(_nodes[i]._partial->size() == ps.getNElements(_gene_index));
+                
+                // OK to stow existing partial
+                ps.stowPartial(_nodes[i]._partial, _gene_index);
+                
+                // OK to set partial to null
+                _nodes[i]._partial = nullptr;
+            }
+            else if (other_partial_exists && !this_partial_exists) {
+                // Sanity check: make sure other _partial is of the correct length
+                assert(other._nodes[i]._partial->size() == ps.getNElements(_gene_index));
+                
+                // Grab a partial of the correct length
+                _nodes[i]._partial     = ps.getPartial(_gene_index);
+                assert(_nodes[i]._partial->size() == ps.getNElements(_gene_index));
+                
+                // OK to copy
+                *(_nodes[i]._partial)  = *(other._nodes[i]._partial);
+            }
+        }
         
         // No need to copy _lineages_within_species because it is
         // only used in GeneForest::advanceGeneForest and is rebuilt
@@ -835,36 +868,49 @@ namespace proj {
     
     inline void GeneForest::computeLeafPartials(Data::SharedPtr data) {
         assert(data);
+        assert(_leaf_partials.size() == 0);
+        assert(Forest::_ngenes > 0);
+        assert(Forest::_ntaxa > 0);
+        assert(Forest::_nstates == 4);
         
+        // Allocate a vector of leaf partials for each gene
+        _leaf_partials.resize(Forest::_ngenes);
+                
         // Get reference to raw data matrix, which is a vector of vector<state_t>
         auto data_matrix = data->getDataMatrix();
 
         // Create vector of leaf partials
-        ps.getVectorOfPartials(Forest::_ntaxa, _leaf_partials);
-
         for (unsigned g = 0; g < Forest::_ngenes; ++g) {
             // Get number of patterns and first pattern index for gene g
             unsigned npatterns = data->getNumPatternsInSubset(g);
             Data::begin_end_pair_t be = data->getSubsetBeginEnd(g);
             unsigned first_pattern = be.first;
+            
+            // Allocate a partial array for each taxon for gene g
+            // _leaf_partials is vector< vector<partial_t> >
+            // _leaf_partials[g] is vector<partial_t>
+            // _leaf_partials[g][t] is partial_t (i.e. shared pointer to partial array)
+            _leaf_partials[g].resize(Forest::_ntaxa);
 
-            for (unsigned l = 0; l < Forest::_ntaxa; ++l) {
-                PartialStore::partial_t partial_ptr = _leaf_partials[l];
+            for (unsigned t = 0; t < Forest::_ntaxa; ++t) {
+                PartialStore::partial_t partial_ptr = ps.getPartial(g);
                 vector<double> & leaf_partial = *partial_ptr;
                 
-                // Set each partial according to the observed data for leaf l
+                // Set each partial according to the observed data for leaf t
                 for (unsigned p = 0; p < npatterns; p++) {
                     unsigned pp = first_pattern + p;
                     for (unsigned s = 0; s < Forest::_nstates; s++) {
                         Data::state_t state = (Data::state_t)1 << s;
-                        Data::state_t d = data_matrix[l][pp];
+                        Data::state_t d = data_matrix[t][pp];
                         double result = state & d;
-                        leaf_partial[pp*Forest::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
+                        leaf_partial[p*Forest::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
                     }
                     
                     // Ensure that the _nstates partials add up to at least 1
-                    assert(accumulate(partial_ptr->begin()+pp*Forest::_nstates, partial_ptr->begin()+pp*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
+                    assert(accumulate(partial_ptr->begin()+p*Forest::_nstates, partial_ptr->begin()+p*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
                 }
+
+                _leaf_partials[g][t] = partial_ptr;
             }
         }
     }

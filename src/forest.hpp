@@ -53,6 +53,8 @@ namespace proj {
             static string memoryAddressAsString(const void * ptr);
             static string speciesSetAsString(const Node::species_t & s);
             
+            static unsigned multinomialDraw(const vector<double> & probs);
+
             static map<string, unsigned>    _taxon_to_species;
 
             static unsigned                 _nstates;
@@ -75,7 +77,7 @@ namespace proj {
             static double                   _negative_infinity;
             
             static vector<double>           _cumprobs;  // workspace used by multinomialDraw
-            
+                        
         protected:
         
             int         extractNodeNumberFromName(Node * nd, set<unsigned> & used);
@@ -92,7 +94,6 @@ namespace proj {
             void        advanceAllLineagesBy(double t);
             Node *      joinLineagePair(Node * first, Node * second);
             void        unjoinLineagePair(Node * anc, Node * first, Node * second);
-            unsigned    multinomialDraw(const vector<double> & probs) const;
             void        removeTwoAddOne(Node::ptr_vect_t & node_vect, Node * del1, Node * del2, Node * add);
             void        addTwoRemoveOne(Node::ptr_vect_t & node_vect, Node * del1, Node * del2, Node * add);
             void        debugShowNodeInfo(string title);
@@ -111,7 +112,9 @@ namespace proj {
             double                  _prev_log_coalescent_likelihood;
 
             vector<Node>            _nodes;
+            
             Node::ptr_vect_t        _lineages;
+            
             epoch_list_t            _epochs;
                         
             // Because these can be recalulated at any time, they should not
@@ -139,6 +142,8 @@ namespace proj {
         _nodes.clear();
         _preorders.clear();
         _lineages.clear();
+        _epochs.clear();
+        _counts_workspace.clear();
         _debug_coal_like = false;
     }
     
@@ -938,23 +943,10 @@ namespace proj {
         // Find first epoch with height greater than h0
         auto it0 = find_if(epochs.begin(), epochs.end(), [h0](Epoch & ep){return ep._height > h0;});
         
-        // //temporary!
-        //cout << str(format("it0 is at index %d\n") % distance(epochs.begin(), it0));
-        //cout << str(format("    height = %.9f\n") % it0->_height);
-        //cout << "Current species:\n";
-        //for (auto cspit = current_species.begin(); cspit != current_species.end(); cspit++)
-        //    cout << str(format("   species = %s\n") % Forest::speciesSetAsString(*cspit));
-        //cout << "Searching epochs starting with it0:\n";
-        
         // Starting with it0, look for coalescent epoch in which lineages from different current_species coalesce
-        auto it = find_if(it0, epochs.end(), [current_species](Epoch & ep){
+        auto it = find_if(it0, epochs.end(), [&current_species](Epoch & ep){
             if (ep.isCoalescentEpoch()) {
                 bool different_species = current_species.find(ep._species) == current_species.end();
-
-                // //temporary!
-                //cout << str(format("height = %.9f\n") % ep._height);
-                //cout << str(format("   species = %s\n") % Forest::speciesSetAsString(ep._species));
-                //cout << str(format("   different_species? %s\n") % (different_species ? "yes" : "no"));
                 return different_species;
             }
             else {
@@ -985,7 +977,7 @@ namespace proj {
         _forest_height += t;
     }
     
-    inline unsigned Forest::multinomialDraw(const vector<double> & probs) const {
+    inline unsigned Forest::multinomialDraw(const vector<double> & probs) {
         // Compute cumulative probababilities
         _cumprobs.resize(probs.size());
         partial_sum(probs.begin(), probs.end(), _cumprobs.begin());
@@ -1007,13 +999,7 @@ namespace proj {
         //               ^begin()  ^it
         // returns 2 = 2 - 0
         auto it = find_if(_cumprobs.begin(), _cumprobs.end(), [u](double cumpr){return cumpr > u;});
-        
-        // //temporary!
-        //if (it == _cumprobs.end()) {
-        //    double maxcumprob = *(_cumprobs.rbegin());
-        //    cout << str(format("\nForest::multinomialDraw: u = %.9f max cum prob= %.9f\n") % u % maxcumprob);
-        //}
-        
+                
         assert(it != _cumprobs.end());
         return (unsigned)distance(_cumprobs.begin(), it);
     }
@@ -1025,6 +1011,7 @@ namespace proj {
         new_nd->_name        = "anc-" + to_string(new_nd->_number);
         new_nd->_left_child  = subtree1;
         new_nd->_edge_length = 0.0;
+        assert(new_nd->_partial == nullptr);
         
         // Calculate height of the new node
         // (should be the same whether computed via the left or right child)
@@ -1048,6 +1035,7 @@ namespace proj {
         anc->_left_child = nullptr;
         anc->_edge_length = 0.0;
         anc->_height = 0.0;
+        //anc->_partial = nullptr;
         subtree1->_right_sib = nullptr;
         subtree1->_parent = nullptr;
         subtree2->_parent = nullptr;
@@ -1474,19 +1462,7 @@ namespace proj {
             _nodes[i]._split       = other._nodes[i]._split;
             _nodes[i]._flags       = other._nodes[i]._flags;
             
-            bool this_partial_exists = (_nodes[i]._partial != nullptr);
-            bool other_partial_exists = (other._nodes[i]._partial != nullptr);
-            if (this_partial_exists && other_partial_exists) {
-                *(_nodes[i]._partial)  = *(other._nodes[i]._partial);
-            }
-            else if (this_partial_exists && !other_partial_exists) {
-                ps.stowPartial(_nodes[i]._partial);
-                _nodes[i]._partial = nullptr;
-            }
-            else if (other_partial_exists && !this_partial_exists) {
-                _nodes[i]._partial     = ps.getPartial();
-                *(_nodes[i]._partial)  = *(other._nodes[i]._partial);
-            }
+            // _nodes[i]._partial copied by GeneForest::operator=
         }
 
         // Build _lineages
