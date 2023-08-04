@@ -73,6 +73,12 @@ namespace proj {
             static double                   _theta;
             static double                   _lambda;
             
+            static double                   _theta_prior_mean;
+            static double                   _lambda_prior_mean;
+            
+            static bool                      _update_theta;
+            static bool                      _update_lambda;
+            
             static double                   _small_enough;
             static double                   _infinity;
             static double                   _negative_infinity;

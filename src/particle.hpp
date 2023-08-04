@@ -49,6 +49,8 @@ namespace proj {
             epoch_list_t       & getEpochs()       {return _epochs;}
             
             double calcLogCoalLikeGivenTheta(double theta);
+            double calcLogCoalLikeGivenLambda(double lambda);
+            
             double calcLogLikelihoodForGene(unsigned gene);
             
             double debugSaveTreesAsJavascript(string fnprefix) const;
@@ -349,6 +351,23 @@ namespace proj {
         }
         
         Forest::_theta = prev_theta;
+        return log_coal_like;
+   }
+   
+   inline double Particle::calcLogCoalLikeGivenLambda(double lambda) {
+        resetAllEpochs(_species_forest._epochs);
+
+        _species_forest.debugShowEpochs(_species_forest._epochs);
+        
+        double prev_lambda = Forest::_lambda;
+        Forest::_lambda = lambda;
+        
+        double log_coal_like = 0.0;
+        for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+            log_coal_like += _species_forest.calcLogCoalescentLikelihood(_species_forest._epochs, g);
+        }
+        
+        Forest::_lambda = prev_lambda;
         return log_coal_like;
    }
    

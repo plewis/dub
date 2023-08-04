@@ -78,7 +78,14 @@ vector<string>                      Forest::_gene_names;
 map<string, unsigned>               Forest::_taxon_to_species;
 
 double                              Forest::_theta              = 0.05;
-double                              Forest::_lambda             = 10.9;
+double                              Forest::_lambda             = 1.0;
+
+double                              Forest::_theta_prior_mean   = 0.05;
+double                              Forest::_lambda_prior_mean  = 1.0;
+
+bool                                Forest::_update_theta       = true;
+bool                                Forest::_update_lambda      = true;
+
 double                              Forest::_small_enough       = 0.00001;
 
 static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in order to use infinity()");

@@ -55,6 +55,7 @@ namespace proj {
             void                       growGeneTrees(unsigned iter, unsigned gene);
             Particle &                 growSpeciesTrees(unsigned iter);
             void                       updateTheta(Particle & p, unsigned ntries, double delta);
+            void                       updateLambda(Particle & p, unsigned ntries, double delta);
 
             void                       saveSpeciesTreeUsingNames(string fn, Particle & p);
             void                       saveSpeciesTreeUsingNumbers(string fn, Particle & p);
@@ -155,6 +156,10 @@ namespace proj {
         ("nspeciesparticles",  value(&_species_nparticles)->default_value(1000), "number of species particles in a population")
         ("theta",  value(&Forest::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
         ("lambda",  value(&Forest::_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
+        ("thetapriormean",  value(&Forest::_theta_prior_mean)->default_value(0.05), "mean of exponential prior for theta")
+        ("lambdapriormean",  value(&Forest::_lambda_prior_mean)->default_value(1.0), "mean of exponential prior for lambda")
+        ("updatetheta",  value(&Forest::_update_theta)->default_value(true), "if yes, update theta at the end of each iteration")
+        ("updatelambda",  value(&Forest::_update_lambda)->default_value(true), "if yes, update lambda at the end of each iteration")
         ("rnseed",  value(&_rnseed)->default_value(13579), "pseudorandom number seed")
         ("sortforests",  value(&_sort_forests)->default_value(false), "sort forests by weight when saving to file")
         //("priorpost",  value(&Forest::_prior_post)->default_value(true), "if yes, use prior-post to choose gene tree pairings; if no, use prior-prior (species tree always uses prior-prior)")
@@ -639,12 +644,20 @@ namespace proj {
     }
     
     inline void Proj::updateTheta(Particle & p, unsigned ntries, double delta) {
+        if (!Forest::_update_theta)
+            return;
+            
         // Use multiple-try Metropolis to update theta conditional on the gene forests
         // and species forest defined in p. Uses the algorithm presented in
         // https://en.wikipedia.org/wiki/Multiple-try_Metropolis
         // assuming a symmetric proposal (so that w(x,y) = pi(x)).
         
         cout << "\nUpdating theta...\n";
+
+        // r is the rate of the theta exponential prior
+        double prior_rate = 1.0/Forest::_theta_prior_mean;
+        double log_prior_rate = log(prior_rate);
+        double log_prior = log_prior_rate - prior_rate*Forest::_theta;
 
         // theta0 is the current global theta value
         double theta0 = Forest::_theta;
@@ -659,7 +672,8 @@ namespace proj {
             if (q < 0.0)
                 q = -q;
             proposed_thetas[i] = q;
-            logwstar[i] = p.calcLogCoalLikeGivenTheta(q);
+            log_prior = log_prior_rate - prior_rate*q;
+            logwstar[i] = p.calcLogCoalLikeGivenTheta(q) + log_prior;
         }
         
         // Compute log of the sum of the weights (this sum will form the
@@ -678,12 +692,14 @@ namespace proj {
         
         // Sample ntries-1 new values of theta from symmetric proposal distribution
         // (window of width 2*delta centered on theta_star)
-        logwstar[0] = p.calcLogCoalLikeGivenTheta(theta0);
+        log_prior = log_prior_rate - prior_rate*theta0;
+        logwstar[0] = p.calcLogCoalLikeGivenTheta(theta0) + log_prior;
         for (unsigned i = 1; i < ntries; ++i) {
             double q = theta_star - delta + 2.0*delta*rng.uniform();
             if (q < 0.0)
                 q = -q;
-            logwstar[i] = p.calcLogCoalLikeGivenTheta(q);
+            log_prior = log_prior_rate - prior_rate*q;
+            logwstar[i] = p.calcLogCoalLikeGivenTheta(q) + log_prior;
         }
         
         // Compute log of the sum of the weights (this sum will form
@@ -703,6 +719,85 @@ namespace proj {
         }
         else {
             cout << str(format("  Theta unchanged: %.5f\n") % Forest::_theta);
+        }
+    }
+    
+    inline void Proj::updateLambda(Particle & p, unsigned ntries, double delta) {
+        if (!Forest::_update_lambda)
+            return;
+
+        // Use multiple-try Metropolis to update lambda conditional on the gene forests
+        // and species forest defined in p. Uses the algorithm presented in
+        // https://en.wikipedia.org/wiki/Multiple-try_Metropolis
+        // assuming a symmetric proposal (so that w(x,y) = pi(x)).
+        
+        cout << "\nUpdating lambda...\n";
+
+        // r is the rate of the lambda exponential prior
+        double prior_rate = 1.0/Forest::_lambda_prior_mean;
+        double log_prior_rate = log(prior_rate);
+        double log_prior = log_prior_rate - prior_rate*Forest::_lambda;
+
+        // lambda0 is the current global lambda value
+        double lambda0 = Forest::_lambda;
+        
+        // Sample ntries new values of lambda from symmetric proposal distribution
+        // (window of width 2*delta centered on lambda0). Compute weights (coalescent
+        // likelihood) for each proposed_lambdas value.
+        vector<double> proposed_lambdas(ntries, 0.0);
+        vector<double> logwstar(ntries, 0.0);
+        for (unsigned i = 0; i < ntries; ++i) {
+            double l = lambda0 - delta + 2.0*delta*rng.uniform();
+            if (l < 0.0)
+                l = -l;
+            proposed_lambdas[i] = l;
+            log_prior = log_prior_rate - prior_rate*l;
+            logwstar[i] = p.calcLogCoalLikeGivenLambda(l) + log_prior;
+        }
+        
+        // Compute log of the sum of the weights (this sum will form the
+        // numerator of the acceptance ratio)
+        double log_sum_numer_weights = Forest::calcLogSum(logwstar);
+
+        // Normalize weights to create a discrete probability distribution
+        vector<double> probs(ntries, 0.0);
+        transform(logwstar.begin(), logwstar.end(), probs.begin(), [log_sum_numer_weights](double logw){
+            return exp(logw - log_sum_numer_weights);
+        });
+        
+        // Choose one lambda value from the probability distribution
+        unsigned which = Forest::multinomialDraw(probs);
+        double lambda_star = proposed_lambdas[which];
+        
+        // Sample ntries-1 new values of lambda from symmetric proposal distribution
+        // (window of width 2*delta centered on lambda_star)
+        log_prior = log_prior_rate - prior_rate*lambda0;
+        logwstar[0] = p.calcLogCoalLikeGivenLambda(lambda0) + log_prior;
+        for (unsigned i = 1; i < ntries; ++i) {
+            double l = lambda_star - delta + 2.0*delta*rng.uniform();
+            if (l < 0.0)
+                l = -l;
+            log_prior = log_prior_rate - prior_rate*l;
+            logwstar[i] = p.calcLogCoalLikeGivenLambda(l) + log_prior;
+        }
+        
+        // Compute log of the sum of the weights (this sum will form
+        // the denominator of the acceptance ratio)
+        double log_sum_denom_weights = Forest::calcLogSum(logwstar);
+
+        // Compute acceptance ratio
+        double logr = log_sum_numer_weights - log_sum_denom_weights;
+        bool accept = true;
+        if (logr < 0.0) {
+            double logu = log(rng.uniform());
+            accept = logu < logr;
+        }
+        if (accept) {
+            Forest::_lambda = lambda_star;
+            cout << str(format("  New lambda: %.5f\n") % Forest::_lambda);
+        }
+        else {
+            cout << str(format("  Lambda unchanged: %.5f\n") % Forest::_lambda);
         }
     }
     
@@ -1083,6 +1178,9 @@ namespace proj {
                         
                         // Update theta
                         updateTheta(chosen_particle, 100, 0.5);
+                        
+                        // Update lambda
+                        updateLambda(chosen_particle, 100, 0.5);
                         
                         // Report log-likelihood of current parameter values
                         cout << "\nUsing current parameter values:\n";
