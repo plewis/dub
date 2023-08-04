@@ -49,8 +49,7 @@ namespace proj {
         Node::species_t _right_species;
         Node::species_t _anc_species;
         
-        private:
-            string speciesSetToStr(const Node::species_t & s) const;
+        static string speciesSetToStr(const Node::species_t & s);
     };
     
     typedef list<Epoch> epoch_list_t;
@@ -83,7 +82,7 @@ namespace proj {
         return eq;
     }
     
-    inline string Epoch::speciesSetToStr(const Node::species_t & s) const {
+    inline string Epoch::speciesSetToStr(const Node::species_t & s) {
         ostringstream oss;
         copy(s.begin(), s.end(), ostream_iterator<unsigned>(oss, "+"));
 

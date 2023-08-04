@@ -30,6 +30,7 @@ namespace proj {
             
             static string unsignedVectToString(const vector<unsigned> & v);
             static string lineageCountsMapToString(const Epoch::lineage_counts_t & lcm);
+            static void createDefaultGeneTreeNexusTaxonMap();
             static void createDefaultSpeciesTreeNexusTaxonMap();
             
             void debugCheckSpeciesSets() const;
@@ -373,7 +374,9 @@ namespace proj {
         // tree description. Assumes newick either uses names for leaves or,
         // if it specifies numbers, the numbers correspond to keys in
         // Forest::_nexus_taxon_map, which translates taxon numbers in newick
-        // strings to the index of the taxon in Forest::_species_names.
+        // strings to the index of the taxon in Forest::_species_names (if
+        // building a species tree) or Forest::_taxon_names (if building a
+        // gene tree).
 
         //cerr << "Forest::buildFromNewick:" << endl;
         
@@ -806,10 +809,20 @@ namespace proj {
     
     inline void Forest::createDefaultSpeciesTreeNexusTaxonMap() {
         // Build default _nexus_taxon_map used by buildFromNewick
-        // that just assumes taxon indices in the newick tree description are in
+        // that assumes taxon indices in the newick tree description are in
         // the same order as _species_names
         _nexus_taxon_map.clear();
         for (unsigned i = 0; i < Forest::_nspecies; ++i) {
+            _nexus_taxon_map[i+1] = i;
+        }
+    }
+    
+    inline void Forest::createDefaultGeneTreeNexusTaxonMap() {
+        // Build default _nexus_taxon_map used by buildFromNewick
+        // that assumes taxon indices in the newick tree description are in
+        // the same order as _taxon_names
+        _nexus_taxon_map.clear();
+        for (unsigned i = 0; i < Forest::_ntaxa; ++i) {
             _nexus_taxon_map[i+1] = i;
         }
     }
@@ -876,7 +889,19 @@ namespace proj {
             // It is possible (probable even) that the order of taxa in taxa_block will differ from
             // the order in leaf_names. Therefore, taxon_map is constructed the keys of which are the
             // taxon numbers in the newick tree description (corresponding to taxa_block); the values
-            // are the index of the taxon in leaf_names.
+            // are the index of the taxon in leaf_names. For example:
+            //
+            //   #nexus              newick = (1,2,(3,4)) --> (A,D,(C,B))
+            //   begin trees;        leaf_names: [A,B,C,D]
+            //     translate
+            //       1 A,            t           = 0  1  2  3
+            //       2 D,            taxon_label = A  D  C  B  <-- order in taxa block
+            //       3 C,            d           = 0  3  2  1  <-- index into leaf_names
+            //       4 B             t+1         = 1  2  3  4
+            //     ;                 taxon_map: {1:0, 2:3, 3:2, 4:1}
+            //   end;                                 | |
+            //                                        | index into leaf_names vector
+            //                                        number in newick string
             taxon_map.clear();
             for (unsigned t = 0; t < num_leaves; t++) {
                 string taxon_label = taxa_block->GetTaxonLabel(t);
@@ -996,7 +1021,8 @@ namespace proj {
         //                          0.6                <-- u
         //
         // _cumprobs = {0.2, 0.5, 0.9, 1.0}, u = 0.6
-        //               ^begin()  ^it
+        //               |         |
+        //               begin()   it
         // returns 2 = 2 - 0
         auto it = find_if(_cumprobs.begin(), _cumprobs.end(), [u](double cumpr){return cumpr > u;});
                 

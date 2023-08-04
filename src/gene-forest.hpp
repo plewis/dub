@@ -20,7 +20,7 @@ namespace proj {
             void simulateData(Data::SharedPtr data, unsigned starting_site, unsigned nsites);
             void setGeneIndex(unsigned i);
             void simulateGeneTree(unsigned gene, epoch_list_t & epochs);
-            pair<bool,double> advanceGeneForest(unsigned step, unsigned particle, unsigned gene, bool simulating = false);
+            pair<bool,double> advanceGeneForest(unsigned step, unsigned particle, bool simulating = false);
             
             double calcLogLikelihood() const;
             
@@ -42,6 +42,7 @@ namespace proj {
             double calcTransitionProbability(unsigned from, unsigned to, double edge_length);
             void debugComputeLeafPartials(unsigned gene, int number, PartialStore::partial_t partial);
             void calcPartialArray(Node * new_nd);
+            void computeAllPartials();
             void initSpeciesLineageCountsVector(Epoch::lineage_counts_t & species_lineage_counts) const;
             void buildLineagesWithinSpeciesMap();
             double computeCoalRatesForSpecies(vector<Node::species_t> & species, vector<double> & rates);
@@ -540,7 +541,7 @@ namespace proj {
             debugShow(format("  step %d of %d") % step % nsteps);
             bool coalescent_event = false;
             while (!coalescent_event) {
-                auto result = advanceGeneForest(step, 0, gene, true);
+                auto result = advanceGeneForest(step, 0, true);
                 coalescent_event = result.first;
             }
         }
@@ -583,7 +584,7 @@ namespace proj {
         return total_rate;
     }
     
-    inline pair<bool,double> GeneForest::advanceGeneForest(unsigned step, unsigned particle, unsigned gene, bool simulating) {
+    inline pair<bool,double> GeneForest::advanceGeneForest(unsigned step, unsigned particle, bool simulating) {
         // Returns true if a coalescent event was realized, false if chosen coalescence was
         // deep or if all species have only one lineaged.
         
@@ -682,7 +683,7 @@ namespace proj {
                     
                     updateLineageCountsVector(species_lineage_counts);
                     Epoch cepoch(Epoch::coalescent_epoch, _forest_height);
-                    cepoch._gene = gene;
+                    cepoch._gene = _gene_index;
                     cepoch._coalescence_node = anc_node;
                     cepoch._lineage_counts = species_lineage_counts;
                     cepoch._species = anc_node->getSpecies();
@@ -708,7 +709,7 @@ namespace proj {
                         log_weight = log_likelihood - _prev_log_likelihood;
                 
                         // Compute log coalescent likelihood
-                        log_coalescent_likelihood = calcLogCoalescentLikelihood(_epochs, gene);
+                        log_coalescent_likelihood = calcLogCoalescentLikelihood(_epochs, _gene_index);
                         log_weight += log_coalescent_likelihood - _prev_log_coalescent_likelihood;
                     }
                     
@@ -778,7 +779,7 @@ namespace proj {
             // Create entry in _epochs for this coalescent event
             updateLineageCountsVector(species_lineage_counts);
             Epoch cepoch(Epoch::coalescent_epoch, _forest_height);
-            cepoch._gene = gene;
+            cepoch._gene = _gene_index;
             cepoch._coalescence_node = anc_node;
             cepoch._lineage_counts = species_lineage_counts;
             cepoch._species = anc_node->getSpecies();
@@ -915,4 +916,26 @@ namespace proj {
         }
     }
         
+    inline void GeneForest::computeAllPartials() {
+        // Assumes _leaf_partials have been computed but that every node in the tree
+        // has _partial equal to nullptr.
+        assert(_data);
+        
+        if (_preorders.size() == 0) {
+            refreshAllPreorders();
+        }
+        
+        for (auto & preorder : _preorders) {
+            for (auto nd : boost::adaptors::reverse(preorder)) {
+                assert(nd->_partial == nullptr);
+                nd->_partial = ps.getPartial(_gene_index);
+                if (nd->_left_child) {
+                    calcPartialArray(nd);
+                }
+                else {
+                    *(nd->_partial) = *(_leaf_partials[_gene_index][nd->_number]);
+                }
+            }
+        }
+    }
 }

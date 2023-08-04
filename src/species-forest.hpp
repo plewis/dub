@@ -27,7 +27,8 @@ namespace proj {
         protected:
             
             epoch_list_t & digest();
-            //void insertSpeciationEpochAt(epoch_list_t & epochs, double h, unsigned species1, unsigned species2, unsigned new_species);
+            epoch_list_t::iterator findEpochGreaterThan(epoch_list_t & epochs, double h);
+            epoch_list_t::iterator reconcileEpochsStartingAt(epoch_list_t & epochs, epoch_list_t::iterator start_iter, Node::species_t species1, Node::species_t species2, Node::species_t new_species);
             void insertSpeciationEpochAt(epoch_list_t & epochs, double h, Node::species_t species1, Node::species_t species2, Node::species_t new_species);
             double advanceSpeciesForest(unsigned particle, unsigned step);
             
@@ -193,7 +194,7 @@ namespace proj {
         heightsInternalsPreorders();
     }
     
-    inline void SpeciesForest::insertSpeciationEpochAt(epoch_list_t & epochs, double h, Node::species_t species1, Node::species_t species2, Node::species_t new_species) {
+    inline epoch_list_t::iterator SpeciesForest::findEpochGreaterThan(epoch_list_t & epochs, double h) {
         // Find iterator pointing to first epoch with height > h
         auto it = epochs.begin();
         for (; it != epochs.end(); ++it) {
@@ -202,21 +203,17 @@ namespace proj {
             else
                 break;
         }
+        return it;
+    }
+    
+    inline epoch_list_t::iterator SpeciesForest::reconcileEpochsStartingAt(epoch_list_t & epochs, epoch_list_t::iterator start_iter, Node::species_t species1, Node::species_t species2, Node::species_t new_species) {
+        auto it = start_iter;
         
-        // Insert SpeciationEpoch just before it
-        Epoch spp_epoch(Epoch::speciation_epoch, h);
-        spp_epoch._left_species  = species1;
-        spp_epoch._right_species = species2;
-        spp_epoch._anc_species   = new_species;
-        it = epochs.insert(it, spp_epoch);
-        
-        // it now points to the inserted spp_epoch, so advance
-        ++it;
-            
-        // Fix the remaining coalescent epoch elements, replacing species1 and species2
-        // everywhere with new_species
+        // Fix the subsequent coalescent epoch elements, replacing species1 and species2
+        // everywhere with new_species until encountering either the end or the next speciation epoch
         for (; it != epochs.end(); ++it) {
-            assert(it->isCoalescentEpoch());
+            if (it->isSpeciationEpoch())
+                continue;
                          
             // Let ss be an alias for the epoch's species
             Node::species_t & ss = it->_species;
@@ -259,6 +256,22 @@ namespace proj {
             it->_lineage_counts[species2] = 0;
         }
         
+        return it;
+    }
+    
+    inline void SpeciesForest::insertSpeciationEpochAt(epoch_list_t & epochs, double h, Node::species_t species1, Node::species_t species2, Node::species_t new_species) {
+        // Find iterator pointing to first epoch with height > h
+        auto it = findEpochGreaterThan(epochs, h);
+        
+        // Insert SpeciationEpoch just before it
+        Epoch spp_epoch(Epoch::speciation_epoch, h);
+        spp_epoch._left_species  = species1;
+        spp_epoch._right_species = species2;
+        spp_epoch._anc_species   = new_species;
+        it = epochs.insert(it, spp_epoch);
+        
+        it = reconcileEpochsStartingAt(epochs, ++it, species1, species2, new_species);
+        assert(it == epochs.end());
         debugShowEpochs(epochs);
     }
     
@@ -471,7 +484,6 @@ namespace proj {
         double log_coalescent_likelihood = 0.0;
         for (unsigned g = 0; g < Forest::_ngenes; g++) {
             log_coalescent_likelihood += calcLogCoalescentLikelihood(_epochs, g);
-            _debug_coal_like = false;
         }
         
         log_weight = log_coalescent_likelihood - _prev_log_coalescent_likelihood;
