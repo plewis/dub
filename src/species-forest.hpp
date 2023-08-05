@@ -21,6 +21,8 @@ namespace proj {
             // Overrides of abstract base class functions
             void    createTrivialForest(bool compute_partials = false);
             bool    isSpeciesForest() const {return true;}
+            
+            double calcLogSpeciesTreeDensity(double lambda) const;
 
             void operator=(const SpeciesForest & other);
 
@@ -63,6 +65,41 @@ namespace proj {
         _next_node_number = Forest::_nspecies;
         _prev_log_likelihood = 0.0;
         _prev_log_coalescent_likelihood = 0.0;
+    }
+    
+    inline double SpeciesForest::calcLogSpeciesTreeDensity(double lambda) const {
+        // Assume that this species forest is fully resolved
+        assert(_preorders.size() == 1);
+                
+        // Build vector of internal node heights
+        vector<double> internal_heights;
+        for (const Node * nd : _preorders[0]) {
+            if (nd->getLeftChild()) {
+                internal_heights.push_back(nd->getHeight());
+            }
+        }
+        
+        // Number of internal nodes should be _nspecies - 1
+        assert(internal_heights.size() == Forest::_nspecies - 1);
+        
+        // Sort heights
+        sort(internal_heights.begin(), internal_heights.end());
+        
+        double log_prob_density = 0.0;
+        unsigned n = Forest::_nspecies;
+        double h0 = 0.0;
+        for (auto it = internal_heights.begin(); it != internal_heights.end(); ++it) {
+            double h = *it;
+            double r = lambda*n;
+            double logr = log(r);
+            double t = h - h0;
+            double log_exponential_density = logr - r*t;
+            log_prob_density += log_exponential_density;
+            h0 = h;
+            n--;
+        }
+        
+        return log_prob_density;
     }
     
     inline epoch_list_t & SpeciesForest::digest() {

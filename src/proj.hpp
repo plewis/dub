@@ -13,6 +13,7 @@ using boost::program_options::reading_file;
 using boost::program_options::notify;
 
 extern proj::PartialStore ps;
+extern proj::StopWatch stopwatch;
 extern proj::Lot rng;
 
 namespace proj {
@@ -44,7 +45,9 @@ namespace proj {
             void                       clearSpeciesParticles();
             void                       initializeGeneParticles(unsigned gene);
             void                       initializeSpeciesParticles();
-            double                     filterParticles(int gene, const vector<double> & log_weights, vector<unsigned> & counts, double & log_marg_like);
+            //double                     filterParticles(int gene, const vector<double> & log_weights, vector<unsigned> & counts, double & log_marg_like);
+            double                     filterGeneParticles(int gene, const vector<double> & log_weights, vector<unsigned> & counts, double & log_marg_like);
+            double                     filterSpeciesParticles(const vector<double> & log_weights, vector<unsigned> & counts, double & log_marg_like);
             void                       saveStartingGeneTrees(string fn);
             void                       saveStartingSpeciesTree(string fn);
             void                       saveGeneTreesUsingNames(string filename, Particle & p);
@@ -91,6 +94,9 @@ namespace proj {
             unsigned                   _rnseed;
             bool                       _sort_forests;
             double                     _visualization_cutoff;
+            
+            double                      _theta;
+            double                      _lambda;
                         
             vector<vect_particle_t>     _gene_particles;
             vect_particle_t             _species_particles;
@@ -132,6 +138,9 @@ namespace proj {
         // built from taxa block in tree file
         _starting_species_tree_from_file = false;
         _starting_gene_trees_from_file = false;
+        
+        _theta = 0.1;
+        _lambda = 1.0;
     }
 
     inline void Proj::processCommandLineOptions(int argc, const char * argv[]) {
@@ -154,8 +163,8 @@ namespace proj {
         ("ntaxaperspecies",  value(&_nsimtaxaperspecies), "number of taxa sampled per species (only used if simulate specified); should be _nimspecies of these entries, one for each species simulated")
         ("ngeneparticles",  value(&_gene_nparticles)->default_value(100), "number of gene particles in a population")
         ("nspeciesparticles",  value(&_species_nparticles)->default_value(1000), "number of species particles in a population")
-        ("theta",  value(&Forest::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
-        ("lambda",  value(&Forest::_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
+        ("theta",  value(&_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
+        ("lambda",  value(&_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
         ("thetapriormean",  value(&Forest::_theta_prior_mean)->default_value(0.05), "mean of exponential prior for theta")
         ("lambdapriormean",  value(&Forest::_lambda_prior_mean)->default_value(1.0), "mean of exponential prior for lambda")
         ("updatetheta",  value(&Forest::_update_theta)->default_value(true), "if yes, update theta at the end of each iteration")
@@ -194,6 +203,28 @@ namespace proj {
             _partition.reset(new Partition());
             for (auto s : partition_subsets) {
                 _partition->parseSubsetDefinition(s);
+            }
+        }
+        
+        if (vm.count("theta") > 0) {
+            Forest::_theta = _theta;
+        }
+        
+        if (vm.count("lambda") > 0) {
+            Forest::_lambda = _lambda;
+        }
+        
+        if (vm.count("ntaxaperspecies") > 0) {
+            if (_nsimspecies > 1) {
+                unsigned ntaxaperspecies = (unsigned)_nsimtaxaperspecies.size();
+                if (ntaxaperspecies == 1) {
+                    unsigned n = _nsimtaxaperspecies[0];
+                    for (unsigned i = 1; i < _nsimspecies; ++i) {
+                        _nsimtaxaperspecies.push_back(n);
+                    }
+                }
+                else if (ntaxaperspecies != _nsimspecies)
+                    throw XProj(format("Expecting either 1 or %d ntaxaperspecies entries, but found %d") % _nsimspecies % ntaxaperspecies);
             }
         }
     }
@@ -562,7 +593,7 @@ namespace proj {
             }
             
             // Filter particles
-            double ESS = filterParticles(gene, logw, counts, log_marg_like);
+            double ESS = filterGeneParticles(gene, logw, counts, log_marg_like);
             if (_verbose)
                 cout << str(format("ESS = %.1f%%\n") % (100.9*ESS/_gene_nparticles));
 
@@ -610,7 +641,7 @@ namespace proj {
             }
                         
             // Filter particles
-            double ESS = filterParticles(-1, logw, counts, log_marg_like);
+            double ESS = filterSpeciesParticles(logw, counts, log_marg_like);
             if (_verbose)
                 cout << str(format("ESS = %.1f%%\n") % (100.9*ESS/_species_nparticles));
         }
@@ -677,13 +708,13 @@ namespace proj {
         }
         
         // Compute log of the sum of the weights (this sum will form the
-        // numerator of the acceptance ratio)
-        double log_sum_numer_weights = Forest::calcLogSum(logwstar);
+        // denominator of the acceptance ratio)
+        double log_sum_denom_weights = Forest::calcLogSum(logwstar);
 
         // Normalize weights to create a discrete probability distribution
         vector<double> probs(ntries, 0.0);
-        transform(logwstar.begin(), logwstar.end(), probs.begin(), [log_sum_numer_weights](double logw){
-            return exp(logw - log_sum_numer_weights);
+        transform(logwstar.begin(), logwstar.end(), probs.begin(), [log_sum_denom_weights](double logw){
+            return exp(logw - log_sum_denom_weights);
         });
         
         // Choose one theta value from the probability distribution
@@ -703,8 +734,8 @@ namespace proj {
         }
         
         // Compute log of the sum of the weights (this sum will form
-        // the denominator of the acceptance ratio)
-        double log_sum_denom_weights = Forest::calcLogSum(logwstar);
+        // the numerator of the acceptance ratio)
+        double log_sum_numer_weights = Forest::calcLogSum(logwstar);
 
         // Compute acceptance ratio
         double logr = log_sum_numer_weights - log_sum_denom_weights;
@@ -726,8 +757,8 @@ namespace proj {
         if (!Forest::_update_lambda)
             return;
 
-        // Use multiple-try Metropolis to update lambda conditional on the gene forests
-        // and species forest defined in p. Uses the algorithm presented in
+        // Use multiple-try Metropolis to update lambda conditional on the
+        // species forest defined in p. Uses the algorithm presented in
         // https://en.wikipedia.org/wiki/Multiple-try_Metropolis
         // assuming a symmetric proposal (so that w(x,y) = pi(x)).
         
@@ -737,6 +768,7 @@ namespace proj {
         double prior_rate = 1.0/Forest::_lambda_prior_mean;
         double log_prior_rate = log(prior_rate);
         double log_prior = log_prior_rate - prior_rate*Forest::_lambda;
+        double log_likelihood = 0.0;
 
         // lambda0 is the current global lambda value
         double lambda0 = Forest::_lambda;
@@ -752,17 +784,19 @@ namespace proj {
                 l = -l;
             proposed_lambdas[i] = l;
             log_prior = log_prior_rate - prior_rate*l;
-            logwstar[i] = p.calcLogCoalLikeGivenLambda(l) + log_prior;
+            log_likelihood =  p.calcLogSpeciesTreeDensityGivenLambda(l);
+            
+            logwstar[i] = log_likelihood + log_prior;
         }
         
         // Compute log of the sum of the weights (this sum will form the
-        // numerator of the acceptance ratio)
-        double log_sum_numer_weights = Forest::calcLogSum(logwstar);
+        // denominator of the acceptance ratio)
+        double log_sum_denom_weights = Forest::calcLogSum(logwstar);
 
         // Normalize weights to create a discrete probability distribution
         vector<double> probs(ntries, 0.0);
-        transform(logwstar.begin(), logwstar.end(), probs.begin(), [log_sum_numer_weights](double logw){
-            return exp(logw - log_sum_numer_weights);
+        transform(logwstar.begin(), logwstar.end(), probs.begin(), [log_sum_denom_weights](double logw){
+            return exp(logw - log_sum_denom_weights);
         });
         
         // Choose one lambda value from the probability distribution
@@ -772,18 +806,20 @@ namespace proj {
         // Sample ntries-1 new values of lambda from symmetric proposal distribution
         // (window of width 2*delta centered on lambda_star)
         log_prior = log_prior_rate - prior_rate*lambda0;
-        logwstar[0] = p.calcLogCoalLikeGivenLambda(lambda0) + log_prior;
+        log_likelihood =  p.calcLogSpeciesTreeDensityGivenLambda(lambda0);
+        logwstar[0] = log_likelihood + log_prior;
         for (unsigned i = 1; i < ntries; ++i) {
             double l = lambda_star - delta + 2.0*delta*rng.uniform();
             if (l < 0.0)
                 l = -l;
             log_prior = log_prior_rate - prior_rate*l;
-            logwstar[i] = p.calcLogCoalLikeGivenLambda(l) + log_prior;
+            log_likelihood =  p.calcLogSpeciesTreeDensityGivenLambda(l);
+            logwstar[i] = log_likelihood + log_prior;
         }
         
         // Compute log of the sum of the weights (this sum will form
-        // the denominator of the acceptance ratio)
-        double log_sum_denom_weights = Forest::calcLogSum(logwstar);
+        // the numerator of the acceptance ratio)
+        double log_sum_numer_weights = Forest::calcLogSum(logwstar);
 
         // Compute acceptance ratio
         double logr = log_sum_numer_weights - log_sum_denom_weights;
@@ -820,14 +856,165 @@ namespace proj {
         }
         outputAnnotatedNexusTreefile(fn, species_tree_newicks, tree_names, notes);
     }
-    
-    inline double Proj::filterParticles(int gene, const vector<double> & log_weights, vector<unsigned> & counts, double & log_marg_like) {
-        vect_particle_t & particles = _species_particles;
-        unsigned nparticles = _species_nparticles;
-        if (gene >= 0) {
-            particles = _gene_particles[gene];
-            nparticles = _gene_nparticles;
+
+#if 1
+    inline double Proj::filterSpeciesParticles(const vector<double> & log_weights, vector<unsigned> & counts, double & log_marg_like) {
+        // Sanity checks
+        assert(_species_particles.size() == _species_nparticles);
+        assert(log_weights.size() == _species_nparticles);
+        
+        // Normalize log_weights to create discrete probability distribution
+        double log_sum_weights = Forest::calcLogSum(log_weights);
+        vector<double> probs(_species_nparticles, 0.0);
+        transform(log_weights.begin(), log_weights.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
+        
+        // Compute component of the log marginal likelihood
+        log_marg_like += log_sum_weights - log(_species_nparticles);
+        
+        // Compute effective sample size
+        double sum_squared_weights = 0.0;
+        for (auto it = probs.begin(); it != probs.end(); it++) {
+            double w = *it;
+            sum_squared_weights += w*w;
         }
+        double ess = 1.0/sum_squared_weights;
+        
+        // Compute cumulative probabilities
+        partial_sum(probs.begin(), probs.end(), probs.begin());
+        
+        // Create vector of counts storing number of darts hitting each particle
+        counts.resize(_species_nparticles);
+        counts.assign(_species_nparticles, 0);
+        
+        // Throw _species_nparticles darts
+        for (unsigned i = 0; i < _species_nparticles; ++i) {
+            double u = rng.uniform();
+            auto it = find_if(probs.begin(), probs.end(), [u](double cump){return cump > u;});
+            assert(it != probs.end());
+            unsigned which = (unsigned)distance(probs.begin(), it);
+            counts[which]++;
+        }
+        
+        // The vector counts should represent the results of multinomial sampling, so make a copy
+        // to use for filtering particles
+        vector<unsigned> working_counts(counts.begin(), counts.end());
+        
+        // Find index of first element of working_counts with value == 0
+        auto copy_to_iter = find_if(working_counts.begin(), working_counts.end(), [](unsigned c){return c == 0;});
+        
+        // Find index of first element of working_counts with value > 1
+        auto copy_from_iter = find_if(working_counts.begin(), working_counts.end(), [](unsigned c){return c > 1;});
+        
+        // Copy particles with count > 1 to particles with count = 0
+        while (copy_from_iter != working_counts.end()) {
+            unsigned index_from = (unsigned)distance(working_counts.begin(), copy_from_iter);
+            
+            // n is the count for the particle
+            assert(*copy_from_iter > 1);
+            while (*copy_from_iter > 1) {
+                // It's a zero-sum game, so there should always be a slot to copy this particle into
+                assert(copy_to_iter != working_counts.end());
+                
+                // Find index of particle to copy to
+                unsigned index_to = (unsigned)distance(working_counts.begin(), copy_to_iter);
+                
+                // Copy the "from" particle to the "to" particle
+                _species_particles[index_to] = _species_particles[index_from];
+                
+                // Adjust working_counts to reflect copying done
+                (*copy_to_iter)++;
+                (*copy_from_iter)--;
+                
+                // Advance iterator to the next "to" particle
+                copy_to_iter = find_if(++copy_to_iter, working_counts.end(), [](unsigned c){return c == 0;});
+            }
+            copy_from_iter = find_if(++copy_from_iter, working_counts.end(), [](unsigned c){return c > 1;});
+        }
+        
+        return ess;
+    }
+
+    inline double Proj::filterGeneParticles(int gene, const vector<double> & log_weights, vector<unsigned> & counts, double & log_marg_like) {
+        assert(gene >= 0);
+        
+        // Sanity checks
+        assert(_gene_particles[gene].size() == _gene_nparticles);
+        assert(log_weights.size() == _gene_nparticles);
+        
+        // Normalize log_weights to create discrete probability distribution
+        double log_sum_weights = Forest::calcLogSum(log_weights);
+        vector<double> probs(_gene_nparticles, 0.0);
+        transform(log_weights.begin(), log_weights.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
+        
+        // Compute component of the log marginal likelihood
+        log_marg_like += log_sum_weights - log(_gene_nparticles);
+        
+        // Compute effective sample size
+        double sum_squared_weights = 0.0;
+        for (auto it = probs.begin(); it != probs.end(); it++) {
+            double w = *it;
+            sum_squared_weights += w*w;
+        }
+        double ess = 1.0/sum_squared_weights;
+        
+        // Compute cumulative probabilities
+        partial_sum(probs.begin(), probs.end(), probs.begin());
+        
+        // Create vector of counts storing number of darts hitting each particle
+        counts.resize(_gene_nparticles);
+        counts.assign(_gene_nparticles, 0);
+        
+        // Throw _gene_nparticles darts
+        for (unsigned i = 0; i < _gene_nparticles; ++i) {
+            double u = rng.uniform();
+            auto it = find_if(probs.begin(), probs.end(), [u](double cump){return cump > u;});
+            assert(it != probs.end());
+            unsigned which = (unsigned)distance(probs.begin(), it);
+            counts[which]++;
+        }
+        
+        // The vector counts should represent the results of multinomial sampling, so make a copy
+        // to use for filtering particles
+        vector<unsigned> working_counts(counts.begin(), counts.end());
+        
+        // Find index of first element of working_counts with value == 0
+        auto copy_to_iter = find_if(working_counts.begin(), working_counts.end(), [](unsigned c){return c == 0;});
+        
+        // Find index of first element of working_counts with value > 1
+        auto copy_from_iter = find_if(working_counts.begin(), working_counts.end(), [](unsigned c){return c > 1;});
+        
+        // Copy particles with count > 1 to particles with count = 0
+        while (copy_from_iter != working_counts.end()) {
+            unsigned index_from = (unsigned)distance(working_counts.begin(), copy_from_iter);
+            
+            // n is the count for the particle
+            assert(*copy_from_iter > 1);
+            while (*copy_from_iter > 1) {
+                // It's a zero-sum game, so there should always be a slot to copy this particle into
+                assert(copy_to_iter != working_counts.end());
+                
+                // Find index of particle to copy to
+                unsigned index_to = (unsigned)distance(working_counts.begin(), copy_to_iter);
+                
+                // Copy the "from" particle to the "to" particle
+                _gene_particles[gene][index_to] = _gene_particles[gene][index_from];
+                
+                // Adjust working_counts to reflect copying done
+                (*copy_to_iter)++;
+                (*copy_from_iter)--;
+                
+                // Advance iterator to the next "to" particle
+                copy_to_iter = find_if(++copy_to_iter, working_counts.end(), [](unsigned c){return c == 0;});
+            }
+            copy_from_iter = find_if(++copy_from_iter, working_counts.end(), [](unsigned c){return c > 1;});
+        }
+        
+        return ess;
+    }
+#else
+    inline double Proj::filterParticles(int gene, const vector<double> & log_weights, vector<unsigned> & counts, double & log_marg_like) {
+        vect_particle_t & particles  = (gene >= 0 ? _gene_particles[gene] : _species_particles);
+        unsigned          nparticles = (gene >= 0 ? _gene_nparticles      : _species_nparticles);
         
         // Sanity checks
         assert(particles.size() == nparticles);
@@ -903,7 +1090,8 @@ namespace proj {
         
         return ess;
     }
-    
+#endif
+
     inline void Proj::clearAllParticles() {
         _species_particles.clear();
         _gene_particles.clear();
@@ -1029,7 +1217,6 @@ namespace proj {
             nsites_per_gene[g] = _partition->numSitesInSubset(g);
             Forest::_gene_names[g] = _partition->getSubsetName(g);
         }
-        //unsigned total_sites = accumulate(nsites_per_gene.begin(), nsites_per_gene.end(), 0);
         
         // Set taxon/species names and numbers, and create taxpartition vector used later
         // in paup command file
@@ -1158,6 +1345,12 @@ namespace proj {
                 if (_start_mode == "random") {
                     drawStartingSpeciesTree();
                     for (unsigned iter = 0; iter < _niter; ++iter) {
+                        stopwatch.start();
+                        // //temporary!
+                        //double orig_lambda = Forest::_lambda;
+                        //Forest::_lambda *= 10.0;
+                        //cout << "Setting lambda to " << Forest::_lambda << " for first iteration only\n";
+                        
                         cout << str(format("\nIteration %d of %d...") % (iter+1) % _niter) << endl;
                         
                         // After each gene forest is filtered for the last time,
@@ -1193,6 +1386,11 @@ namespace proj {
                             //cout << str(format("log(likelihood for %s) = %.9f\n") % Forest::_gene_names[g] % log_like);
                         }
                         cout << str(format("    log(likelihood) = %.5f\n") % total_log_like);
+                        
+                        // //temporary!
+                        //Forest::_lambda = orig_lambda;
+                        double secs = stopwatch.stop();
+                        cout << str(format("\nTime used for iteration %d was %.5f seconds\n") % iter % secs);
                     }
                 }
                 else if (_start_mode == "species") {
@@ -1219,6 +1417,7 @@ namespace proj {
                 }
                 else if (_start_mode == "evaluate") {
                     Particle p;
+                    p.setGeneIndex(-1);
                     p.setData(_data);
 
                     readStartingSpeciesTree();
@@ -1244,6 +1443,50 @@ namespace proj {
                         cout << str(format("log(likelihood for %s) = %.9f\n") % Forest::_gene_names[g] % log_like);
                     }
                     cout << str(format("Total log(likelihood) = %.9f\n") % total_log_like);
+                }
+                else if (_start_mode == "lambdatest") {
+                    Forest::_nspecies = _nsimspecies;
+                    Forest::_species_names.resize(_nsimspecies);
+                    for (unsigned i = 0; i < Forest::_nspecies; ++i) {
+                        string species_name = inventName(i, false);
+                        Forest::_species_names[i] = species_name;
+                    }
+                    
+                    cout << str(format("Starting lambda   = %.1f\n") % Forest::_lambda);
+                    cout << str(format("Mean lambda prior = %.1f\n") % Forest::_lambda_prior_mean);
+
+                    drawStartingSpeciesTree();
+
+                    Particle p;
+                    p.setGeneIndex(-1);
+                    p.initSpeciesForest(_starting_species_newick);
+                    
+                    double invseries = 0.0;
+                    for (unsigned z = 2; z <= Forest::_nspecies; z++)
+                        invseries += 1.0/z;
+                    cout << str(format("%12.5f = 1/2 + 1/3 + ... + 1/%d\n") % invseries % Forest::_nspecies);
+                    double species_tree_height = p.speciesForestHeight();
+                    cout << str(format("%12.5f = species tree height\n") % species_tree_height);
+                    double expected_species_tree_height = invseries/_lambda;
+                    cout << str(format("%12.5f = expected species tree height (given lambda = %.5f)\n") % expected_species_tree_height % _lambda);
+                    double lambda_crude = invseries/species_tree_height;
+                    cout << str(format("%12.5f = lambda crude estimate\n") % lambda_crude);
+                    
+                    // Place starting lambda far away
+                    Forest::_lambda += 20.0;
+                    
+                    double logLtrue =  p.calcLogSpeciesTreeDensityGivenLambda(_lambda);
+                    cout << str(format("%12.5f = Log likelihood given true lambda (%.5f)\n") % logLtrue % _lambda);
+
+                    double logLcrude =  p.calcLogSpeciesTreeDensityGivenLambda(lambda_crude);
+                    cout << str(format("%12.5f = Log likelihood given crude estimate of lambda (%.5f)\n") % logLcrude % lambda_crude);
+
+                    double logLstart =  p.calcLogSpeciesTreeDensityGivenLambda(Forest::_lambda);
+                    cout << str(format("%12.5f = Log likelihood given starting lambda (%.5f)\n") % logLstart % Forest::_lambda);
+                    
+                    for (unsigned iter = 0; iter < _niter; ++iter) {
+                        updateLambda(p, 100, 1.0);
+                    }
                 }
                 else {
                     throw XProj(format("Unknown start mode (\"%s\")") % _start_mode);

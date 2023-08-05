@@ -49,7 +49,8 @@ namespace proj {
             epoch_list_t       & getEpochs()       {return _epochs;}
             
             double calcLogCoalLikeGivenTheta(double theta);
-            double calcLogCoalLikeGivenLambda(double lambda);
+            double calcLogSpeciesTreeDensityGivenLambda(double lambda);
+            double speciesForestHeight() const;
             
             double calcLogLikelihoodForGene(unsigned gene);
             
@@ -73,6 +74,7 @@ namespace proj {
     
     inline Particle::Particle() {
         //cerr << "Particle constructor" << endl;
+        _gene_index = -2;   // -2 flags a particle as just-constructed
     }
 
     inline Particle::Particle(const Particle & other) {
@@ -189,7 +191,6 @@ namespace proj {
                 ++start_it;
                 
                 _species_forest.reconcileEpochsStartingAt(_epochs, start_it, species1, species2, new_species);
-                cout << endl;
             }
         }
     }
@@ -353,22 +354,19 @@ namespace proj {
         Forest::_theta = prev_theta;
         return log_coal_like;
    }
+       
+   inline double Particle::speciesForestHeight() const {
+        return _species_forest.getHeight();
+   }
    
-   inline double Particle::calcLogCoalLikeGivenLambda(double lambda) {
-        resetAllEpochs(_species_forest._epochs);
-
-        _species_forest.debugShowEpochs(_species_forest._epochs);
-        
+   inline double Particle::calcLogSpeciesTreeDensityGivenLambda(double lambda) {
         double prev_lambda = Forest::_lambda;
         Forest::_lambda = lambda;
         
-        double log_coal_like = 0.0;
-        for (unsigned g = 0; g < Forest::_ngenes; ++g) {
-            log_coal_like += _species_forest.calcLogCoalescentLikelihood(_species_forest._epochs, g);
-        }
+        double log_density = _species_forest.calcLogSpeciesTreeDensity(lambda);
         
         Forest::_lambda = prev_lambda;
-        return log_coal_like;
+        return log_density;
    }
    
    inline double Particle::calcLogLikelihoodForGene(unsigned gene) {

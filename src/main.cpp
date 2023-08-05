@@ -1,5 +1,6 @@
-#include <algorithm>
+//#define NDEBUG
 #include <cassert>
+#include <algorithm>
 #include <climits>
 #include <cmath>
 #include <ctime>
@@ -39,6 +40,7 @@ using namespace std;
 using boost::format;
 
 #include "conditionals.hpp"
+#include "stopwatch.hpp"
 #include "xproj.hpp"
 #include "lot.hpp"
 #include "genetic-code.hpp"
@@ -59,7 +61,7 @@ using boost::format;
 using namespace proj;
 
 Lot                                 rng;
-
+StopWatch                           stopwatch;
 PartialStore                        ps;
 
 

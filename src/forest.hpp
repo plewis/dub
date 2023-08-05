@@ -45,7 +45,7 @@ namespace proj {
             double  calcMaxT(epoch_list_t & epochs, double h0, set<Node::species_t> current_species);
             string  makeNewick(unsigned precision = 6, bool use_names = true, bool coalunits = false) const;
             void    buildFromNewick(const string newick);
-            void    debugShowEpochs(const epoch_list_t & epochs);
+            void    debugShowEpochs(const epoch_list_t & epochs) const;
             
             virtual void createTrivialForest(bool compute_partials) = 0;
             virtual bool isSpeciesForest() const = 0;
@@ -1101,7 +1101,7 @@ namespace proj {
         v.push_back(add2);
     }
     
-    inline void Forest::debugShowEpochs(const epoch_list_t & epochs) {
+    inline void Forest::debugShowEpochs(const epoch_list_t & epochs) const {
 #if defined(DEBUG_COAL_LIKE)
         if (!_debug_coal_like)
             return;

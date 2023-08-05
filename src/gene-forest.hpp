@@ -920,7 +920,7 @@ namespace proj {
         // Assumes _leaf_partials have been computed but that every node in the tree
         // has _partial equal to nullptr.
         assert(_data);
-        
+                
         if (_preorders.size() == 0) {
             refreshAllPreorders();
         }

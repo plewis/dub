@@ -34,10 +34,18 @@ namespace proj {
                     typedef set<unsigned>   species_t;
         
                     Node *              getParent()                 {return _parent;}
+                    const Node *        getParent() const           {return _parent;}
+
                     Node *              getLeftChild()              {return _left_child;}
+                    const Node *        getLeftChild() const        {return _left_child;}
+
                     Node *              getRightSib()               {return _right_sib;}
-                    int                 getNumber()                 {return _number;}
+                    const Node *        getRightSib() const         {return _right_sib;}
+
                     string              getName()                   {return _name;}
+                    const string        getName() const             {return _name;}
+
+                    int                 getNumber() const           {return _number;}
                     Split               getSplit()                  {return _split;}
         
                     bool                isSelected()                {return _flags & Flag::Selected;}
