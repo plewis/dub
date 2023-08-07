@@ -5,7 +5,7 @@ namespace proj {
     class StopWatch {
     
         public:
-            StopWatch() {}
+            StopWatch() : running(false) {}
             ~StopWatch() {}
 
             void   start();
