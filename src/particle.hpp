@@ -128,10 +128,14 @@ namespace proj {
         assert(Forest::_ngenes == newicks.size());
         _gene_forests.clear();
         _gene_forests.resize(Forest::_ngenes);
-        for (unsigned i = 0; i < Forest::_ngenes; i++) {
-            _gene_forests[i].setData(_data);
-            _gene_forests[i].setGeneIndex(i);
-            _gene_forests[i].buildFromNewick(newicks[i]);
+        for (unsigned g = 0; g < Forest::_ngenes; g++) {
+            _gene_forests[g].setData(_data);
+            _gene_forests[g].setGeneIndex(g);
+
+            // //temporary!
+            //cout << str(format("~~~> gene %d newick: \"%s\"\n") % g % newicks[g]);
+
+            _gene_forests[g].buildFromNewick(newicks[g]);
         }
     }
     

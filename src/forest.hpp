@@ -646,7 +646,7 @@ namespace proj {
             }   // loop over characters in newick string
 
             if (inside_unquoted_name)
-                throw XProj(str(format("Tree description ended before end of node name starting at position %d was found") % node_name_position));
+                throw XProj(str(format("Tree description ended before end of node name starting at position %d was found: \"%s\"") % node_name_position % newick));
             if (inside_edge_length && !(nd == root))
                 throw XProj(str(format("Tree description ended before end of edge length starting at position %d was found") % edge_length_position));
             if (inside_quoted_name)

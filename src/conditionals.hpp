@@ -3,3 +3,8 @@
 //#define DEBUGGING
 //#define DEBUG_COAL_LIKE
 //#define DEBUG_PARTIAL_STORE
+
+//#define USING_MPI
+#if defined(USING_MPI)
+#   include <mpi.h>
+#endif

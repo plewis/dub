@@ -2,6 +2,7 @@
 
 using boost::filesystem::current_path;
 using boost::algorithm::join;
+using boost::is_any_of;
 using boost::program_options::variables_map;
 using boost::program_options::options_description;
 using boost::program_options::value;
@@ -12,6 +13,12 @@ using boost::program_options::parse_config_file;
 using boost::program_options::reading_file;
 using boost::program_options::notify;
 
+#if defined(USING_MPI)
+extern int my_rank;
+extern int ntasks;
+#endif
+
+extern void output(string msg);
 extern proj::PartialStore ps;
 extern proj::StopWatch stopwatch;
 extern proj::Lot rng;
@@ -101,6 +108,12 @@ namespace proj {
             vector<vect_particle_t>     _gene_particles;
             vect_particle_t             _species_particles;
             Particle                    _template_particle;
+            
+#if defined(USING_MPI)
+            void mpiSetSchedule();
+            vector<unsigned>            _mpi_first_gene;
+            vector<unsigned>            _mpi_last_gene;
+#endif
 
             static string               _program_name;
             static unsigned             _major_version;
@@ -356,7 +369,7 @@ namespace proj {
         assert(Forest::_ngenes > 0);
         assert(gene < Forest::_ngenes);
         
-        cout << str(format("  Initializing %d particles for gene %d...") % _gene_nparticles % gene) << endl;
+        //cout << str(format("  Initializing %d particles for gene %d...") % _gene_nparticles % gene) << endl;
         //cout << "  Particles all have identical complete species tree but trivial gene forests\n";
 
         clearGeneParticles(gene);
@@ -566,7 +579,7 @@ namespace proj {
         // Grows forests for the given gene conditional on the species tree stored in each particle
         // Assumes gene forests are trivial and species forest has been digested into epochs
 
-        cout << "\nGrowing forests for gene " << gene << " (" << Forest::_gene_names[gene] << ")..." << endl;
+        //output(str(format("\nGrowing forests for gene %d (%s)...\n") % gene % Forest::_gene_names[gene]));
 
         // Ensure all of the particles for this gene have trivial gene forests and
         // a species tree built from _starting_species_newick
@@ -580,11 +593,10 @@ namespace proj {
         vector<unsigned> counts;
         for (unsigned step = 0; step < nsteps; step++) {
             if (_verbose)
-                cout << "  step " << (step + 1) << " of " << nsteps << ": ";
+                output(str(format("  step %d of %d: ") % (step + 1) % nsteps));
             
-            vector<double> logw(_gene_particles[gene].size(), 0.0);
-
             // Loop over particles, advancing gene forests one step
+            vector<double> logw(_gene_particles[gene].size(), 0.0);
             unsigned p = 0;
             for (auto & particle : _gene_particles[gene]) {
                 double log_weight = particle.advanceGeneForest(p, step);
@@ -595,27 +607,44 @@ namespace proj {
             // Filter particles
             double ESS = filterGeneParticles(gene, logw, counts, log_marg_like);
             if (_verbose)
-                cout << str(format("ESS = %.1f%%\n") % (100.9*ESS/_gene_nparticles));
+                output(str(format("ESS = %.1f%%\n") % (100.9*ESS/_gene_nparticles)));
 
         } // step loop
         
         // Choose one particle at random
         unsigned which = rng.randint(0, _gene_nparticles - 1);
         
+#if defined(USING_MPI)
+        // Send newick for selected gene tree to coordinator
+        GeneForest & selected = _gene_particles[gene][which].getGeneForest();
+        string newick = selected.makeNewick(/*precision*/9, /*use_names*/false, /*coalunits*/false);
+        
+        if (my_rank == 0) {
+            // Copy selected gene tree to _starting_gene_newicks
+            _starting_gene_newicks[gene] = newick;
+        }
+        else {
+            // Send the newick string to the coordinator
+            int msglen = 1 + newick.size();
+            newick.resize(msglen);      // Adds \0 character to the end
+            MPI_Send(&newick[0],        // void* data
+                msglen,                 // int count,
+                MPI_CHAR,               // MPI_Datatype datatype,
+                0,                      // int destination,
+                gene,                   // int tag,
+                MPI_COMM_WORLD);        // MPI_Comm communicator)
+        }
+#else
         // Copy selected gene tree to _starting_gene_newicks
         GeneForest & selected = _gene_particles[gene][which].getGeneForest();
         _starting_gene_newicks[gene] = selected.makeNewick(/*precision*/9, /*use_names*/false, /*coalunits*/false);
         
-        cout << str(format("  log(marg. like.) = %.5f\n") % log_marg_like);
-        
-        // Choose one particle at random and propagate it to all other particles
-        //propagateSampledParticle(/*growing_gene_forests*/true);
+        output(str(format("  log(marg. like.) = %.5f\n") % log_marg_like));
+#endif
     }
     
     inline Particle & Proj::growSpeciesTrees(unsigned iter) {
         // Grows species trees conditional on the gene trees stored in each particle
-
-        cout << "\nGrowing species tree..." << endl;
         
         // Ensure all of the particles for this gene have trivial gene forests and
         // a species tree built from _starting_species_newick
@@ -629,7 +658,7 @@ namespace proj {
         vector<unsigned> counts;
         for (unsigned step = 0; step < nsteps; step++) {
             if (_verbose)
-                cout << "  step " << (step + 1) << " of " << nsteps << ": ";
+                output(str(format("  step %d of %d: ") % (step + 1) % nsteps));
             vector<double> logw(_species_particles.size(), 0.0);
 
             // Loop over particles, advancing species forest one step in each
@@ -643,10 +672,10 @@ namespace proj {
             // Filter particles
             double ESS = filterSpeciesParticles(logw, counts, log_marg_like);
             if (_verbose)
-                cout << str(format("ESS = %.1f%%\n") % (100.9*ESS/_species_nparticles));
+                output(str(format("ESS = %.1f%%\n") % (100.9*ESS/_species_nparticles)));
         }
 
-        cout << str(format("  log(marg. like.) = %.5f\n") % log_marg_like);
+        output(str(format("  log(marg. like.) = %.5f\n") % log_marg_like));
         
         string fn = str(format("species-trees-after-iter-%d.tre") % iter);
         saveUniqueSpeciesTrees(fn, counts);
@@ -655,14 +684,14 @@ namespace proj {
         assert(maxit != counts.end());
         unsigned maxi = (unsigned)distance(counts.begin(), maxit);
         
-        cout << str(format("  Best particle had index %d with count %d\n") % maxi % (*maxit));
+        output(str(format("  Best particle had index %d with count %d\n") % maxi % (*maxit)));
 
         //fn = str(format("species-tree-chosen-iter-%d.tre") % iter);
         //saveSpeciesTreeUsingNames(fn, _species_particles[maxi]);
         
         string fnprefix = str(format("newicks-%d") % iter);
         double log_coal_like = _species_particles[maxi].debugSaveTreesAsJavascript(fnprefix);
-        cout << str(format("  log(coal. like.) after iter %d = %.9f\n") % iter % log_coal_like);
+        output(str(format("  log(coal. like.) after iter %d = %.9f\n") % iter % log_coal_like));
 
         // Choose one particle at random and save its tree to _starting_species_tree
         unsigned which = rng.randint(0, _species_nparticles - 1);
@@ -683,7 +712,7 @@ namespace proj {
         // https://en.wikipedia.org/wiki/Multiple-try_Metropolis
         // assuming a symmetric proposal (so that w(x,y) = pi(x)).
         
-        cout << "\nUpdating theta...\n";
+        output("\nUpdating theta...\n");
 
         // r is the rate of the theta exponential prior
         double prior_rate = 1.0/Forest::_theta_prior_mean;
@@ -746,10 +775,10 @@ namespace proj {
         }
         if (accept) {
             Forest::_theta = theta_star;
-            cout << str(format("  New theta: %.5f\n") % Forest::_theta);
+            output(str(format("  New theta: %.5f\n") % Forest::_theta));
         }
         else {
-            cout << str(format("  Theta unchanged: %.5f\n") % Forest::_theta);
+            output(str(format("  Theta unchanged: %.5f\n") % Forest::_theta));
         }
     }
     
@@ -762,7 +791,7 @@ namespace proj {
         // https://en.wikipedia.org/wiki/Multiple-try_Metropolis
         // assuming a symmetric proposal (so that w(x,y) = pi(x)).
         
-        cout << "\nUpdating lambda...\n";
+        output("\nUpdating lambda...\n");
 
         // r is the rate of the lambda exponential prior
         double prior_rate = 1.0/Forest::_lambda_prior_mean;
@@ -830,10 +859,10 @@ namespace proj {
         }
         if (accept) {
             Forest::_lambda = lambda_star;
-            cout << str(format("  New lambda: %.5f\n") % Forest::_lambda);
+            output(str(format("  New lambda: %.5f\n") % Forest::_lambda));
         }
         else {
-            cout << str(format("  Lambda unchanged: %.5f\n") % Forest::_lambda);
+            output(str(format("  Lambda unchanged: %.5f\n") % Forest::_lambda));
         }
     }
     
@@ -1183,9 +1212,9 @@ namespace proj {
         // This should be a setting
         bool edgelens_in_coalescent_units = false;
 
-        cout << "\nDrawing starting species tree from Yule prior:\n";
-        cout << str(format("  lambda = %.5f (per-lineage speciation rate)\n") % Forest::_lambda);
-        cout << str(format("  no. species = %d\n") % Forest::_nspecies);
+        output("\nDrawing starting species tree from Yule prior:\n");
+        output(str(format("  lambda = %.5f (per-lineage speciation rate)\n") % Forest::_lambda));
+        output(str(format("  no. species = %d\n") % Forest::_nspecies));
 
         // Create species tree
         SpeciesForest sf;
@@ -1197,7 +1226,7 @@ namespace proj {
         // Output tree file containing starting species tree
         string newick_with_names = sf.makeNewick(/*precision*/9, /*use names*/true, edgelens_in_coalescent_units);
         outputNexusTreefile("starting-species-tree.tre", {newick_with_names});
-        cout << "  Species tree saved in file \"starting-species-tree.tre\"\n";
+        output("  Species tree saved in file \"starting-species-tree.tre\"\n");
     }
     
     inline void Proj::simulateData() {
@@ -1316,10 +1345,50 @@ namespace proj {
         // Output gene trees and species trees for javascript viewer
         Particle::outputJavascriptTreefile("newicks.js", newick_species_tree_numeric, newick_gene_trees_numeric);
      }
+     
+#if defined(USING_MPI)
+    inline void Proj::mpiSetSchedule() {
+        // Determine which genes will be handled by this processor: e.g.
+        // 20 = number of genes
+        //  3 = number of processors
+        //  6 = 20 / 3
+        //  2 = 20 % 3
+        //  rank 0 gets 6, rank 1 gets 7, rank 2 gets 7
+        vector<unsigned> genes_per_task(ntasks, (unsigned)(Forest::_ngenes / ntasks));
+
+        unsigned gene_remainder = Forest::_ngenes % ntasks;
+
+        // Each rank > 0 gets an extra job if there is any remainder
+        for (unsigned rank = 1; rank < ntasks; ++rank) {
+            if (gene_remainder > 0) {
+                genes_per_task[rank] += 1;
+                --gene_remainder;
+            }
+        }
+
+        _mpi_first_gene.resize(ntasks);
+        _mpi_last_gene.resize(ntasks);
+        unsigned gene_cum = 0;
+        output("\nGene schedule:\n");
+        output(str(format("%12s %25s %25s\n") % "rank" % "first gene" % "last gene"));
+        for (unsigned rank = 0; rank < ntasks; ++rank) {
+            _mpi_first_gene[rank] = gene_cum;
+            _mpi_last_gene[rank]  = gene_cum + genes_per_task[rank];
+            gene_cum += genes_per_task[rank];
+            
+            output(str(format("%12d %25d %25d\n") % rank % (_mpi_first_gene[rank] + 1) % _mpi_last_gene[rank]));
+        }
+    }
+#endif
 
     inline void Proj::run() {
-        cout << "Starting..." << endl;
-        cout << "Current working directory: " << current_path() << endl;
+#if defined(USING_MPI)
+        output("Starting MPI parallel version...\n");
+        output(str(format("No. processors: %d\n") % ntasks));
+#else
+        output("Starting serial version...\n");
+#endif
+        output(str(format("Current working directory: %s\n") % current_path()));
         
         try {
             rng.setSeed(_rnseed);
@@ -1343,23 +1412,169 @@ namespace proj {
                 GeneForest::computeLeafPartials(_data);
                 
                 if (_start_mode == "random") {
+#if defined(USING_MPI)
+                    mpiSetSchedule();
+#endif
                     drawStartingSpeciesTree();
                     for (unsigned iter = 0; iter < _niter; ++iter) {
                         stopwatch.start();
-                        // //temporary!
-                        //double orig_lambda = Forest::_lambda;
-                        //Forest::_lambda *= 10.0;
-                        //cout << "Setting lambda to " << Forest::_lambda << " for first iteration only\n";
                         
-                        cout << str(format("\nIteration %d of %d...") % (iter+1) % _niter) << endl;
+                        output(str(format("\nIteration %d of %d...\n") % (iter+1) % _niter));
                         
                         // After each gene forest is filtered for the last time,
                         // one is chosen at random and its newick is saved to _starting_gene_newicks
                         _starting_gene_newicks.clear();
                         _starting_gene_newicks.resize(Forest::_ngenes);
-                        for (unsigned g = 0; g < Forest::_ngenes; ++g)
+#if defined(USING_MPI)
+                        output("\nGrowing gene trees...\n");
+                        for (unsigned g = _mpi_first_gene[my_rank]; g < _mpi_last_gene[my_rank]; ++g) {
                             growGeneTrees(iter, g);
+                        }
+                        
+                        if (my_rank == 0) {
+                            // Make a list of genes that we haven't heard from yet
+                            list<unsigned> outstanding;
+                            for (unsigned rank = 1; rank < ntasks; ++rank) {
+                                for (unsigned g = _mpi_first_gene[rank]; g < _mpi_last_gene[rank]; ++g) {
+                                    outstanding.push_back(g);
+                                }
+                            }
                             
+                            // Receive gene trees from genes being handled by other processors
+                            // until outstanding is empty
+                            while (!outstanding.empty()) {
+                                // Probe to get message status
+                                int message_length = 0;
+                                MPI_Status status;
+                                MPI_Probe(MPI_ANY_SOURCE,   // Source rank or MPI_ANY_SOURCE
+                                    MPI_ANY_TAG,            // Message tag
+                                    MPI_COMM_WORLD,         // Communicator
+                                    &status                 // Status object
+                                );
+                            
+                                // Get length of message
+                                MPI_Get_count(&status, MPI_CHAR, &message_length);
+
+                                // Get gene
+                                unsigned gene = (unsigned)status.MPI_TAG;
+
+                                // Get the message itself
+                                string newick;
+                                newick.resize(message_length);
+                                MPI_Recv(&newick[0],    // Initial address of receive buffer
+                                    message_length,     // Maximum number of elements to receive
+                                    MPI_CHAR,           // Datatype of each receive buffer entry
+                                    MPI_ANY_SOURCE,     // Rank of source
+                                    MPI_ANY_TAG,        // Message tag
+                                    MPI_COMM_WORLD,     // Communicator
+                                    MPI_STATUS_IGNORE   // Status object
+                                );
+                                
+                                // Store the newick and remove gene from outstanding
+                                newick.resize(message_length - 1);  // remove '\0' at end
+                                _starting_gene_newicks[gene] = newick;
+                                
+                                // //temporary!
+                                //output(str(format("coordinator received a newick string from gene %d\n") % gene));
+                                
+                                auto it = find(outstanding.begin(), outstanding.end(), gene);
+                                assert(it != outstanding.end());
+                                outstanding.erase(it);
+                            }
+                        }
+                                                
+                        string message;
+                        int message_length;
+                        if (my_rank == 0) {
+                            // Save the chosen gene trees to file
+                            saveStartingGeneTrees(str(format("gene-trees-chosen-iter-%d-numbers.tre") % iter));
+                                
+                            // Estimate the species tree distribution (conditional on gene trees)
+                            output("\nGrowing species tree...\n");
+                            Particle & chosen_particle = growSpeciesTrees(iter);
+                        
+                            // Save the chosen species tree to file
+                            saveStartingSpeciesTree(str(format("species-tree-chosen-iter-%d.tre") % iter));
+                        
+                            // Update theta
+                            updateTheta(chosen_particle, 100, 0.5);
+                        
+                            // Update lambda
+                            updateLambda(chosen_particle, 100, 0.5);
+                        
+                            // Report log-likelihood of current parameter values
+                            output("\nUsing current parameter values:\n");
+                            double log_coal_like = chosen_particle.calcLogCoalLikeGivenTheta(Forest::_theta);
+                            output(str(format("    log(coalescent likelihood) = %.5f\n") % log_coal_like));
+                            double total_log_like = 0.0;
+                            for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+                                double log_like = chosen_particle.calcLogLikelihoodForGene(g);
+                                total_log_like += log_like;
+                            }
+                            output(str(format("    log(likelihood) = %.5f\n") % total_log_like));
+                            
+                            // Broadcast gene trees, species tree, theta, and lambda all in one message
+                            // with values separated by | characters
+                            message += _starting_species_newick;
+                            message += "|";
+                            for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+                                message += _starting_gene_newicks[g];
+                                message += "|";
+                            }
+                            message += str(format("%.9f|") % Forest::_theta);
+                            message += str(format("%.9f") % Forest::_lambda);
+                            message_length = (int)message.size() + 1;
+                        }
+                        
+                        // Broadcast the length of the message to all processes (including coordinator process 0)
+                        MPI_Bcast(
+                            &message_length, // Initial address
+                            1,               // Number of elements
+                            MPI_INT,         // Datatype of each send buffer element
+                            0,               // Rank of broadcast root
+                            MPI_COMM_WORLD   // Communicator
+                        );
+                        
+                        //cout << str(format("Rank %d says message has length %d\n") % my_rank % message_length);
+            
+                        // Broadcast the message itself
+                        message.resize(message_length);
+                        MPI_Bcast(
+                            &message[0],     // Initial address
+                            message_length,  // Number of elements
+                            MPI_CHAR,        // Datatype of each send buffer element
+                            0,               // Rank of broadcast root
+                            MPI_COMM_WORLD   // Communicator
+                        );
+                        
+                        // Split message into component parts and save each part if not coordinator
+                        // (who already knows all this information)
+                        //cout << str(format("Rank %d received message\n") % my_rank);
+                        if (my_rank > 0) {
+                            //cout << str(format("Rank %d is splitting message...\n") % my_rank);
+                            message.resize(message_length - 1);
+                            vector<string> parts;
+                            split(parts, message, is_any_of("|"));
+                            assert(parts.size() == Forest::_ngenes + 3);
+                            _starting_species_newick = parts[0];
+                            assert(_starting_gene_newicks.size() == Forest::_ngenes);
+                            for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+                                _starting_gene_newicks[g] = parts[g+1];
+                            }
+                            Forest::_theta = stod(parts[Forest::_ngenes + 1]);
+                            Forest::_lambda = stod(parts[Forest::_ngenes + 2]);
+                            //cout << str(format("Rank %d says theta is %.5f and lambda is %.5f\n") % my_rank % Forest::_theta % Forest::_lambda);
+                        }
+                        
+                        //MPI_Barrier(MPI_COMM_WORLD);
+
+                        double secs = stopwatch.stop();
+                        output(str(format("\nTime used for iteration %d was %.5f seconds\n") % iter % secs));
+#else
+                        for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+                            growGeneTrees(iter, g);
+                        }
+                        
                         // Save the chosen gene trees to file
                         saveStartingGeneTrees(str(format("gene-trees-chosen-iter-%d-numbers.tre") % iter));
                         
@@ -1376,22 +1591,26 @@ namespace proj {
                         updateLambda(chosen_particle, 100, 0.5);
                         
                         // Report log-likelihood of current parameter values
-                        cout << "\nUsing current parameter values:\n";
+                        output("\nUsing current parameter values:\n");
                         double log_coal_like = chosen_particle.calcLogCoalLikeGivenTheta(Forest::_theta);
-                        cout << str(format("    log(coalescent likelihood) = %.5f\n") % log_coal_like);
+                        output(str(format("    log(coalescent likelihood) = %.5f\n") % log_coal_like));
                         double total_log_like = 0.0;
                         for (unsigned g = 0; g < Forest::_ngenes; ++g) {
                             double log_like = chosen_particle.calcLogLikelihoodForGene(g);
                             total_log_like += log_like;
-                            //cout << str(format("log(likelihood for %s) = %.9f\n") % Forest::_gene_names[g] % log_like);
                         }
-                        cout << str(format("    log(likelihood) = %.5f\n") % total_log_like);
+                        output(str(format("    log(likelihood) = %.5f\n") % total_log_like));
                         
-                        // //temporary!
-                        //Forest::_lambda = orig_lambda;
                         double secs = stopwatch.stop();
-                        cout << str(format("\nTime used for iteration %d was %.5f seconds\n") % iter % secs);
+                        output(str(format("\nTime used for iteration %d was %.5f seconds\n") % iter % secs));
+#endif
+                            
                     }
+
+#if defined(USING_MPI)
+                    // Ensure no one starts on next iteration until coordinator is ready
+                    MPI_Barrier(MPI_COMM_WORLD);
+#endif
                 }
                 else if (_start_mode == "species") {
                     readStartingSpeciesTree();
@@ -1497,7 +1716,7 @@ namespace proj {
             cerr << "Proj encountered a problem:\n  " << x.what() << endl;
         }
 
-        cout << "\nFinished!" << endl;
+        output("\nFinished!\n");
     }
     
 }

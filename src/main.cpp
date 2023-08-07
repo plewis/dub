@@ -60,10 +60,24 @@ using boost::format;
 
 using namespace proj;
 
+#if defined(USING_MPI)
+int my_rank = 0;
+int ntasks = 0;
+
+void output(string msg) {
+    if (my_rank == 0) {
+        cout << msg;
+    }
+}
+#else
+void output(string msg) {
+    cout << msg;
+}
+#endif
+
 Lot                                 rng;
 StopWatch                           stopwatch;
 PartialStore                        ps;
-
 
 unsigned                            Forest::_nstates            = 4;
 
@@ -128,10 +142,21 @@ GeneticCode::genetic_code_definitions_t GeneticCode::_definitions = {
 };
 
 int main(int argc, const char * argv[]) {
+#if defined(USING_MPI)
+	MPI_Init(NULL, NULL);
+	MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &ntasks);
+#endif
+
     Proj proj;
     try {
         proj.processCommandLineOptions(argc, argv);
+        
+        StopWatch sw;
+        sw.start();
         proj.run();
+        double total_seconds = sw.stop();
+        output(str(format("\nTotal time: %.5f seconds\n") % total_seconds));
     }
     catch(std::exception & x) {
         cerr << "Exception: " << x.what() << endl;
@@ -141,5 +166,8 @@ int main(int argc, const char * argv[]) {
         cerr << "Exception of unknown type!\n";
     }
     
+#if defined(USING_MPI)
+	MPI_Finalize();
+#endif
     return 0;
 }
