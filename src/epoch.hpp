@@ -1,5 +1,7 @@
 #pragma once
 
+extern void output(string msg);
+
 namespace proj {
 
     struct Epoch  {
@@ -130,12 +132,12 @@ namespace proj {
         double prev_height = -1.0;
         for (auto it = epochs.begin(); it != epochs.end(); it++) {
             if (it->_height < prev_height) {
-                cerr << str(format("epoch height (%.9f) not less than previous epoch's height (%.9f)\n") % it->_height % prev_height);
+                output(str(format("epoch height (%.9f) not less than previous epoch's height (%.9f)\n") % it->_height % prev_height));
                 return false;
             }
             bool ok = (bool)(it->_type & valid_types);
             if (!ok) {
-                cerr << str(format("epoch type (%d) not among valid types (%d)\n") % it->_type % valid_types);
+                output(str(format("epoch type (%d) not among valid types (%d)\n") % it->_type % valid_types));
                 return false;
             }
             prev_height = it->_height;

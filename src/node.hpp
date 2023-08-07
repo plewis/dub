@@ -121,12 +121,10 @@ namespace proj {
     
     
     inline Node::Node() {
-        //cout << "Creating Node object" << endl;
         clear();
     }
 
     inline Node::~Node() {
-        //cout << "Destroying Node object" << endl;
     }
 
     inline void Node::clear() { 

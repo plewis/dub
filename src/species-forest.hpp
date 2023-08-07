@@ -201,7 +201,6 @@ namespace proj {
             double u = rng.uniform();
             double r = Forest::_lambda*nlineages;
             double t = -log(1.0 - u)/r;
-            //cout << str(format("  t = %g (u = %g, nlineages = %d, r = %g)\n") % t % u % nlineages % r);
                 
             // Increment height of forest
             _forest_height += t;

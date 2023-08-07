@@ -357,16 +357,6 @@ namespace proj {
         double kappa = 4.0349882; // (614.0*4.6444 + 601.0*4.0624 + 819.0*3.558)/(614.0 + 601.0 + 819.0);
         //double kappa = 1.0;
         double betat = 0.5*edge_length/((pi[0] + pi[2])*(pi[1] + pi[3]) + kappa*(pi[0]*pi[2] + pi[1]*pi[3]));
-//        cerr << "edge_length = " << edge_length << "\n";
-//        cerr << "kappa       = " << kappa << "\n";
-//        cerr << "pi[0]       = " << pi[0] << "\n";
-//        cerr << "pi[1]       = " << pi[1] << "\n";
-//        cerr << "pi[2]       = " << pi[2] << "\n";
-//        cerr << "pi[3]       = " << pi[3] << "\n";
-//        cerr << "betat       = " << betat << "\n";
-//        cerr << (format("4.0*%g/3.0 = ") % edge_length) << (4.0*edge_length/3.0) << "\n";
-        
-        // betat(kappa PIj + 1 - PIj)
         
         if (is_transition) {
             double pi_j = pi[to];
@@ -450,30 +440,6 @@ namespace proj {
                     site_like += 0.25*child_partial;
                 }
                 
-                // //temporary!
-                //if (site_like == 0.0) {
-                //    cout << "site_like is zero for pattern " << pp << endl;
-                //    cout << "   nd->_name = " << nd->_name << endl;
-                //    cout << "   nd->_number = " << nd->_number << endl;
-                //    cout << "   count = " << counts[pp] << endl;
-                //    vector<double> & v = *(nd->_partial);
-                //    auto it = max_element(v.begin(), v.end());
-                //    if (it != v.end()) {
-                //        cout << "   maximum partial element = " << (*it) << endl;
-                //    }
-                //    cout << "   child_partial[0] = " << (*nd->_partial)[p*Forest::_nstates+0] << endl;
-                //    cout << "   child_partial[1] = " << (*nd->_partial)[p*Forest::_nstates+1] << endl;
-                //    cout << "   child_partial[2] = " << (*nd->_partial)[p*Forest::_nstates+2] << endl;
-                //    cout << "   child_partial[3] = " << (*nd->_partial)[p*Forest::_nstates+3] << endl;
-                //    cout << "   gene_name = " << gene_name << endl;
-                //    cout << "   npatterns = " << npatterns << endl;
-                //    cout << "   pattern: " << _data->getPatternAsString(pp) << endl;
-                //    //cout <<  "  original sites corresponding to this pattern: \n  ";
-                //    //vector<unsigned> & v = _data->_orig_site_lookup[pp];
-                //    //copy(v.begin(), v.end(), ostream_iterator<unsigned>(cout, " "));
-                //    cout << "\nNewick:" << endl;
-                //    cout << makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false) << endl;
-                //}
                 log_like += log(site_like)*counts[pp];
             }
             total_log_likelihood += log_like;

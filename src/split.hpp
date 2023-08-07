@@ -61,7 +61,6 @@ namespace proj {
         _nleaves = 0;
         _bits_per_unit = (CHAR_BIT)*sizeof(Split::split_unit_t);
         clear();
-        //cout << "Constructing a Split" << endl;
     }
 
     inline Split::Split(const Split & other) {
@@ -69,11 +68,9 @@ namespace proj {
         _nleaves = other._nleaves;
         _bits_per_unit = (CHAR_BIT)*sizeof(Split::split_unit_t);
         _bits = other._bits;
-        //cout << "Constructing a Split by copying an existing split" << endl;
     }
 
     inline Split::~Split() {
-        //cout << "Destroying a Split" << endl;
     }
 
     inline void Split::clear() {

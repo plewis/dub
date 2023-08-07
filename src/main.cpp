@@ -159,11 +159,11 @@ int main(int argc, const char * argv[]) {
         output(str(format("\nTotal time: %.5f seconds\n") % total_seconds));
     }
     catch(std::exception & x) {
-        cerr << "Exception: " << x.what() << endl;
-        cerr << "Aborted." << endl;
+        output(str(format("Exception: %s\n") % x.what()));
+        output("Aborted.\n");
     }
     catch(...) {
-        cerr << "Exception of unknown type!\n";
+        output("Exception of unknown type!\n");
     }
     
 #if defined(USING_MPI)

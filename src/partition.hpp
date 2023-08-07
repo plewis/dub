@@ -56,13 +56,11 @@ namespace proj {
     // member function bodies here
     
     inline Partition::Partition() : _infinity(numeric_limits<unsigned>::max()) {   
-        //cout << "Constructing a Partition" << endl;
         clear();
     }
 
     inline Partition::~Partition() {
-        //cout << "Destroying a Partition" << endl;
-    }   
+    }
 
     inline unsigned Partition::getNumSites() const {    
         return _num_sites;
@@ -231,8 +229,6 @@ namespace proj {
         _num_subsets = (unsigned)_subset_names.size();
         trim(subset_definition);
         addSubset(_num_subsets - 1, subset_definition);
-
-        //cout << str(format("Partition subset %s comprises sites %s and has type %s") % subset_name % subset_definition % datatype) << endl;
     }    
     
     inline void Partition::addSubset(unsigned subset_index, string subset_definition) {    

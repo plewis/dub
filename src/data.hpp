@@ -1,5 +1,7 @@
 #pragma once    
 
+extern void output(string msg);
+
 namespace proj {
 
     class Proj;
@@ -88,13 +90,11 @@ namespace proj {
     // Member function bodies go below here but above the right curly bracket that ends the namespace block
     
     inline Data::Data() {   
-        //cout << "Creating a Data object" << endl;
         clear();
     }
 
     inline Data::~Data() {
-        //cout << "Destroying a Data object" << endl;
-    }   
+    }
     
     inline void Data::setPartition(Partition::SharedPtr partition) {    
         _partition = partition;
@@ -125,10 +125,6 @@ namespace proj {
     }
 
     inline const Data::taxon_names_t & Data::getTaxonNames() const {
-//        cout << &_taxon_names;
-//        for (auto i: _taxon_names) {
-//            cout << i << endl;
-//        }
         return _taxon_names;
     }
 
@@ -587,7 +583,7 @@ namespace proj {
 
         // Compress _data_matrix so that it holds only unique patterns (counts stored in _pattern_counts)
         if (_data_matrix.empty()) {
-            cout << "No data were stored from the file \"" << filename << "\"" << endl;
+            output(str(format("No data were stored from the file \"%s\"\n") % filename));
             clear();
         }
         else {

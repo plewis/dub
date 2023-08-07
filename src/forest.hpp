@@ -383,8 +383,6 @@ namespace proj {
         // strings to the index of the taxon in Forest::_species_names (if
         // building a species tree) or Forest::_taxon_names (if building a
         // gene tree).
-
-        //cerr << "Forest::buildFromNewick:" << endl;
         
         // Remove all nodes and all pointers to nodes
         clear();
@@ -526,8 +524,6 @@ namespace proj {
                         extractEdgeLen(nd, edge_length_str);
                         ++num_edge_lengths;
                         previous = Prev_Tok_EdgeLen;
-
-                        //cerr << "    edgelen " << edge_length_str << endl;
                     }
                     else {
                         bool valid = (ch =='e' || ch == 'E' || ch =='.' || ch == '-' || ch == '+' || isdigit(ch));
@@ -586,8 +582,6 @@ namespace proj {
                         nd = nd->_right_sib;
                         previous = Prev_Tok_Comma;
 
-                        //cerr << "  node " << (_next_node_index-1) << " (rsib)" << endl;
-
                         break;
 
                     case '(':
@@ -603,8 +597,6 @@ namespace proj {
                         nd->_left_child->_parent = nd;
                         nd = nd->_left_child;
                         previous = Prev_Tok_LParen;
-
-                        //cerr << "  node " << (_next_node_index - 1) << " (lchild)" << endl;
 
                         break;
 
@@ -772,7 +764,7 @@ namespace proj {
     
     inline void Forest::debugShow(const format & f) {
 #if defined(DEBUGGING)
-        cout << str(f) << endl;
+        output(str(f));
 #endif
     }
     
@@ -929,7 +921,6 @@ namespace proj {
                 NxsTreesBlock * trees_block = nexus_reader.GetTreesBlock(taxa_block, j);
                 unsigned num_trees = trees_block->GetNumTrees();
                 if (skip < num_trees) {
-                    //cout << "Trees block contains " << ntrees << " tree descriptions.\n";
                     for (unsigned t = skip; t < num_trees; ++t) {
                         const NxsFullTreeDescription & d = trees_block->GetFullTreeDescription(t);
 
@@ -1000,7 +991,6 @@ namespace proj {
         // Add t to the edge length of all lineage root nodes
         for (auto nd : _lineages) {
             double elen = nd->getEdgeLength() + t;
-            //cout << nd->_name << ": elen = " << elen << endl;
             nd->setEdgeLength(elen);
         }
         
@@ -1106,7 +1096,7 @@ namespace proj {
         if (!_debug_coal_like)
             return;
             
-        cout << "\nEpochs:" << endl;
+        output("\nEpochs:\n");
         for (auto & epoch : epochs) {
             double h = epoch._height;
             if (epoch.isInitEpoch()) {
@@ -1114,18 +1104,18 @@ namespace proj {
                 for (auto it = epoch._lineage_counts.begin(); it != epoch._lineage_counts.end(); it++)
                     oss << it->second << " ";
                 oss.seekp(-1, oss.cur); // Remove the trailing ' '
-                cout << "  " << (epoch._valid ? " " : "x") << h << str(format(": init gene tree %d (lineage counts: %s)") % epoch._gene % oss.str()) << endl;
+                output(str(format("  %s%.9f: init gene tree %d (lineage counts: %s)\n") % (epoch._valid ? " " : "x") % h % epoch._gene % oss.str()));
             }
             else if (epoch.isCoalescentEpoch()) {
                 assert(epoch._species.size() > 0);
                 string species_set = Forest::speciesSetAsString(epoch._species);
-                cout << "  " << (epoch._valid ? " " : "x") << h << str(format(": coalescence in gene tree %d (species %s)") % epoch._gene % species_set) << endl;
+                output(str(format("  %s%.9f: coalescence in gene tree %d (species %s)\n") % (epoch._valid ? " " : "x") % h % epoch._gene % species_set));
             }
             else {
                 assert(epoch._left_species.size() > 0);
                 assert(epoch._right_species.size() > 0);
                 assert(epoch._anc_species.size() > 0);
-                cout << "  " << (epoch._valid ? " " : "x") << h << str(format(": speciation event (%s,%s -> %s)") %  epoch.leftSpeciesAsStr() % epoch.rightSpeciesAsStr() % epoch.ancSpeciesAsStr()) << endl;
+                output(str(format("  %s%.9f: speciation event (%s,%s -> %s)") % (epoch._valid ? " " : "x") % h % epoch.leftSpeciesAsStr() % epoch.rightSpeciesAsStr() % epoch.ancSpeciesAsStr()));
             }
          }
 #endif
@@ -1155,8 +1145,8 @@ namespace proj {
     
     inline void Forest::debugShowNodeInfo(string title) {
 #if defined(DEBUGGING)
-        cout << "\nNode info: " << title << "\n";
-        cout << str(format("%6s %12s %6s %10s %10s %6s %6s %6s %12s %12s\n") % "index" % "address" % "number" % "species" % "type" % "lchild" % "rsib" % "parent" % "height" % "brlen");
+        output(str(format("\nNode info: %s\n") % title));
+        output(str(format("%6s %12s %6s %10s %10s %6s %6s %6s %12s %12s\n") % "index" % "address" % "number" % "species" % "type" % "lchild" % "rsib" % "parent" % "height" % "brlen"));
         for (unsigned i = 0; i < _nodes.size(); ++i) {
             string memory_address = memoryAddressAsString((void *)&_nodes[i]);
             string type   = _nodes[i]._number == -1 ? "unused" : (_nodes[i]._left_child ? "internal" : "leaf");
@@ -1164,22 +1154,22 @@ namespace proj {
             string rsib   = _nodes[i]._right_sib ? to_string(_nodes[i]._right_sib->_number) : "null";
             string parent = _nodes[i]._parent ? to_string(_nodes[i]._parent->_number) : "null";
             string species_set = speciesSetAsString(_nodes[i]._species);
-            cout << str(format("%6d %12s %6d %10s %10s %6s %6s %6s %12.5f %12.5f\n") % i % memory_address % _nodes[i]._number % species_set % type % lchild % rsib % parent % _nodes[i]._height % _nodes[i]._edge_length);
+            output(str(format("%6d %12s %6d %10s %10s %6s %6s %6s %12.5f %12.5f\n") % i % memory_address % _nodes[i]._number % species_set % type % lchild % rsib % parent % _nodes[i]._height % _nodes[i]._edge_length));
         }
-        cout << endl;
+        output("\n");
 #endif
     }
 
     inline void Forest::debugShowNodePtrVector(Node::ptr_vect_t & v, string title) {
 #if defined(DEBUGGING)
-        cout << "\nNode::ptr_vect_t: " << title << "\n";
-        cout << str(format("%6s %12s %6s %10s\n") % "index" % "address" % "number" % "species");
+        output(str(format("\nNode::ptr_vect_t: %s\n") % title));
+        output(str(format("%6s %12s %6s %10s\n") % "index" % "address" % "number" % "species"));
         for (unsigned i = 0; i < v.size(); ++i) {
             string memory_address = memoryAddressAsString((void *)&_nodes[i]);
             string species_set = speciesSetAsString(v[i]->getSpecies());
-            cout << str(format("%6d %12s %6d %10s\n") % i % memory_address % v[i]->_number % species_set);
+            output(str(format("%6d %12s %6d %10s\n") % i % memory_address % v[i]->_number % species_set));
         }
-        cout << endl;
+        output("\n");
 #endif
     }
 
@@ -1190,8 +1180,8 @@ namespace proj {
         // all lineages into a single ancestral lineage once _forest_height is exceeded.
 #if defined(DEBUG_COAL_LIKE)
         if (_debug_coal_like) {
-            cout << str(format("\n*** Calculating log(coalescent likelihood) for gene %d\n") % gene);
-            cout << str(format("***   theta = %.5f\n") % Forest::_theta);
+            output(str(format("\n*** Calculating log(coalescent likelihood) for gene %d\n") % gene));
+            output(str(format("***   theta = %.5f\n") % Forest::_theta));
         }
 #endif
 
@@ -1218,9 +1208,9 @@ namespace proj {
                 _counts_workspace = e._lineage_counts;
 #if defined(DEBUG_COAL_LIKE)
                 if (_debug_coal_like) {
-                    cout << str(format("***   Init epoch for gene %d:\n") % e._gene);
-                    cout << "***     _counts_workspace:\n";
-                    cout << Forest::lineageCountsMapToString(_counts_workspace);
+                    output(str(format("***   Init epoch for gene %d:\n") % e._gene));
+                    output("***     _counts_workspace:\n");
+                    output(Forest::lineageCountsMapToString(_counts_workspace));
                 }
 #endif
                 continue;
@@ -1242,9 +1232,9 @@ namespace proj {
                         _counts_workspace.clear();
 #if defined(DEBUG_COAL_LIKE)
                         if (_debug_coal_like) {
-                            cout << str(format("***   Dumping all %d remaining lineages into a single ancestal species because\n") % ncommonpool);
-                            cout << str(format("***      we are building a species tree and the epoch height (%.9f)\n") % e._height);
-                            cout << str(format("***      exceeds the forest height (%.9f)\n") % _forest_height);
+                            output(str(format("***   Dumping all %d remaining lineages into a single ancestal species because\n") % ncommonpool));
+                            output(str(format("***      we are building a species tree and the epoch height (%.9f)\n") % e._height));
+                            output(str(format("***      exceeds the forest height (%.9f)\n") % _forest_height));
                         }
 #endif
                     }
@@ -1255,8 +1245,8 @@ namespace proj {
                     // height of the gene tree.
 #if defined(DEBUG_COAL_LIKE)
                     if (_debug_coal_like) {
-                        cout << str(format("***   Stopping because we are building a gene tree and the epoch height (%.9f)\n") % e._height);
-                        cout << str(format("***      exceeds forest height (%.9f)\n") % _forest_height);
+                        output(str(format("***   Stopping because we are building a gene tree and the epoch height (%.9f)\n") % e._height));
+                        output(str(format("***      exceeds forest height (%.9f)\n") % _forest_height));
                     }
 #endif
                     break;
@@ -1270,7 +1260,7 @@ namespace proj {
                 
 #if defined(DEBUG_COAL_LIKE)
             if (_debug_coal_like) {
-                cout << str(format("***\n***   t = %.20f = %.20f - %.20f\n") % t % e._height % prev_height);
+                output(str(format("***\n***   t = %.20f = %.20f - %.20f\n") % t % e._height % prev_height));
             }
 #endif
             if (e.isCoalescentEpoch()) {
@@ -1287,7 +1277,7 @@ namespace proj {
 #if defined(DEBUG_COAL_LIKE)
                 vector<string> lnLparts;
                 if (_debug_coal_like) {
-                    cout << str(format("***   Coalescent event in gene %d, species %s, at height %.9f\n") % e._gene % e.speciesSetAsStr() % e._height);
+                    output(str(format("***   Coalescent event in gene %d, species %s, at height %.9f\n") % e._gene % e.speciesSetAsStr() % e._height));
                 }
 #endif
                 
@@ -1302,7 +1292,7 @@ namespace proj {
 #if defined(DEBUG_COAL_LIKE)
                     if (_debug_coal_like) {
                         lnLparts.push_back(str(format("%.9f") % log_prob_no_coal));
-                        cout << str(format("***     %.9f log prob no coal in gene %d, common pool (%d lineages)\n") % log_prob_no_coal % gene % ncommonpool);
+                        output(str(format("***     %.9f log prob no coal in gene %d, common pool (%d lineages)\n") % log_prob_no_coal % gene % ncommonpool));
                     }
 #endif
                 }
@@ -1318,7 +1308,7 @@ namespace proj {
 #if defined(DEBUG_COAL_LIKE)
                         if (_debug_coal_like) {
                             lnLparts.push_back(str(format("%.9f") % log_prob_no_coal));
-                            cout << str(format("***     %.9f log prob no coal in gene %d, spp %s (%d lineages)\n") % log_prob_no_coal % gene % speciesSetAsString(it->first) % n);
+                            output(str(format("***     %.9f log prob no coal in gene %d, spp %s (%d lineages)\n") % log_prob_no_coal % gene % speciesSetAsString(it->first) % n));
                         }
 #endif
                     }
@@ -1334,9 +1324,9 @@ namespace proj {
                 if (_debug_coal_like) {
                     lnLparts.push_back(str(format("%.9f") % log_prob_coal));
                     if (common_pool)
-                        cout << str(format("***     %.9f log prob coal gene %d, common pool (%d lineages)\n") % log_prob_coal % gene % n);
+                        output(str(format("***     %.9f log prob coal gene %d, common pool (%d lineages)\n") % log_prob_coal % gene % n));
                     else
-                        cout << str(format("***     %.9f log prob coal gene %d, spp %s (%d lineages)\n") % log_prob_coal % gene % speciesSetAsString(e._species) % n);
+                        output(str(format("***     %.9f log prob coal gene %d, spp %s (%d lineages)\n") % log_prob_coal % gene % speciesSetAsString(e._species) % n));
                 }
 #endif
                 
@@ -1347,9 +1337,9 @@ namespace proj {
                 if (_debug_coal_like) {
                     lnLparts.push_back(str(format("%.9f") % log_prob_join));
                     if (common_pool)
-                        cout << str(format("***     %.9f log prob join gene %d, common pool (%d lineages)\n") % log_prob_join % gene % n);
+                        output(str(format("***     %.9f log prob join gene %d, common pool (%d lineages)\n") % log_prob_join % gene % n));
                     else
-                        cout << str(format("***     %.9f log prob join gene %d, spp %s (%d lineages)\n") % log_prob_join % gene % speciesSetAsString(e._species) % n);
+                        output(str(format("***     %.9f log prob join gene %d, spp %s (%d lineages)\n") % log_prob_join % gene % speciesSetAsString(e._species) % n));
                 }
 #endif
 
@@ -1358,7 +1348,7 @@ namespace proj {
                     --ncommonpool;
 #if defined(DEBUG_COAL_LIKE)
                     if (_debug_coal_like) {
-                        cout << str(format("***     ncommonpool updated to: %d\n") % ncommonpool);
+                        output(str(format("***     ncommonpool updated to: %d\n") % ncommonpool));
                     }
 #endif
                 }
@@ -1366,16 +1356,16 @@ namespace proj {
                     _counts_workspace[e._species] -= 1;
 #if defined(DEBUG_COAL_LIKE)
                     if (_debug_coal_like) {
-                        cout << "***     _counts_workspace updated to:\n";
-                        cout << Forest::lineageCountsMapToString(_counts_workspace);
+                        output("***     _counts_workspace updated to:\n");
+                        output(Forest::lineageCountsMapToString(_counts_workspace));
                     }
 #endif
                 }
                 
 #if defined(DEBUG_COAL_LIKE)
                 if (_debug_coal_like) {
-                    cout << str(format("***     %.9f lnL this epoch (=(%s))\n") % lnL % join(lnLparts, ")+("));
-                    cout << str(format("***     %.9f log_coal_like\n") % (log_coal_like + lnL));
+                    output(str(format("***     %.9f lnL this epoch (=(%s))\n") % lnL % join(lnLparts, ")+(")));
+                    output(str(format("***     %.9f log_coal_like\n") % (log_coal_like + lnL)));
                 }
 #endif
                 log_coal_like += lnL;
@@ -1387,10 +1377,10 @@ namespace proj {
                 
 #if defined(DEBUG_COAL_LIKE)
                 if (_debug_coal_like) {
-                    cout << str(format("***   Speciation event at height %.9f\n") % e._height);
-                    cout << str(format("***      %s is the left species\n") % e.leftSpeciesAsStr());
-                    cout << str(format("***      %s is the right species\n") % e.rightSpeciesAsStr());
-                    cout << str(format("***      %s is the ancestral species\n") % e.ancSpeciesAsStr());
+                    output(str(format("***   Speciation event at height %.9f\n") % e._height));
+                    output(str(format("***      %s is the left species\n") % e.leftSpeciesAsStr()));
+                    output(str(format("***      %s is the right species\n") % e.rightSpeciesAsStr()));
+                    output(str(format("***      %s is the ancestral species\n") % e.ancSpeciesAsStr()));
                 }
 #endif
                 // Calculate probability of no coalescence over time t
@@ -1404,7 +1394,7 @@ namespace proj {
                     }
 #if defined(DEBUG_COAL_LIKE)
                     if (_debug_coal_like) {
-                        cout << str(format("***     %.9f log prob no coal gene %d, spp %s (%d lineages)\n") % log_prob_no_coal % gene % speciesSetAsString(it->first) % n);
+                        output(str(format("***     %.9f log prob no coal gene %d, spp %s (%d lineages)\n") % log_prob_no_coal % gene % speciesSetAsString(it->first) % n));
                     }
 #endif
                 }
@@ -1416,10 +1406,10 @@ namespace proj {
                 _counts_workspace.erase(e._right_species);
 #if defined(DEBUG_COAL_LIKE)
                 if (_debug_coal_like) {
-                    cout << "***     _counts_workspace updated to:\n";
-                    cout << Forest::lineageCountsMapToString(_counts_workspace);
-                    cout << str(format("***   %.9f lnL this epoch\n") % lnL);
-                    cout << str(format("***   %.9f log_coal_like\n") % (log_coal_like + lnL));
+                    output("***     _counts_workspace updated to:\n");
+                    output(Forest::lineageCountsMapToString(_counts_workspace));
+                    output(str(format("***   %.9f lnL this epoch\n") % lnL));
+                    output(str(format("***   %.9f log_coal_like\n") % (log_coal_like + lnL)));
                 }
 #endif
                 log_coal_like += lnL;
@@ -1428,12 +1418,6 @@ namespace proj {
             prev_height = e._height;
         }
                         
-        if (log_coal_like != log_coal_like) {
-            cerr << "debug stop" << endl;
-        }
-        if (log_coal_like == Forest::_negative_infinity) {
-            cerr << "debug stop" << endl;
-        }
         return log_coal_like;
     }
     

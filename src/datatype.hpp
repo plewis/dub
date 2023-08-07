@@ -38,12 +38,10 @@ namespace proj {
     // member function bodies go here
     
     inline DataType::DataType() : _datatype(0), _num_states(0) {    
-        //cout << "Creating a DataType object" << endl;
         setNucleotide();
     }
     
     inline DataType::~DataType() {
-        //cout << "Destroying a DataType object" << endl;
     }    
     
     inline void DataType::setNucleotide() {    

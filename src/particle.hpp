@@ -73,17 +73,14 @@ namespace proj {
     typedef vector<Particle> vect_particle_t;
     
     inline Particle::Particle() {
-        //cerr << "Particle constructor" << endl;
         _gene_index = -2;   // -2 flags a particle as just-constructed
     }
 
     inline Particle::Particle(const Particle & other) {
-        //cerr << "Particle copy constructor" << endl;
         copyFrom(other);
     }
 
     inline Particle::~Particle() {
-        //cerr << "Particle destructor" << endl;
         clear();
     }
 
@@ -131,9 +128,6 @@ namespace proj {
         for (unsigned g = 0; g < Forest::_ngenes; g++) {
             _gene_forests[g].setData(_data);
             _gene_forests[g].setGeneIndex(g);
-
-            // //temporary!
-            //cout << str(format("~~~> gene %d newick: \"%s\"\n") % g % newicks[g]);
 
             _gene_forests[g].buildFromNewick(newicks[g]);
         }
@@ -263,7 +257,6 @@ namespace proj {
     }
 
     inline void Particle::copyFrom(const Particle & other) {
-        //cerr << "in Particle::copyFrom" << endl;
         clear();
 
         // Performs a deep copy of other to this particle

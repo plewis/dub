@@ -91,6 +91,7 @@ namespace proj {
             
             bool                       _use_gpu;
             bool                       _ambig_missing;
+            bool                       _copious;
             bool                       _verbose;
             unsigned                   _nsimspecies;
             vector<unsigned>           _nsimtaxaperspecies;
@@ -131,6 +132,7 @@ namespace proj {
         _use_gpu                = true;
         _ambig_missing          = true;
         _sort_forests           = false;
+        _copious                = false;
         _verbose                = false;
         _visualization_cutoff   = 0.99;
 
@@ -171,7 +173,8 @@ namespace proj {
         ("subset",  value(&partition_subsets), "a string defining a partition subset, e.g. 'first:1-1234\3' or 'default[codon:standard]:1-3702'")
         ("gpu",           value(&_use_gpu)->default_value(true), "use GPU if available")
         ("ambigmissing",  value(&_ambig_missing)->default_value(true), "treat all ambiguities as missing data")
-        ("verbose",  value(&_verbose)->default_value(false), "if true, saveAllForests called after each generation")
+        ("copious",  value(&_copious)->default_value(false), "if true, gene and species trees are saved after each iteration")
+        ("verbose",  value(&_verbose)->default_value(false), "if true, more output is generated")
         ("nspecies",  value(&_nsimspecies)->default_value(1), "number of species (only used if simulate specified)")
         ("ntaxaperspecies",  value(&_nsimtaxaperspecies), "number of taxa sampled per species (only used if simulate specified); should be _nimspecies of these entries, one for each species simulated")
         ("ngeneparticles",  value(&_gene_nparticles)->default_value(100), "number of gene particles in a population")
@@ -194,19 +197,19 @@ namespace proj {
             store(parsed, vm);
         }
         catch(reading_file & x) {
-            cout << "Note: configuration file (proj.conf) not found" << endl;
+            output("Note: configuration file (proj.conf) not found\n");
         }
         notify(vm);
 
         // If user specified --help on command line, output usage summary and quit
         if (vm.count("help") > 0) {
-            cout << desc << "\n";
+            output(str(format("%s\n") % desc));
             exit(1);
         }
 
         // If user specified --version on command line, output version and quit
         if (vm.count("version") > 0) {
-            cout << str(format("This is %s version %d.%d") % _program_name % _major_version % _minor_version) << endl;
+            output(str(format("This is %s version %d.%d\n") % _program_name % _major_version % _minor_version));
             exit(1);
         }
         
@@ -243,7 +246,7 @@ namespace proj {
     }
     
     inline void Proj::readData() {
-        cout << "\nReading and storing the data in the file " << _data_file_name << endl;
+        output(str(format("\nReading and storing the data in the file %s\n") % _data_file_name));
         _data = Data::SharedPtr(new Data());
         _data->setPartition(_partition);
         _data->getDataFromFile(_data_file_name);
@@ -252,8 +255,8 @@ namespace proj {
 
         // Report information about data partition subsets
         unsigned nsubsets = _data->getNumSubsets();
-        cout << "\nNumber of taxa: " << _data->getNumTaxa() << endl;
-        cout << "Number of partition subsets: " << nsubsets << endl;
+        output(str(format("\nNumber of taxa: %d\n") % _data->getNumTaxa()));
+        output(str(format("Number of partition subsets: %d") % nsubsets));
         
         // Inform PartialStore of number of genes so that it can allocate
         // its _nelements and _storage vectors
@@ -265,27 +268,27 @@ namespace proj {
             
             DataType dt = _partition->getDataTypeForSubset(subset);
             Forest::_gene_names.push_back(_data->getSubsetName(subset));
-            cout << "  Subset " << (subset+1) << " (" << _data->getSubsetName(subset) << ")" << endl;
-            cout << "    data type: " << dt.getDataTypeAsString() << endl;
-            cout << "    sites:     " << _data->calcSeqLenInSubset(subset) << endl;
-            cout << "    patterns:  " << _data->getNumPatternsInSubset(subset) << endl;
+            output(str(format("  Subset %d (%s)\n") % (subset+1) % _data->getSubsetName(subset)));
+            output(str(format("    data type: %s\n") % dt.getDataTypeAsString()));
+            output(str(format("    sites:     %d\n") % _data->calcSeqLenInSubset(subset)));
+            output(str(format("    patterns:  %d\n") % _data->getNumPatternsInSubset(subset)));
             }
     }
     
     inline void Proj::debugShowStringVector(string title, const vector<string> & svect) const {
 #if defined(DEBUGGING)
-        cout << "\n" << title << ":" << endl;
+        output(str(format("\n%s\n") % title));
         for (auto s : svect) {
-            cout << "  " << s << endl;
+            output(str(format("  %s\n") % s));
          }
 #endif
     }
     
     inline void Proj::debugShowStringUnsignedMap(string title, const map<string, unsigned> & sumap) const {
 #if defined(DEBUGGING)
-        cout << "\n" << title << ":" << endl;
+        output(str(format("\n%s:\n") % title));
         for (auto su : sumap) {
-            cout << "  " << su.first << ": " << su.second << endl;
+            output(str(format("  %s: %d\n") % su.first % su.second));
          }
 #endif
     }
@@ -297,12 +300,12 @@ namespace proj {
         Forest::_species_names.clear();
         Forest::_taxon_to_species.clear();
         
-        cout << "\nMapping taxa to species" << endl;
+        output("\nMapping taxa to species\n");
         const Data::taxon_names_t & tnames = _data->getTaxonNames();
         unsigned ntax = (unsigned)tnames.size();
         for (auto & tname : tnames) {
             string species_name = Node::taxonNameToSpeciesName(tname);
-            cout << str(format("  %s --> %s\n") % tname % species_name);
+            output(str(format("  %s --> %s\n") % tname % species_name));
             unsigned species_index = ntax;
             if (species_name_to_index.find(species_name) == species_name_to_index.end()) {
                 // species_name not found
@@ -319,7 +322,7 @@ namespace proj {
     }
     
     inline void Proj::readStartingSpeciesTree() {
-        cout << "\nReading and storing the species tree in the file " << _species_tree_file_name << endl;
+        output(str(format("\nReading and storing the species tree in the file %s\n") % _species_tree_file_name));
         vector<string> tree_names;
         vector<string> newicks;
         // _nexus_taxon_map[k] provides 0-based index (into _species_names vector) of
@@ -334,7 +337,7 @@ namespace proj {
     }
     
     inline void Proj::readStartingGeneTrees() {
-        cout << "\nReading and storing the gene trees in the file " << _gene_tree_file_name << endl;
+        output(str(format("\nReading and storing the gene trees in the file %s\n") % _gene_tree_file_name));
         vector<string> tree_names;
         // _nexus_taxon_map[k] provides 0-based index (into _taxon_names vector) of
         // the taxon having 1-based index k in the tree description
@@ -346,22 +349,22 @@ namespace proj {
                                 _starting_gene_newicks);    // container for tree descriptions
     
         unsigned ntrees = (unsigned)_starting_gene_newicks.size();
-        cout << "  no. trees: " << ntrees << endl;
+        output(str(format("  no. trees: %d\n") % ntrees));
         for (unsigned i = 0; i < ntrees; i++) {
             string tree_name = tree_names[i];
             string gene_name = Forest::_gene_names[i];
             if (gene_name != tree_name) {
                 throw XProj(format("Expecting name of %dth gene tree to be \"%s\" but it was instead \"%s\"") % i % gene_name % tree_name);
             }
-            cout << "  tree " << (i+1) << " has name " << tree_name << endl;
+            output(str(format("  tree %d has name %s\n") % (i+1) % tree_name));
         }
     }
     
     inline void Proj::showSettings() const {
-        cout << "Speciation rate (lambda): " << Forest::_lambda << endl;
-        cout << "Coalescent parameter (theta): " << Forest::_theta << endl;
-        cout << "Number of gene particles: " << _gene_nparticles << endl;
-        cout << "Number of species particles: " << _species_nparticles << endl;
+        output(str(format("Speciation rate (lambda): %.9f\n") % Forest::_lambda));
+        output(str(format("Coalescent parameter (theta): %.9f\n") % Forest::_theta));
+        output(str(format("Number of gene particles: %d") % _gene_nparticles));
+        output(str(format("Number of species particles: %d") % _species_nparticles));
     }
         
     inline void Proj::initializeGeneParticles(unsigned gene) {
@@ -369,9 +372,6 @@ namespace proj {
         assert(Forest::_ngenes > 0);
         assert(gene < Forest::_ngenes);
         
-        //cout << str(format("  Initializing %d particles for gene %d...") % _gene_nparticles % gene) << endl;
-        //cout << "  Particles all have identical complete species tree but trivial gene forests\n";
-
         clearGeneParticles(gene);
         _gene_particles.resize(Forest::_ngenes);
         _gene_particles[gene].resize(_gene_nparticles);
@@ -396,8 +396,7 @@ namespace proj {
     inline void Proj::initializeSpeciesParticles() {
         assert(_data);
         assert(Forest::_ngenes > 0);
-        cout << str(format("  Initializing %d species particles...") % _species_nparticles) << endl;
-        //cout << "  Particles all have identical complete gene trees but trivial species forests\n";
+        output(str(format("  Initializing %d species particles...\n") % _species_nparticles));
 
         clearSpeciesParticles();
         _species_particles.resize(_species_nparticles);
@@ -644,6 +643,8 @@ namespace proj {
     }
     
     inline Particle & Proj::growSpeciesTrees(unsigned iter) {
+        bool last_iter = (iter == _niter - 1);
+        
         // Grows species trees conditional on the gene trees stored in each particle
         
         // Ensure all of the particles for this gene have trivial gene forests and
@@ -677,29 +678,25 @@ namespace proj {
 
         output(str(format("  log(marg. like.) = %.5f\n") % log_marg_like));
         
-        string fn = str(format("species-trees-after-iter-%d.tre") % iter);
-        saveUniqueSpeciesTrees(fn, counts);
-        
-        auto maxit = max_element(counts.begin(), counts.end());
-        assert(maxit != counts.end());
-        unsigned maxi = (unsigned)distance(counts.begin(), maxit);
-        
-        output(str(format("  Best particle had index %d with count %d\n") % maxi % (*maxit)));
-
-        //fn = str(format("species-tree-chosen-iter-%d.tre") % iter);
-        //saveSpeciesTreeUsingNames(fn, _species_particles[maxi]);
-        
-        string fnprefix = str(format("newicks-%d") % iter);
-        double log_coal_like = _species_particles[maxi].debugSaveTreesAsJavascript(fnprefix);
-        output(str(format("  log(coal. like.) after iter %d = %.9f\n") % iter % log_coal_like));
+        if (_copious || last_iter) {
+            string fn = str(format("species-trees-after-iter-%d.tre") % iter);
+            saveUniqueSpeciesTrees(fn, counts);
+            
+            auto maxit = max_element(counts.begin(), counts.end());
+            assert(maxit != counts.end());
+            unsigned maxi = (unsigned)distance(counts.begin(), maxit);
+            output(str(format("  Best particle had index %d with count %d\n") % maxi % (*maxit)));
+            
+            string fnprefix = str(format("newicks-%d") % iter);
+            double log_coal_like = _species_particles[maxi].debugSaveTreesAsJavascript(fnprefix);
+            output(str(format("  log(coal. like.) after iter %d = %.9f\n") % iter % log_coal_like));
+        }
 
         // Choose one particle at random and save its tree to _starting_species_tree
         unsigned which = rng.randint(0, _species_nparticles - 1);
         SpeciesForest & sf = _species_particles[which].getSpeciesForest();
         _starting_species_newick = sf.makeNewick(/*precision*/9, /*use_names*/false, /*coalunts*/false);
                 
-        // Choose one particle at random and propagate it to all other particles
-        //propagateSampledParticle(/*growing_gene_forests*/false);
         return _species_particles[which];
     }
     
@@ -1233,10 +1230,10 @@ namespace proj {
         // This should be a setting
         bool edgelens_in_coalescent_units = false;
         
-        cout << "Simulating sequence data under multispecies coalescent model:\n";
-        cout << str(format("  theta  = %.5f\n") % Forest::_theta);
-        cout << str(format("  lambda = %.5f\n") % Forest::_lambda);
-        cout << str(format("  no. species = %d\n") % _nsimspecies);
+        output("Simulating sequence data under multispecies coalescent model:\n");
+        output(str(format("  theta  = %.5f\n") % Forest::_theta));
+        output(str(format("  lambda = %.5f\n") % Forest::_lambda));
+        output(str(format("  no. species = %d\n") % _nsimspecies));
         
         // Interrogate _partition to determine number of genes and number of sites in each gene
         Forest::_ngenes = _partition->getNumSubsets();
@@ -1268,19 +1265,19 @@ namespace proj {
         }
 
         // Report species and taxon names created
-        cout << "  Species names:\n";
+        output("  Species names:\n");
         for (unsigned i = 0; i < Forest::_nspecies; ++i) {
-            cout << "    " << Forest::_species_names[i] << "\n";
+            output(str(format("    %s\n") % Forest::_species_names[i]));
         }
         cout << "  Taxon names:\n";
         for (unsigned i = 0; i < Forest::_ntaxa; ++i) {
             string taxon_name = Forest::_taxon_names[i];
-            cout << "    " << taxon_name << "\n";
+            output(str(format("    %s\n") % taxon_name));
         }
         
-        cout << "Simulating species tree from Yule prior:\n";
-        cout << str(format("  lambda = %.5f (per-lineage speciation rate)\n") % Forest::_lambda);
-        cout << str(format("  no. species = %d\n") % Forest::_nspecies);
+        output("Simulating species tree from Yule prior:\n");
+        output(str(format("  lambda = %.5f (per-lineage speciation rate)\n") % Forest::_lambda));
+        output(str(format("  no. species = %d\n") % Forest::_nspecies));
 
         // Create species tree
         SpeciesForest sf;
@@ -1291,7 +1288,7 @@ namespace proj {
 
         // Output tree file containing true species tree
         outputNexusTreefile("true-species-tree.tre", {newick_species_tree_alpha});
-        cout << "  True species tree saved in file \"true-species-tree.tre\"\n";
+        output("  True species tree saved in file \"true-species-tree.tre\"\n");
         
         // Create data object
         assert(!_data);
@@ -1325,7 +1322,7 @@ namespace proj {
          
         // Output tree file containing true gene trees
         outputGeneTreesToFile("true-gene-trees.tre", newick_gene_trees_alpha);
-        cout << "  True gene trees saved in file \"true-gene-trees.tre\"\n";
+        output("  True gene trees saved in file \"true-gene-trees.tre\"\n");
         
         // Output a PAUP* command file for estimating the species tree using
         // svd quartets and qage
@@ -1340,7 +1337,7 @@ namespace proj {
         paupf << "  quit;\n";
         paupf << "end;\n";
         paupf.close();
-        cout << "  PAUP* commands saved in file\"svd-qage.nex\"\n";
+        output("  PAUP* commands saved in file\"svd-qage.nex\"\n");
 
         // Output gene trees and species trees for javascript viewer
         Particle::outputJavascriptTreefile("newicks.js", newick_species_tree_numeric, newick_gene_trees_numeric);
@@ -1417,6 +1414,7 @@ namespace proj {
 #endif
                     drawStartingSpeciesTree();
                     for (unsigned iter = 0; iter < _niter; ++iter) {
+                        bool last_iter = (iter == _niter - 1);
                         stopwatch.start();
                         
                         output(str(format("\nIteration %d of %d...\n") % (iter+1) % _niter));
@@ -1473,10 +1471,7 @@ namespace proj {
                                 // Store the newick and remove gene from outstanding
                                 newick.resize(message_length - 1);  // remove '\0' at end
                                 _starting_gene_newicks[gene] = newick;
-                                
-                                // //temporary!
-                                //output(str(format("coordinator received a newick string from gene %d\n") % gene));
-                                
+                                                                
                                 auto it = find(outstanding.begin(), outstanding.end(), gene);
                                 assert(it != outstanding.end());
                                 outstanding.erase(it);
@@ -1486,32 +1481,38 @@ namespace proj {
                         string message;
                         int message_length;
                         if (my_rank == 0) {
-                            // Save the chosen gene trees to file
-                            saveStartingGeneTrees(str(format("gene-trees-chosen-iter-%d-numbers.tre") % iter));
+                            if (_copious || last_iter) {
+                                // Save the chosen gene trees to file
+                                saveStartingGeneTrees(str(format("gene-trees-chosen-iter-%d-numbers.tre") % iter));
+                            }
                                 
                             // Estimate the species tree distribution (conditional on gene trees)
                             output("\nGrowing species tree...\n");
                             Particle & chosen_particle = growSpeciesTrees(iter);
                         
-                            // Save the chosen species tree to file
-                            saveStartingSpeciesTree(str(format("species-tree-chosen-iter-%d.tre") % iter));
-                        
+                            if (_copious || last_iter) {
+                                // Save the chosen species tree to file
+                                saveStartingSpeciesTree(str(format("species-tree-chosen-iter-%d.tre") % iter));
+                            }
+                            
                             // Update theta
                             updateTheta(chosen_particle, 100, 0.5);
                         
                             // Update lambda
                             updateLambda(chosen_particle, 100, 0.5);
                         
-                            // Report log-likelihood of current parameter values
-                            output("\nUsing current parameter values:\n");
-                            double log_coal_like = chosen_particle.calcLogCoalLikeGivenTheta(Forest::_theta);
-                            output(str(format("    log(coalescent likelihood) = %.5f\n") % log_coal_like));
-                            double total_log_like = 0.0;
-                            for (unsigned g = 0; g < Forest::_ngenes; ++g) {
-                                double log_like = chosen_particle.calcLogLikelihoodForGene(g);
-                                total_log_like += log_like;
+                            if (_copious || last_iter) {
+                                // Report log-likelihood of current parameter values
+                                output("\nUsing current parameter values:\n");
+                                double log_coal_like = chosen_particle.calcLogCoalLikeGivenTheta(Forest::_theta);
+                                output(str(format("    log(coalescent likelihood) = %.5f\n") % log_coal_like));
+                                double total_log_like = 0.0;
+                                for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+                                    double log_like = chosen_particle.calcLogLikelihoodForGene(g);
+                                    total_log_like += log_like;
+                                }
+                                output(str(format("    log(likelihood) = %.5f\n") % total_log_like));
                             }
-                            output(str(format("    log(likelihood) = %.5f\n") % total_log_like));
                             
                             // Broadcast gene trees, species tree, theta, and lambda all in one message
                             // with values separated by | characters
@@ -1535,8 +1536,6 @@ namespace proj {
                             MPI_COMM_WORLD   // Communicator
                         );
                         
-                        //cout << str(format("Rank %d says message has length %d\n") % my_rank % message_length);
-            
                         // Broadcast the message itself
                         message.resize(message_length);
                         MPI_Bcast(
@@ -1549,9 +1548,7 @@ namespace proj {
                         
                         // Split message into component parts and save each part if not coordinator
                         // (who already knows all this information)
-                        //cout << str(format("Rank %d received message\n") % my_rank);
                         if (my_rank > 0) {
-                            //cout << str(format("Rank %d is splitting message...\n") % my_rank);
                             message.resize(message_length - 1);
                             vector<string> parts;
                             split(parts, message, is_any_of("|"));
@@ -1563,11 +1560,8 @@ namespace proj {
                             }
                             Forest::_theta = stod(parts[Forest::_ngenes + 1]);
                             Forest::_lambda = stod(parts[Forest::_ngenes + 2]);
-                            //cout << str(format("Rank %d says theta is %.5f and lambda is %.5f\n") % my_rank % Forest::_theta % Forest::_lambda);
                         }
                         
-                        //MPI_Barrier(MPI_COMM_WORLD);
-
                         double secs = stopwatch.stop();
                         output(str(format("\nTime used for iteration %d was %.5f seconds\n") % iter % secs));
 #else
@@ -1575,14 +1569,18 @@ namespace proj {
                             growGeneTrees(iter, g);
                         }
                         
-                        // Save the chosen gene trees to file
-                        saveStartingGeneTrees(str(format("gene-trees-chosen-iter-%d-numbers.tre") % iter));
+                        if (_copious || last_iter) {
+                            // Save the chosen gene trees to file
+                            saveStartingGeneTrees(str(format("gene-trees-chosen-iter-%d-numbers.tre") % iter));
+                        }
                         
                         // Estimate the species tree distribution (conditional on gene trees)
                         Particle & chosen_particle = growSpeciesTrees(iter);
                         
-                        // Save the chosen species tree to file
-                        saveStartingSpeciesTree(str(format("species-tree-chosen-iter-%d.tre") % iter));
+                        if (_copious || last_iter) {
+                            // Save the chosen species tree to file
+                            saveStartingSpeciesTree(str(format("species-tree-chosen-iter-%d.tre") % iter));
+                        }
                         
                         // Update theta
                         updateTheta(chosen_particle, 100, 0.5);
@@ -1590,16 +1588,18 @@ namespace proj {
                         // Update lambda
                         updateLambda(chosen_particle, 100, 0.5);
                         
-                        // Report log-likelihood of current parameter values
-                        output("\nUsing current parameter values:\n");
-                        double log_coal_like = chosen_particle.calcLogCoalLikeGivenTheta(Forest::_theta);
-                        output(str(format("    log(coalescent likelihood) = %.5f\n") % log_coal_like));
-                        double total_log_like = 0.0;
-                        for (unsigned g = 0; g < Forest::_ngenes; ++g) {
-                            double log_like = chosen_particle.calcLogLikelihoodForGene(g);
-                            total_log_like += log_like;
+                        if (_copious || last_iter) {
+                            // Report log-likelihood of current parameter values
+                            output("\nUsing current parameter values:\n");
+                            double log_coal_like = chosen_particle.calcLogCoalLikeGivenTheta(Forest::_theta);
+                            output(str(format("    log(coalescent likelihood) = %.5f\n") % log_coal_like));
+                            double total_log_like = 0.0;
+                            for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+                                double log_like = chosen_particle.calcLogLikelihoodForGene(g);
+                                total_log_like += log_like;
+                            }
+                            output(str(format("    log(likelihood) = %.5f\n") % total_log_like));
                         }
-                        output(str(format("    log(likelihood) = %.5f\n") % total_log_like));
                         
                         double secs = stopwatch.stop();
                         output(str(format("\nTime used for iteration %d was %.5f seconds\n") % iter % secs));
@@ -1616,7 +1616,7 @@ namespace proj {
                     readStartingSpeciesTree();
                     _starting_species_tree_from_file = true;
                     for (unsigned iter = 0; iter < _niter; ++iter) {
-                        cout << str(format("\nIteration %d of %d...") % (iter+1) % _niter) << endl;
+                        output(str(format("\nIteration %d of %d...\n") % (iter+1) % _niter));
                         for (unsigned g = 0; g < Forest::_ngenes; ++g)
                             growGeneTrees(iter, g);
                         growSpeciesTrees(iter);
@@ -1626,12 +1626,12 @@ namespace proj {
                     readStartingGeneTrees();
                     _starting_gene_trees_from_file = true;
                     for (unsigned iter = 0; iter < _niter; ++iter) {
-                        cout << str(format("\nIteration %d of %d...") % (iter+1) % _niter) << endl;
+                        output(str(format("\nIteration %d of %d...\n") % (iter+1) % _niter));
                         growSpeciesTrees(iter);
                         for (unsigned g = 0; g < Forest::_ngenes; ++g)
                             growGeneTrees(iter, g);
                     }
-                    cout << "\nFinal species tree SMC..." << endl;
+                    output("\nFinal species tree SMC...\n");
                     growSpeciesTrees(_niter);
                 }
                 else if (_start_mode == "evaluate") {
@@ -1653,15 +1653,15 @@ namespace proj {
                     
                     double theta = Forest::_theta;
                     double log_coal_like = p.calcLogCoalLikeGivenTheta(theta);
-                    cout << str(format("\nlog(coalescent likelihood) = %.9f\n") % log_coal_like);
+                    output(str(format("\nlog(coalescent likelihood) = %.9f\n") % log_coal_like));
                     
                     double total_log_like = 0.0;
                     for (unsigned g = 0; g < Forest::_ngenes; ++g) {
                         double log_like = p.calcLogLikelihoodForGene(g);
                         total_log_like += log_like;
-                        cout << str(format("log(likelihood for %s) = %.9f\n") % Forest::_gene_names[g] % log_like);
+                        output(str(format("log(likelihood for %s) = %.9f\n") % Forest::_gene_names[g] % log_like));
                     }
-                    cout << str(format("Total log(likelihood) = %.9f\n") % total_log_like);
+                    output(str(format("Total log(likelihood) = %.9f\n") % total_log_like));
                 }
                 else if (_start_mode == "lambdatest") {
                     Forest::_nspecies = _nsimspecies;
@@ -1671,8 +1671,8 @@ namespace proj {
                         Forest::_species_names[i] = species_name;
                     }
                     
-                    cout << str(format("Starting lambda   = %.1f\n") % Forest::_lambda);
-                    cout << str(format("Mean lambda prior = %.1f\n") % Forest::_lambda_prior_mean);
+                    output(str(format("Starting lambda   = %.1f\n") % Forest::_lambda));
+                    output(str(format("Mean lambda prior = %.1f\n") % Forest::_lambda_prior_mean));
 
                     drawStartingSpeciesTree();
 
@@ -1683,25 +1683,25 @@ namespace proj {
                     double invseries = 0.0;
                     for (unsigned z = 2; z <= Forest::_nspecies; z++)
                         invseries += 1.0/z;
-                    cout << str(format("%12.5f = 1/2 + 1/3 + ... + 1/%d\n") % invseries % Forest::_nspecies);
+                    output(str(format("%12.5f = 1/2 + 1/3 + ... + 1/%d\n") % invseries % Forest::_nspecies));
                     double species_tree_height = p.speciesForestHeight();
-                    cout << str(format("%12.5f = species tree height\n") % species_tree_height);
+                    output(str(format("%12.5f = species tree height\n") % species_tree_height));
                     double expected_species_tree_height = invseries/_lambda;
-                    cout << str(format("%12.5f = expected species tree height (given lambda = %.5f)\n") % expected_species_tree_height % _lambda);
+                    output(str(format("%12.5f = expected species tree height (given lambda = %.5f)\n") % expected_species_tree_height % _lambda));
                     double lambda_crude = invseries/species_tree_height;
-                    cout << str(format("%12.5f = lambda crude estimate\n") % lambda_crude);
+                    output(str(format("%12.5f = lambda crude estimate\n") % lambda_crude));
                     
                     // Place starting lambda far away
                     Forest::_lambda += 20.0;
                     
                     double logLtrue =  p.calcLogSpeciesTreeDensityGivenLambda(_lambda);
-                    cout << str(format("%12.5f = Log likelihood given true lambda (%.5f)\n") % logLtrue % _lambda);
+                    output(str(format("%12.5f = Log likelihood given true lambda (%.5f)\n") % logLtrue % _lambda));
 
                     double logLcrude =  p.calcLogSpeciesTreeDensityGivenLambda(lambda_crude);
-                    cout << str(format("%12.5f = Log likelihood given crude estimate of lambda (%.5f)\n") % logLcrude % lambda_crude);
+                    output(str(format("%12.5f = Log likelihood given crude estimate of lambda (%.5f)\n") % logLcrude % lambda_crude));
 
                     double logLstart =  p.calcLogSpeciesTreeDensityGivenLambda(Forest::_lambda);
-                    cout << str(format("%12.5f = Log likelihood given starting lambda (%.5f)\n") % logLstart % Forest::_lambda);
+                    output(str(format("%12.5f = Log likelihood given starting lambda (%.5f)\n") % logLstart % Forest::_lambda));
                     
                     for (unsigned iter = 0; iter < _niter; ++iter) {
                         updateLambda(p, 100, 1.0);
@@ -1713,7 +1713,7 @@ namespace proj {
             }
         }
         catch (XProj & x) {
-            cerr << "Proj encountered a problem:\n  " << x.what() << endl;
+            output(str(format("Proj encountered a problem:\n  %s\n") % x.what()));
         }
 
         output("\nFinished!\n");

@@ -1,9 +1,6 @@
 #pragma once
 
-#include "conditionals.hpp"
-
-#include "xproj.hpp"
-#include <boost/algorithm/string.hpp>
+extern void output(string msg);
 
 namespace proj {
 
@@ -71,17 +68,14 @@ namespace proj {
     // member function bodies go here
     
     inline GeneticCode::GeneticCode() {
-        //cout << "Constructing a standard GeneticCode" << endl;
         useGeneticCode("standard");
     }
 
     inline GeneticCode::GeneticCode(string name) {
-        //cout << "Constructing a " << name << " GeneticCode" << endl;
         useGeneticCode(name);
     }
 
     inline GeneticCode::~GeneticCode() {
-        //cout << "Destroying a GeneticCode" << endl;
     }
 
     inline string GeneticCode::getGeneticCodeName() const {
@@ -156,11 +150,11 @@ namespace proj {
     inline void GeneticCode::ensureGeneticCodeNameIsValid(const string & name) {
         if (!isRecognizedGeneticCodeName(name)) {
             auto valid_genetic_code_names = getRecognizedGeneticCodeNames();
-            cout << "Recognized genetic codes:\n";
+            output("Recognized genetic codes:\n");
             for (string name : valid_genetic_code_names) {
-                cout << "  " << name << "\n";
+                output(str(format("  %s\n") % name));
             }
-            cout << endl;
+            output("\n");
             throw XProj(format("%s is not a recognized genetic code") % name);
         }
     }
