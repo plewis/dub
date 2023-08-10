@@ -1,6 +1,7 @@
 #pragma once
 
 extern void output(string msg);
+extern void output(string msg, unsigned level);
 
 namespace proj {
 

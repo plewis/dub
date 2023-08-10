@@ -16,7 +16,7 @@ namespace proj {
 
                                                         Partition();
                                                         ~Partition();
-        
+                                                                
             unsigned                                    getNumSites() const;
             unsigned                                    getNumSubsets() const;
             string                                      getSubsetName(unsigned subset) const;
@@ -53,16 +53,14 @@ namespace proj {
             const unsigned                              _infinity;
     };
     
-    // member function bodies here
-    
-    inline Partition::Partition() : _infinity(numeric_limits<unsigned>::max()) {   
+    inline Partition::Partition() : _infinity(numeric_limits<unsigned>::max()) {
         clear();
     }
 
     inline Partition::~Partition() {
     }
 
-    inline unsigned Partition::getNumSites() const {    
+    inline unsigned Partition::getNumSites() const {
         return _num_sites;
     }
     

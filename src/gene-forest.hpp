@@ -192,8 +192,6 @@ namespace proj {
         _next_node_index = Forest::_ntaxa;
         _next_node_number = Forest::_ntaxa;
         
-         //temporary!
-        //_prev_log_likelihood = calcLogLikelihood();
         _prev_log_likelihood = 0.0;
         
         _prev_log_coalescent_likelihood = 0.0;
@@ -723,7 +721,7 @@ namespace proj {
             if (!simulating) {
                 assert(_data);
                 assert(anc_node->_partial == nullptr);
-                anc_node->_partial = ps.getPartial(_gene_index); //bug: just transfer existing, no need to allocate anew
+                //anc_node->_partial = ps.getPartial(_gene_index); //bug: just transfer existing, no need to allocate anew
                 assert(anc_node->_left_child);
                 assert(anc_node->_left_child->_right_sib);
                 anc_node->_partial = partials[which_pair];

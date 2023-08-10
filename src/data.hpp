@@ -1,6 +1,7 @@
-#pragma once    
+#pragma once
 
 extern void output(string msg);
+extern void output(string msg, unsigned level);
 
 namespace proj {
 
@@ -32,7 +33,7 @@ namespace proj {
 
                                                         Data();
                                                         ~Data();
-        
+                                                        
             Partition::SharedPtr                        getPartition();
             void                                        setPartition(Partition::SharedPtr partition);
 
@@ -65,12 +66,14 @@ namespace proj {
             string                                      getPatternAsString(unsigned i) const;
 
             void                                        clear();
+            
+            void                                        memoryReport(ofstream & memf) const;
 
         private:
 
             data_matrix_t &                             getDataMatrixNonConst();
             unsigned                                    storeTaxonNames(NxsTaxaBlock * taxaBlock, unsigned taxa_block_index);
-            unsigned                                    storeData(unsigned ntax, unsigned nchar, NxsCharactersBlock * charBlock, NxsCharactersBlock::DataTypesEnum datatype);
+            unsigned                                    storeData(unsigned ntax, unsigned nchar_before, NxsCharactersBlock * charBlock, NxsCharactersBlock::DataTypesEnum datatype);
             unsigned                                    buildSubsetSpecificMaps(unsigned ntaxa, unsigned seqlen, unsigned nsubsets);
             void                                        updatePatternMap(Data::pattern_vect_t & pattern, unsigned subset);
             void                                        compressPatterns();
@@ -85,18 +88,17 @@ namespace proj {
             subset_end_t                                _subset_end;
             pattern_origsite_map_t                      _orig_site_map;
             orig_site_lookup_t                          _orig_site_lookup;
+            unsigned                                    _cum_nchar;
     };
 
-    // Member function bodies go below here but above the right curly bracket that ends the namespace block
-    
-    inline Data::Data() {   
+    inline Data::Data() {
         clear();
     }
 
     inline Data::~Data() {
     }
     
-    inline void Data::setPartition(Partition::SharedPtr partition) {    
+    inline void Data::setPartition(Partition::SharedPtr partition) {
         _partition = partition;
     }    
 
@@ -566,7 +568,7 @@ namespace proj {
         if (numTaxaBlocks == 0)
             throw XProj("No taxa blocks were found in the data file");
             
-        unsigned cum_nchar = 0; 
+        _cum_nchar = 0;
         for (int i = 0; i < numTaxaBlocks; ++i) {
             NxsTaxaBlock * taxaBlock = nexusReader.GetTaxaBlock(i);
             unsigned ntax = storeTaxonNames(taxaBlock, i);
@@ -574,7 +576,7 @@ namespace proj {
             for (unsigned j = 0; j < numCharBlocks; ++j) {
                 NxsCharactersBlock * charBlock = nexusReader.GetCharactersBlock(taxaBlock, j);
                 NxsCharactersBlock::DataTypesEnum datatype = charBlock->GetOriginalDataType();
-                cum_nchar += storeData(ntax, cum_nchar, charBlock, datatype);
+                _cum_nchar += storeData(ntax, _cum_nchar, charBlock, datatype);
             }
         }   
 
@@ -641,4 +643,61 @@ namespace proj {
         return pattern_as_string.str();
     }
     
-}   
+    inline void Data::memoryReport(ofstream & memf) const {
+        memf << "\nData memory report:\n\n";
+        unsigned long total_nbytes = 0;
+        unsigned ntaxa = getNumTaxa();
+        unsigned nsubsets = getNumSubsets();
+        memf << str(format("  Number of taxa: %d\n") % ntaxa);
+        memf << str(format("  Number of subsets: %d\n") % nsubsets);
+        memf << str(format("  Number of sites: %d\n\n") % _cum_nchar);
+        
+        memf << str(format("  %12s %12s %12s\n") % "subset" % "nstates" % "npatterns");
+        memf << str(format("  %12s %12s %12s\n") % " -----------" % " -----------" % " -----------");
+        unsigned total_npatterns = 0;
+        for (unsigned subset = 0; subset < nsubsets; ++subset) {
+            unsigned npatterns = getNumPatternsInSubset(subset);
+            unsigned nstates = getNumStatesForSubset(subset);
+            memf << str(format("  %12d %12d %12d\n") % subset % nstates % npatterns);
+            total_npatterns += npatterns;
+        }
+        memf << str(format("  %12s %12s %12s\n") % " -----------" % " -----------" % " -----------");
+        memf << str(format("  %12s %12s %12d\n\n") % " " % " " % total_npatterns);
+        
+        unsigned element_size = (unsigned)sizeof(unsigned);
+        unsigned nelements = (unsigned)_pattern_counts.size();
+        unsigned nbytes = nelements*element_size;
+        total_nbytes += nbytes;
+        memf << str(format("  _pattern_counts:     %d bytes = %d patterns * %d bytes\n") % nbytes % nelements % element_size);
+
+        element_size = (unsigned)sizeof(state_t);
+        nelements = (unsigned)_monomorphic.size();
+        nbytes = nelements*element_size;
+        total_nbytes += nbytes;
+        memf << str(format("  _monomorphic:        %d bytes = %d patterns * %d bytes\n") % nbytes % nelements % element_size);
+        
+        element_size = (unsigned)sizeof(int);
+        nelements = (unsigned)_partition_key.size();
+        nbytes = nelements*element_size;
+        total_nbytes += nbytes;
+        memf << str(format("  _partition_key:      %d bytes = %d patterns * %d bytes\n") % nbytes % nelements % element_size);
+
+        element_size = (unsigned)sizeof(state_t);
+        nelements = ntaxa*_cum_nchar;
+        nbytes = nelements*element_size;
+        //total_nbytes += nbytes;
+        memf << str(format("  _data_matrix (pre):  %d bytes = %d taxa * %d sites * %d bytes\n") % nbytes % ntaxa % _cum_nchar % element_size);
+        
+        element_size = (unsigned)sizeof(state_t);
+        nelements = ntaxa*total_npatterns;
+        nbytes = nelements*element_size;
+        total_nbytes += nbytes;
+        memf << str(format("  _data_matrix (post): %d bytes = %d taxa * %d patterns * %d bytes\n") % nbytes % ntaxa % total_npatterns % element_size);
+        
+        //TODO: add other data members
+        
+        memf << str(format("\n  Total megabytes: %.5f\n") % (1.0*total_nbytes/1048576));
+        
+    }
+    
+}

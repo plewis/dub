@@ -9,6 +9,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <new>      // used by Mallocator: bad_alloc, bad_array_new_length
 #include <numeric>
 #include <queue>
 #include <regex>
@@ -40,6 +41,7 @@ using namespace std;
 using boost::format;
 
 #include "conditionals.hpp"
+#include "mallocator.hpp"
 #include "stopwatch.hpp"
 #include "xproj.hpp"
 #include "lot.hpp"
@@ -60,6 +62,8 @@ using boost::format;
 
 using namespace proj;
 
+unsigned Proj::_verbosity = 0;
+
 #if defined(USING_MPI)
 int my_rank = 0;
 int ntasks = 0;
@@ -69,10 +73,25 @@ void output(string msg) {
         cout << msg;
     }
 }
+
+void output(string msg, unsigned level) {
+    if (my_rank == 0 && level <= Proj::_verbosity) {
+        cout << msg;
+    }
+}
 #else
 void output(string msg) {
     cout << msg;
 }
+
+void output(string msg, unsigned level) {
+    if (level <= Proj::_verbosity)
+        cout << msg;
+}
+#endif
+
+#if defined(LOG_MEMORY)
+    ofstream memfile("allocs.txt");
 #endif
 
 Lot                                 rng;
@@ -169,5 +188,12 @@ int main(int argc, const char * argv[]) {
 #if defined(USING_MPI)
 	MPI_Finalize();
 #endif
+
+#if defined(LOG_MEMORY)
+    proj.memoryReport(memfile);
+    ps.memoryReport(memfile);
+    memfile.close();
+#endif
+
     return 0;
 }

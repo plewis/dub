@@ -4,6 +4,8 @@
 //#define DEBUG_COAL_LIKE
 //#define DEBUG_PARTIAL_STORE
 
+#define LOG_MEMORY
+
 //#define USING_MPI
 #if defined(USING_MPI)
 #   include <mpi.h>

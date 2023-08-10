@@ -1,11 +1,11 @@
 #pragma once
 
 extern void output(string msg);
+extern void output(string msg, unsigned level);
 
 namespace proj {
 
     struct Epoch  {
-        //typedef vector<unsigned> lineage_counts_t;
         typedef map<Node::species_t, unsigned> lineage_counts_t;
 
         enum epoch_t {
