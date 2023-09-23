@@ -9,7 +9,7 @@
 // only for the case where every gene tree has the same topology (and relative
 // coalescence times!) and, even then, one can only compute p(D | S, theta, lambda),
 // not p(D)
-//#define SAVE_PARAMS_FOR_LORAD
+#define SAVE_PARAMS_FOR_LORAD
 
 #define LOG_MEMORY
 
