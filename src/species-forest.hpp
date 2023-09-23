@@ -22,6 +22,10 @@ namespace proj {
             void    createTrivialForest(bool compute_partials = false);
             bool    isSpeciesForest() const {return true;}
             
+#if defined(SAVE_PARAMS_FOR_LORAD)
+            double saveParamsForLoRaD(vector<string> & params, vector<string> & splits);
+#endif
+
             double calcLogSpeciesTreeDensity(double lambda) const;
 
             void operator=(const SpeciesForest & other);
@@ -65,6 +69,7 @@ namespace proj {
         _next_node_number = Forest::_nspecies;
         _prev_log_likelihood = 0.0;
         _prev_log_coalescent_likelihood = 0.0;
+        _log_species_tree_prior = 0.0;
     }
     
     inline double SpeciesForest::calcLogSpeciesTreeDensity(double lambda) const {
@@ -164,6 +169,52 @@ namespace proj {
         
         return _epochs;
     }
+    
+#if defined(SAVE_PARAMS_FOR_LORAD)
+    inline double SpeciesForest::saveParamsForLoRaD(vector<string> & params, vector<string> & splits) {
+        // Appends to params and splits; clear these before calling if desired
+        
+        // Should only be called for complete species trees
+        assert(_lineages.size() == 1);
+                
+        // Ensure each node has correct _height
+        refreshAllHeightsAndPreorders();
+        
+        // Save all internal node heights
+        unsigned n = 0;
+        vector< pair<double, string> > height_split_pairs;
+        for (auto nd : boost::adaptors::reverse(_preorders[0])) {
+            if (nd->_left_child) {
+                // internal
+                string split_repr = nd->_split.createPatternRepresentation();
+                height_split_pairs.push_back(make_pair(nd->_height, split_repr));
+            }
+            else {
+                n++;
+            }
+        }
+        assert(n == Forest::_nspecies);
+        
+        // Sort heights from smallest to largest
+        sort(height_split_pairs.begin(), height_split_pairs.end());
+        
+        // Compute increments between coalescent events and store in params
+        double h0 = 0.0;
+        for (auto h : height_split_pairs) {
+            double incr = h.first - h0;
+            assert(incr > 0.0);
+
+            string incr_str = str(format("%.9f") % incr);
+            params.push_back(incr_str);
+
+            splits.push_back(h.second);
+            h0 = h.first;
+            n--;
+        }
+        
+        return _log_species_tree_prior;
+    }
+#endif
     
     //inline void SpeciesForest::createFromTree(Tree::SharedPtr t) {
     //    // Assumes leaf numbers in t are indices into the GeneForest::_species_names vector
@@ -312,6 +363,9 @@ namespace proj {
     }
     
     inline double SpeciesForest::advanceSpeciesForest(unsigned particle, unsigned step) {
+        // Advances species forest by one join given the current gene trees.
+        // Also adds to _log_species_tree_prior.
+        //
         // Step 0
         //    <------ gene tree 0 ---->      <------ gene tree 1 ---->
         //
@@ -456,6 +510,10 @@ namespace proj {
         assert(nlineages > 1);
         
         if (step > 0) {
+            // Only join species after first step because a join in a species tree
+            // only affects downstream (further into the past) coalescent events.
+            // Joining first and then choosing increment allows filtering to take
+            // account of the consequences of the join.
             pair<unsigned,unsigned> chosen_pair = rng.nchoose2(nlineages);
             Node * first_node  = _lineages[chosen_pair.first];
             Node * second_node = _lineages[chosen_pair.second];
@@ -474,8 +532,7 @@ namespace proj {
             --nlineages;
         }
 
-        // Create a set of all species that currently (looking backward in time)
-        // exist in species tree lineages
+        // Create a set of all species that currently (looking backward in time) exist
         set<Node::species_t> current_species;
         for (auto lit = _lineages.begin(); lit != _lineages.end(); lit++) {
             Node * nd = *lit;
@@ -493,6 +550,11 @@ namespace proj {
         double u = rng.uniform();
         double r = Forest::_lambda*nlineages;
         double t = -log(1.0 - u*(1.0 - exp(-r*max_waiting_time)))/r;
+        
+        // Update log of the species tree prior (prior is Exponential(r) but
+        // conditioned on t < max_waiting_time)
+        _log_species_tree_prior += log(r) - r*t;
+        _log_species_tree_prior -= log(1.0 - exp(-r*max_waiting_time));
             
         // Increment height of forest
         advanceAllLineagesBy(t);

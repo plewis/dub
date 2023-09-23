@@ -32,7 +32,7 @@ namespace proj {
             bool                                                conflictsWith(const Split & other) const;
             bool                                                contains(const Split & other) const;
 
-            string                                         createPatternRepresentation() const;
+            string                                              createPatternRepresentation() const;
             split_metrics_t                                     getSplitMetrics() const;
             unsigned                                            getSize() const;
 

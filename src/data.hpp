@@ -2,6 +2,7 @@
 
 extern void output(string msg);
 extern void output(string msg, unsigned level);
+extern void output(format & fmt, unsigned level);
 
 namespace proj {
 

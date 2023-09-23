@@ -1,0 +1,75 @@
+---
+title: "LoRaD for simulated example"
+author: "Paul Lewis"
+date: "2023-09-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("/Users/plewis/Documents/projects/SMC2/tiny-sim/gene-marglike")
+library(lorad)
+```
+
+# Read in data
+
+```{r}
+params <- read.table('gene-params.txt', header=TRUE)
+dim(params)
+colnames(params)
+```
+
+# Last coalescent event split into constrained vs. unconstrained components
+
+```{r}
+constr2 <- 0.038273807 - params$incr.default.0 - params$incr.default.1
+free2 <- params$incr.default.2 - constr2
+data <- data.frame(params$particle, params$lnL.default, params$lnP.default, params$incr.default.0, params$incr.default.1, params$incr.default.2, constr2, free2)
+colnames(data)
+```
+
+
+# Column specifications
+
+```{r}
+colspec_params <- c("particle"="iteration", "lnL.default"="posterior", "lnP.default"="posterior", "incr.default.0"="nonnegative", "incr.default.1"="nonnegative", "incr.default.2"="nonnegative", "split.default.0"="ignore", "split.default.1"="ignore", "split.default.2"="ignore")
+colspec_params
+```
+```{r}
+colspec_data <- c("params.particle"="iteration", "params.lnL.default"="posterior", "params.lnP.default"="posterior", "params.incr.default.0"="nonnegative", "params.incr.default.1"="nonnegative", "params.incr.default.2"="ignore", "constr2"="ignore", "free2"="nonnegative")
+colspec_data
+```
+
+# Density plots
+
+```{r}
+d0 <- density(data$params.incr.default.0)
+d1 <- density(data$params.incr.default.1)
+d2a <- density(data$constr2)
+d2b <- density(data$free2)
+xmax <- max(d0$x,d1$x,d2a$x,d2b$x)
+ymax <- max(d0$y,d1$y,d2a$y,d2b$y)
+plot(d0, lwd=2, col="black", bty="L", xlim=c(0,xmax), ylim=c(0,ymax), main="Densities for increment parameters")
+lines(d1, lwd=2, col="purple")
+lines(d2a, lwd=2, col="blue")
+lines(d2b, lwd=2, col="blue", lty="dotted")
+```
+
+# Check that gene tree topologies are all identical
+
+```{r}
+cat(paste(sprintf("%12d: Number of samples", dim(params)[1]),
+      sprintf("\n%12d: Number of samples in which first coalescent event joins the two samples from species B",sum(ifelse(params$split.default.0 == "--**",1,0))),
+sprintf("\n%12d: Number of samples in which first coalescent event joins the two samples from species A",sum(ifelse(params$split.default.1 == "**--",1,0)))))
+```
+# Run LoRaD on params
+
+```{r}
+lorad_estimate(params, colspec_params, 0.5, "random", 0.1)
+```
+
+# Run LoRaD on data
+
+```{r}
+lorad_estimate(data, colspec_data, 0.5, "random", 0.1)
+```

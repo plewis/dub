@@ -74,6 +74,12 @@ void output(string msg) {
     }
 }
 
+void output(format & fmt, unsigned level) {
+    if (my_rank == 0 && level <= Proj::_verbosity) {
+        cout << str(fmt);
+    }
+}
+
 void output(string msg, unsigned level) {
     if (my_rank == 0 && level <= Proj::_verbosity) {
         cout << msg;
@@ -82,6 +88,11 @@ void output(string msg, unsigned level) {
 #else
 void output(string msg) {
     cout << msg;
+}
+
+void output(format & fmt, unsigned level) {
+    if (level <= Proj::_verbosity)
+        cout << str(fmt);
 }
 
 void output(string msg, unsigned level) {
@@ -168,6 +179,7 @@ int main(int argc, const char * argv[]) {
 #endif
 
     Proj proj;
+    bool normal_termination = true;
     try {
         proj.processCommandLineOptions(argc, argv);
         
@@ -180,9 +192,11 @@ int main(int argc, const char * argv[]) {
     catch(std::exception & x) {
         output(str(format("Exception: %s\n") % x.what()));
         output("Aborted.\n");
+        normal_termination = false;
     }
     catch(...) {
         output("Exception of unknown type!\n");
+        normal_termination = false;
     }
     
 #if defined(USING_MPI)
@@ -190,8 +204,10 @@ int main(int argc, const char * argv[]) {
 #endif
 
 #if defined(LOG_MEMORY)
-    proj.memoryReport(memfile);
-    ps.memoryReport(memfile);
+    if (normal_termination) {
+        proj.memoryReport(memfile);
+        ps.memoryReport(memfile);
+    }
     memfile.close();
 #endif
 

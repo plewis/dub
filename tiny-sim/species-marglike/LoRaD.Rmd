@@ -1,0 +1,43 @@
+---
+title: "LoRaD for simulated example"
+author: "Paul Lewis"
+date: "2023-09-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("/Users/plewis/Documents/projects/SMC2/tiny-sim/species-marglike")
+library(lorad)
+```
+
+# Read in data
+
+```{r}
+params <- read.table('species-params.txt', header=TRUE)
+dim(params)
+colnames(params)
+```
+
+# Column specifications
+
+```{r}
+colspec_params <- c("particle"="iteration", "lnL"="posterior", "lnP"="posterior", "incr.0"="nonnegative", "split.0"="ignore")
+colspec_params
+```
+
+# Density plots
+
+```{r}
+d0 <- density(params$incr.0)
+xmax <- max(d0$x)
+ymax <- max(d0$y)
+plot(d0, lwd=2, col="black", bty="L", xlim=c(0,xmax), ylim=c(0,ymax), main="Densities for increment parameters")
+```
+
+# Run LoRaD on params
+
+```{r}
+lorad_estimate(params, colspec_params, 0.5, "random", 0.1)
+```
+

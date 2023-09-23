@@ -25,6 +25,7 @@ namespace proj {
             virtual void copyEpochsFrom(const epoch_list_t & other);
 
             double calcLogCoalescentLikelihood(const epoch_list_t & epochs, unsigned gene) const;
+            double getLastLogCoalescentLikelihood() const {return _prev_log_coalescent_likelihood;}
             
             static void debugShow(const format & f);
             
@@ -96,6 +97,7 @@ namespace proj {
             bool        canHaveSibling(Node * nd) const;
             void        refreshPreorder(Node::ptr_vect_t & preorder) const;
             void        refreshAllPreorders() const;
+            void        resizeAllSplits(unsigned nleaves);
             void        refreshAllHeightsAndPreorders();
             void        heightsInternalsPreorders();
             void        advanceAllLineagesBy(double t);
@@ -117,6 +119,8 @@ namespace proj {
             
             double                  _prev_log_likelihood;
             double                  _prev_log_coalescent_likelihood;
+            
+            double                  _log_species_tree_prior;
 
             vector<Node>            _nodes;
             
@@ -666,6 +670,12 @@ namespace proj {
         }
     }
     
+    inline void Forest::resizeAllSplits(unsigned nleaves) {
+        for (auto & nd : _nodes) {
+            nd._split.resize(nleaves);
+        }
+    }
+    
     inline void Forest::refreshAllPreorders() const {
         // For each subtree stored in _lineages, create a vector of node pointers in preorder sequence
         _preorders.clear();
@@ -688,6 +698,7 @@ namespace proj {
         // Refreshes _preorders and then recalculates heights of all nodes
         // and sets _forest_height
         
+        resizeAllSplits(isSpeciesForest() ? Forest::_nspecies : Forest::_ntaxa);
         refreshAllPreorders();
         _forest_height = 0.0;
 
@@ -705,6 +716,9 @@ namespace proj {
                     nd->_height = 0.0;
                     if (nd->_edge_length > _forest_height)
                         _forest_height = nd->_edge_length;
+
+                    // Set bit corresponding to this leaf node's number
+                    nd->_split.setBitAt(nd->_number);
                 }
                 
                 if (nd->_parent) {
@@ -717,6 +731,9 @@ namespace proj {
                     
                     // If nd is not its parent's rightmost child, check ultrametric assumption
                     assert(!is_rightmost_child || fabs(nd->_parent->_height - parent_height) < Forest::_small_enough);
+
+                    // Parent's bits are the union of the bits set in all its children
+                    nd->_parent->_split.addSplit(nd->_split);
                 }
             }
         }
@@ -1175,9 +1192,14 @@ namespace proj {
 
     inline double Forest::calcLogCoalescentLikelihood(const epoch_list_t & epochs, unsigned gene) const {
         // Computes the log of the coalescent likelihood, which is the probability of a
-        // gene tree given the species tree. If GeneForest, stop when _forest_height is
-        // reached; if SpeciesForest, continue until all epochs are considered but combine
-        // all lineages into a single ancestral lineage once _forest_height is exceeded.
+        // gene tree given the species tree.
+        //
+        // If GeneForest, stop when _forest_height is reached.
+        //
+        // If SpeciesForest, continue until all epochs are considered but combine
+        // all lineages into a single ancestral lineage once _forest_height
+        // is exceeded.
+        //
 #if defined(DEBUG_COAL_LIKE)
         if (_debug_coal_like) {
             output(str(format("\n*** Calculating log(coalescent likelihood) for gene %d\n") % gene));
@@ -1422,12 +1444,13 @@ namespace proj {
     }
     
     inline void Forest::operator=(const Forest & other) {
-        _debug_coal_like     = other._debug_coal_like;
-        _forest_height       = other._forest_height;
-        _next_node_index     = other._next_node_index;
-        _next_node_number    = other._next_node_number;
-        _prev_log_likelihood = other._prev_log_likelihood;
+        _debug_coal_like                = other._debug_coal_like;
+        _forest_height                  = other._forest_height;
+        _next_node_index                = other._next_node_index;
+        _next_node_number               = other._next_node_number;
+        _prev_log_likelihood            = other._prev_log_likelihood;
         _prev_log_coalescent_likelihood = other._prev_log_coalescent_likelihood;
+        _log_species_tree_prior         = other._log_species_tree_prior;
         
         // Create node map: if _nodes[3]._number = 2, then node_map[2] = 3 (i.e. node number 2 is at index 3 in _nodes vector)
         map<unsigned, unsigned> node_map;

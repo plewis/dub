@@ -22,10 +22,14 @@ namespace proj {
             void simulateGeneTree(unsigned gene, epoch_list_t & epochs);
             pair<bool,double> advanceGeneForest(unsigned step, unsigned particle, bool simulating = false);
             
+            double getLastLogLikelihood() const {return _prev_log_likelihood;}
             double calcLogLikelihood() const;
-            
             static void computeLeafPartials(Data::SharedPtr data);
-
+            
+#if defined(SAVE_PARAMS_FOR_LORAD)
+            void saveParamsForLoRaD(vector<string> & params, vector<string> & splits);
+#endif
+            
             // Overrides of base class functions
             void clear();
             
@@ -400,6 +404,42 @@ namespace proj {
         }   // child loop
     }
     
+#if defined(SAVE_PARAMS_FOR_LORAD)
+    inline void GeneForest::saveParamsForLoRaD(vector<string> & params, vector<string> & splits) {
+        // Appends to params and splits; clear these before calling if desired
+        
+        // Should only be called for complete gene trees
+        assert(_lineages.size() == 1);
+                
+        // Ensure each node has correct _height
+        refreshAllHeightsAndPreorders();
+        
+        // Save all internal node heights
+        vector< pair<double, string> > height_split_pairs;
+        for (auto nd : boost::adaptors::reverse(_preorders[0])) {
+            if (nd->_left_child) {
+                // internal
+                string split_repr = nd->_split.createPatternRepresentation();
+                height_split_pairs.push_back(make_pair(nd->_height, split_repr));
+            }
+        }
+        
+        // Sort heights from smallest to largest
+        sort(height_split_pairs.begin(), height_split_pairs.end());
+        
+        // Compute increments between coalescent events and store in params
+        double h0 = 0.0;
+        for (auto h : height_split_pairs) {
+            double incr = h.first - h0;
+            assert(incr > 0.0);
+            string incr_str = str(format("%.9f") % incr);
+            params.push_back(incr_str);
+            splits.push_back(h.second);
+            h0 = h.first;
+        }
+    }
+#endif
+    
     inline double GeneForest::calcLogLikelihood() const {
         // Computes the log of the Felsenstein likelihood. Note that this function just
         // carries out the final summation. It assumes that all nodes (leaf nodes included)
@@ -674,7 +714,9 @@ namespace proj {
                 
                         // Compute log coalescent likelihood
                         log_coalescent_likelihood = calcLogCoalescentLikelihood(_epochs, _gene_index);
+#if 0 //temporary!
                         log_weight += log_coalescent_likelihood - _prev_log_coalescent_likelihood;
+#endif
                     }
                     
                     // Store all relevant information about this pair

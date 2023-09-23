@@ -2,6 +2,7 @@
 
 extern void output(string msg);
 extern void output(string msg, unsigned level);
+extern void output(format & fmt, unsigned level);
 
 namespace proj {
 
@@ -20,8 +21,8 @@ namespace proj {
         virtual bool isCoalescentEpoch() const {return _type == coalescent_epoch;}
         virtual bool isSpeciationEpoch() const {return _type == speciation_epoch;}
         
-        void reset() {_valid = true;}
-        
+        void reset();
+
         bool operator==(const Epoch & other) const;
         
         string leftSpeciesAsStr()  const {return speciesSetToStr(_left_species);}
@@ -93,6 +94,18 @@ namespace proj {
         returned_str.pop_back();
         
         return returned_str;
+    }
+    
+    inline void Epoch::reset() {
+        // If _valid is true, it means that this speciation epoch has not
+        // been surpassed by a gene tree. This variable is necessary because
+        // rounding error can make it seem like the height of the gene tree
+        // has not yet reached this speciation event even though it has. Thus,
+        // once all gene tree lineages have been extended up to this speciation
+        // event, the epoch's _valid is set to false so that there is no way
+        // this speciation event can be used until it is again reset. Call
+        // resetAllEpochs function to reset all epochs.
+        _valid = true;
     }
 
     inline bool epochLess (const Epoch & i, const Epoch & j) {
