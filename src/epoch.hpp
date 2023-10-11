@@ -1,6 +1,5 @@
 #pragma once
 
-extern void output(string msg);
 extern void output(string msg, unsigned level);
 extern void output(format & fmt, unsigned level);
 
@@ -15,8 +14,20 @@ namespace proj {
             speciation_epoch = 0x04
         };
             
+        Epoch();
+        Epoch(const Epoch & e);
         Epoch(epoch_t t, double h);
-            
+        ~Epoch();
+
+#if defined(LOG_MEMORY)
+        static unsigned _nconstructed;
+        static unsigned _ndestroyed;
+        static unsigned _max_in_use;
+        static unsigned long _max_bytes_any_epoch;
+        static unsigned _bytes_base_epoch;
+        static void memoryReport(ofstream & memf);
+#endif
+
         virtual bool isInitEpoch()       const {return _type == init_epoch;}
         virtual bool isCoalescentEpoch() const {return _type == coalescent_epoch;}
         virtual bool isSpeciationEpoch() const {return _type == speciation_epoch;}
@@ -57,17 +68,50 @@ namespace proj {
     
     typedef list<Epoch> epoch_list_t;
     
+    inline Epoch::Epoch() {
+#if defined(LOG_MEMORY)
+        _nconstructed++;
+        if (_nconstructed - _ndestroyed > _max_in_use) {
+            _max_in_use = _nconstructed -_ndestroyed;
+        }
+#endif
+    }
+
+    inline Epoch::Epoch(const Epoch & e) {
+        *this = e;
+#if defined(LOG_MEMORY)
+        _nconstructed++;
+        if (_nconstructed - _ndestroyed > _max_in_use) {
+            _max_in_use = _nconstructed -_ndestroyed;
+        }
+#endif
+    }
+
     inline Epoch::Epoch(epoch_t t, double h) {
-        _type                       = t;
-        _height                     = h;
-        _valid                      = false;
-        _gene                       = -1;
-        _coalescence_node           = nullptr;
-        //_left_species               = -1;
-        //_right_species              = -1;
-        //_anc_species                = -1;
-        // _lineage_counts is empty by default and does not need to be initialized
-        // _species_set is empty by default and does not need to be initialized
+        _type                       = t;        // int
+        _height                     = h;        // double
+        _valid                      = false;    // bool
+        _gene                       = -1;       // int
+        _coalescence_node           = nullptr;  // Node *
+        //_left_species               = -1;     // set<unsigned>
+        //_right_species              = -1;     // set<unsigned>
+        //_anc_species                = -1;     // set<unsigned>
+        // _lineage_counts                      // map<set<unsigned>, unsigned>
+        //      empty by default and does not need to be initialized
+        // _species                             // set<unsigned>
+        //      empty by default and does not need to be initialized
+#if defined(LOG_MEMORY)
+        _nconstructed++;
+        if (_nconstructed -_ndestroyed > _max_in_use) {
+            _max_in_use = _nconstructed -_ndestroyed;
+        }
+#endif
+    }
+    
+    inline Epoch::~Epoch() {
+#if defined(LOG_MEMORY)
+        _ndestroyed++;
+#endif
     }
     
     inline bool Epoch::operator==(const Epoch & other) const {
@@ -80,7 +124,7 @@ namespace proj {
         eq = eq && _left_species            == other._left_species;
         eq = eq && _right_species           == other._right_species;
         eq = eq && _anc_species             == other._anc_species;
-        eq = eq && _species             == other._species;
+        eq = eq && _species                 == other._species;
         eq = eq && _lineage_counts          == other._lineage_counts;
         return eq;
     }
@@ -107,6 +151,16 @@ namespace proj {
         // resetAllEpochs function to reset all epochs.
         _valid = true;
     }
+
+#if defined(LOG_MEMORY)
+    inline void Epoch::memoryReport(ofstream & memf) {
+        memf << "\nEpoch memory report:\n\n";
+        memf << str(format("  Number of epochs allocated:       %d\n") % Epoch::_nconstructed);
+        memf << str(format("  Number of epochs destroyed:       %d\n") % Epoch::_ndestroyed);
+        memf << str(format("  Maximum number of epochs in use:  %d\n") % Epoch::_max_in_use);
+        memf << str(format("  Bytes in newly-constructed epoch: %d\n") % Epoch::_bytes_base_epoch);
+    }
+#endif
 
     inline bool epochLess (const Epoch & i, const Epoch & j) {
         return (i._height < j._height);
@@ -145,16 +199,17 @@ namespace proj {
         double prev_height = -1.0;
         for (auto it = epochs.begin(); it != epochs.end(); it++) {
             if (it->_height < prev_height) {
-                output(str(format("epoch height (%.9f) not less than previous epoch's height (%.9f)\n") % it->_height % prev_height));
+                output(format("epoch height (%.9f) not less than previous epoch's height (%.9f)\n") % it->_height % prev_height, 2);
                 return false;
             }
             bool ok = (bool)(it->_type & valid_types);
             if (!ok) {
-                output(str(format("epoch type (%d) not among valid types (%d)\n") % it->_type % valid_types));
+                output(format("epoch type (%d) not among valid types (%d)\n") % it->_type % valid_types, 2);
                 return false;
             }
             prev_height = it->_height;
         }
         return true;
     }
+    
 }

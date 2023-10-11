@@ -41,6 +41,15 @@ using namespace std;
 using boost::format;
 
 #include "conditionals.hpp"
+
+// See https://www.jviotti.com/2022/02/21/emitting-signposts-to-instruments-on-macos-using-cpp.html
+#if defined(USING_SIGNPOSTS)
+#   include <os/log.h>
+#   include <os/signpost.h>
+    os_log_t log_handle;
+    os_signpost_id_t signpost_id;
+#endif
+
 #include "mallocator.hpp"
 #include "stopwatch.hpp"
 #include "xproj.hpp"
@@ -68,47 +77,64 @@ unsigned Proj::_verbosity = 0;
 int my_rank = 0;
 int ntasks = 0;
 
-void output(string msg) {
-    if (my_rank == 0) {
-        cout << msg;
-    }
-}
+unsigned my_first_gene = 0;
+unsigned my_last_gene = 0;
 
 void output(format & fmt, unsigned level) {
-    if (my_rank == 0 && level <= Proj::_verbosity) {
+    if (my_rank == 0 && Proj::_verbosity > 0 && level <= Proj::_verbosity) {
         cout << str(fmt);
     }
 }
 
 void output(string msg, unsigned level) {
-    if (my_rank == 0 && level <= Proj::_verbosity) {
+    if (my_rank == 0 && Proj::_verbosity > 0 && level <= Proj::_verbosity) {
         cout << msg;
     }
 }
 #else
-void output(string msg) {
-    cout << msg;
-}
-
 void output(format & fmt, unsigned level) {
-    if (level <= Proj::_verbosity)
+    if (Proj::_verbosity > 0 && level <= Proj::_verbosity)
         cout << str(fmt);
 }
 
 void output(string msg, unsigned level) {
-    if (level <= Proj::_verbosity)
+    if (Proj::_verbosity > 0 && level <= Proj::_verbosity)
         cout << msg;
 }
 #endif
 
 #if defined(LOG_MEMORY)
-    ofstream memfile("allocs.txt");
+    char dummy_char;
+    ofstream memfile;
 #endif
 
 Lot                                 rng;
 StopWatch                           stopwatch;
 PartialStore                        ps;
 
+#if defined(LOG_MEMORY)
+vector<unsigned>                    Partial::_nconstructed;
+vector<unsigned>                    Partial::_ndestroyed;
+vector<unsigned>                    Partial::_max_in_use;
+vector<unsigned long>               Partial::_bytes_per_partial;
+unsigned                            Partial::_total_max_in_use  = 0;
+unsigned                            Partial::_total_max_bytes   = 0;
+unsigned                            Partial::_nstates           = 4;
+
+unsigned                            Epoch::_nconstructed        = 0;
+unsigned                            Epoch::_ndestroyed          = 0;
+unsigned                            Epoch::_max_in_use          = 0;
+unsigned                            Epoch::_bytes_base_epoch = (unsigned long)(
+    2*sizeof(int)               // _type, _gene
+    + sizeof(double)            // _height
+    + sizeof(bool)              // _valid
+    + sizeof(Node *)            // _coalescence_node
+    + 4*sizeof(set<unsigned>)   // _left_species, _right_species, _anc_species, _species
+    + sizeof(map<set<unsigned>, unsigned>)  // _lineage_counts
+);
+unsigned long                       Epoch::_max_bytes_any_epoch = Epoch::_bytes_base_epoch;
+#endif
+        
 unsigned                            Forest::_nstates            = 4;
 
 unsigned                            Forest::_ntaxa              = 0;
@@ -172,10 +198,21 @@ GeneticCode::genetic_code_definitions_t GeneticCode::_definitions = {
 };
 
 int main(int argc, const char * argv[]) {
+#if defined(USING_SIGNPOSTS)
+    log_handle  = os_log_create("edu.uconn.eeb.phylogeny", OS_LOG_CATEGORY_POINTS_OF_INTEREST);
+    signpost_id = os_signpost_id_generate(log_handle);
+    assert(signpost_id != OS_SIGNPOST_ID_INVALID);
+#endif
+
 #if defined(USING_MPI)
 	MPI_Init(NULL, NULL);
 	MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &ntasks);
+#   if defined(LOG_MEMORY)
+        memfile.open(str(format("allocs-%d.txt") % my_rank));
+#   endif
+#elif defined(LOG_MEMORY)
+    memfile.open("allocs.txt");
 #endif
 
     Proj proj;
@@ -187,15 +224,15 @@ int main(int argc, const char * argv[]) {
         sw.start();
         proj.run();
         double total_seconds = sw.stop();
-        output(str(format("\nTotal time: %.5f seconds\n") % total_seconds));
+        output(format("\nTotal time: %.5f seconds\n") % total_seconds, 1);
     }
     catch(std::exception & x) {
-        output(str(format("Exception: %s\n") % x.what()));
-        output("Aborted.\n");
+        output(format("Exception: %s\n") % x.what(), 2);
+        output("Aborted.\n", 2);
         normal_termination = false;
     }
     catch(...) {
-        output("Exception of unknown type!\n");
+        output("Exception of unknown type!\n", 2);
         normal_termination = false;
     }
     
@@ -207,6 +244,7 @@ int main(int argc, const char * argv[]) {
     if (normal_termination) {
         proj.memoryReport(memfile);
         ps.memoryReport(memfile);
+        Epoch::memoryReport(memfile);
     }
     memfile.close();
 #endif

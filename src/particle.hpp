@@ -1,5 +1,12 @@
 #pragma once
 
+#if defined(USING_MPI)
+extern int my_rank;
+extern int ntasks;
+extern unsigned my_first_gene;
+extern unsigned my_last_gene;
+#endif
+
 namespace proj {
 
     class SpeciesForest;
@@ -125,7 +132,11 @@ namespace proj {
         assert(Forest::_ngenes == newicks.size());
         _gene_forests.clear();
         _gene_forests.resize(Forest::_ngenes);
-        for (unsigned g = 0; g < Forest::_ngenes; g++) {
+#if defined(USING_MPI)
+        for (unsigned g = ::my_first_gene; g < ::my_last_gene; ++g) {
+#else
+        for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+#endif
             _gene_forests[g].setData(_data);
             _gene_forests[g].setGeneIndex(g);
 
@@ -145,6 +156,14 @@ namespace proj {
         _gene_forests.resize(Forest::_ngenes);
         _gene_forests[_gene_index].setData(_data);
         _gene_forests[_gene_index].setGeneIndex(_gene_index);
+
+        //temporary!
+        //cerr << "~~> Particle::resetGeneForest" << endl;
+        //cerr << str(format("~~>   _gene_index  = %d") % _gene_index) << endl;
+        //cerr << str(format("~~>   rank         = %d") % ::my_rank) << endl;
+        //cerr << str(format("~~>   first        = %d") % ::my_first_gene) << endl;
+        //cerr << str(format("~~>   last         = %d") % ::my_last_gene) << endl;
+
         _gene_forests[_gene_index].createTrivialForest();
     }
 
@@ -165,7 +184,11 @@ namespace proj {
         if (!append)
             _epochs.clear();
         
+#if defined(USING_MPI)
+        for (unsigned g = ::my_first_gene; g < ::my_last_gene; ++g) {
+#else
         for (unsigned g = 0; g < Forest::_ngenes; g++) {
+#endif
             auto & e = _gene_forests[g].digest();
             move(e.begin(), e.end(), inserter(_epochs, _epochs.end()));
         }
@@ -314,7 +337,8 @@ namespace proj {
         jsf.close();
     
     }
-    
+
+    //TODO: needs modification for MPI
     inline double Particle::debugSaveTreesAsJavascript(string fnprefix) const {
         // Should only be called on "species" particles
         assert(_gene_index == -1);
@@ -344,6 +368,8 @@ namespace proj {
         Forest::_theta = theta;
         
         double log_coal_like = 0.0;
+        
+        //TODO: needs modification for MPI
         for (unsigned g = 0; g < Forest::_ngenes; ++g) {
             log_coal_like += _species_forest.calcLogCoalescentLikelihood(_species_forest._epochs, g);
         }

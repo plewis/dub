@@ -781,7 +781,7 @@ namespace proj {
     
     inline void Forest::debugShow(const format & f) {
 #if defined(DEBUGGING)
-        output(str(f));
+        output(str(f), 2);
 #endif
     }
     
@@ -1113,7 +1113,7 @@ namespace proj {
         if (!_debug_coal_like)
             return;
             
-        output("\nEpochs:\n");
+        output("\nEpochs:\n", 2);
         for (auto & epoch : epochs) {
             double h = epoch._height;
             if (epoch.isInitEpoch()) {
@@ -1121,18 +1121,18 @@ namespace proj {
                 for (auto it = epoch._lineage_counts.begin(); it != epoch._lineage_counts.end(); it++)
                     oss << it->second << " ";
                 oss.seekp(-1, oss.cur); // Remove the trailing ' '
-                output(str(format("  %s%.9f: init gene tree %d (lineage counts: %s)\n") % (epoch._valid ? " " : "x") % h % epoch._gene % oss.str()));
+                output(format("  %s%.9f: init gene tree %d (lineage counts: %s)\n") % (epoch._valid ? " " : "x") % h % epoch._gene % oss.str(), 2);
             }
             else if (epoch.isCoalescentEpoch()) {
                 assert(epoch._species.size() > 0);
                 string species_set = Forest::speciesSetAsString(epoch._species);
-                output(str(format("  %s%.9f: coalescence in gene tree %d (species %s)\n") % (epoch._valid ? " " : "x") % h % epoch._gene % species_set));
+                output(format("  %s%.9f: coalescence in gene tree %d (species %s)\n") % (epoch._valid ? " " : "x") % h % epoch._gene % species_set, 2);
             }
             else {
                 assert(epoch._left_species.size() > 0);
                 assert(epoch._right_species.size() > 0);
                 assert(epoch._anc_species.size() > 0);
-                output(str(format("  %s%.9f: speciation event (%s,%s -> %s)") % (epoch._valid ? " " : "x") % h % epoch.leftSpeciesAsStr() % epoch.rightSpeciesAsStr() % epoch.ancSpeciesAsStr()));
+                output(format("  %s%.9f: speciation event (%s,%s -> %s)") % (epoch._valid ? " " : "x") % h % epoch.leftSpeciesAsStr() % epoch.rightSpeciesAsStr() % epoch.ancSpeciesAsStr(), 2);
             }
          }
 #endif
@@ -1162,8 +1162,8 @@ namespace proj {
     
     inline void Forest::debugShowNodeInfo(string title) {
 #if defined(DEBUGGING)
-        output(str(format("\nNode info: %s\n") % title));
-        output(str(format("%6s %12s %6s %10s %10s %6s %6s %6s %12s %12s\n") % "index" % "address" % "number" % "species" % "type" % "lchild" % "rsib" % "parent" % "height" % "brlen"));
+        output(format("\nNode info: %s\n") % title, 2);
+        output(format("%6s %12s %6s %10s %10s %6s %6s %6s %12s %12s\n") % "index" % "address" % "number" % "species" % "type" % "lchild" % "rsib" % "parent" % "height" % "brlen", 2);
         for (unsigned i = 0; i < _nodes.size(); ++i) {
             string memory_address = memoryAddressAsString((void *)&_nodes[i]);
             string type   = _nodes[i]._number == -1 ? "unused" : (_nodes[i]._left_child ? "internal" : "leaf");
@@ -1171,22 +1171,22 @@ namespace proj {
             string rsib   = _nodes[i]._right_sib ? to_string(_nodes[i]._right_sib->_number) : "null";
             string parent = _nodes[i]._parent ? to_string(_nodes[i]._parent->_number) : "null";
             string species_set = speciesSetAsString(_nodes[i]._species);
-            output(str(format("%6d %12s %6d %10s %10s %6s %6s %6s %12.5f %12.5f\n") % i % memory_address % _nodes[i]._number % species_set % type % lchild % rsib % parent % _nodes[i]._height % _nodes[i]._edge_length));
+            output(format("%6d %12s %6d %10s %10s %6s %6s %6s %12.5f %12.5f\n") % i % memory_address % _nodes[i]._number % species_set % type % lchild % rsib % parent % _nodes[i]._height % _nodes[i]._edge_length, 2);
         }
-        output("\n");
+        output("\n", 2);
 #endif
     }
 
     inline void Forest::debugShowNodePtrVector(Node::ptr_vect_t & v, string title) {
 #if defined(DEBUGGING)
-        output(str(format("\nNode::ptr_vect_t: %s\n") % title));
-        output(str(format("%6s %12s %6s %10s\n") % "index" % "address" % "number" % "species"));
+        output(format("\nNode::ptr_vect_t: %s\n") % title, 2);
+        output(format("%6s %12s %6s %10s\n") % "index" % "address" % "number" % "species", 2);
         for (unsigned i = 0; i < v.size(); ++i) {
             string memory_address = memoryAddressAsString((void *)&_nodes[i]);
             string species_set = speciesSetAsString(v[i]->getSpecies());
-            output(str(format("%6d %12s %6d %10s\n") % i % memory_address % v[i]->_number % species_set));
+            output(format("%6d %12s %6d %10s\n") % i % memory_address % v[i]->_number % species_set, 2);
         }
-        output("\n");
+        output("\n", 2);
 #endif
     }
 
@@ -1202,8 +1202,8 @@ namespace proj {
         //
 #if defined(DEBUG_COAL_LIKE)
         if (_debug_coal_like) {
-            output(str(format("\n*** Calculating log(coalescent likelihood) for gene %d\n") % gene));
-            output(str(format("***   theta = %.5f\n") % Forest::_theta));
+            output(format("\n*** Calculating log(coalescent likelihood) for gene %d\n") % gene, 2);
+            output(format("***   theta = %.5f\n") % Forest::_theta, 2);
         }
 #endif
 
@@ -1230,9 +1230,9 @@ namespace proj {
                 _counts_workspace = e._lineage_counts;
 #if defined(DEBUG_COAL_LIKE)
                 if (_debug_coal_like) {
-                    output(str(format("***   Init epoch for gene %d:\n") % e._gene));
-                    output("***     _counts_workspace:\n");
-                    output(Forest::lineageCountsMapToString(_counts_workspace));
+                    output(format("***   Init epoch for gene %d:\n") % e._gene, 2);
+                    output("***     _counts_workspace:\n", 2);
+                    output(Forest::lineageCountsMapToString(_counts_workspace), 2);
                 }
 #endif
                 continue;
@@ -1254,9 +1254,9 @@ namespace proj {
                         _counts_workspace.clear();
 #if defined(DEBUG_COAL_LIKE)
                         if (_debug_coal_like) {
-                            output(str(format("***   Dumping all %d remaining lineages into a single ancestal species because\n") % ncommonpool));
-                            output(str(format("***      we are building a species tree and the epoch height (%.9f)\n") % e._height));
-                            output(str(format("***      exceeds the forest height (%.9f)\n") % _forest_height));
+                            output(format("***   Dumping all %d remaining lineages into a single ancestal species because\n") % ncommonpool, 2);
+                            output(format("***      we are building a species tree and the epoch height (%.9f)\n") % e._height, 2);
+                            output(format("***      exceeds the forest height (%.9f)\n") % _forest_height, 2);
                         }
 #endif
                     }
@@ -1267,8 +1267,8 @@ namespace proj {
                     // height of the gene tree.
 #if defined(DEBUG_COAL_LIKE)
                     if (_debug_coal_like) {
-                        output(str(format("***   Stopping because we are building a gene tree and the epoch height (%.9f)\n") % e._height));
-                        output(str(format("***      exceeds forest height (%.9f)\n") % _forest_height));
+                        output(format("***   Stopping because we are building a gene tree and the epoch height (%.9f)\n") % e._height, 2);
+                        output(format("***      exceeds forest height (%.9f)\n") % _forest_height, 2);
                     }
 #endif
                     break;
@@ -1282,7 +1282,7 @@ namespace proj {
                 
 #if defined(DEBUG_COAL_LIKE)
             if (_debug_coal_like) {
-                output(str(format("***\n***   t = %.20f = %.20f - %.20f\n") % t % e._height % prev_height));
+                output(format("***\n***   t = %.20f = %.20f - %.20f\n") % t % e._height % prev_height, 2);
             }
 #endif
             if (e.isCoalescentEpoch()) {
@@ -1299,7 +1299,7 @@ namespace proj {
 #if defined(DEBUG_COAL_LIKE)
                 vector<string> lnLparts;
                 if (_debug_coal_like) {
-                    output(str(format("***   Coalescent event in gene %d, species %s, at height %.9f\n") % e._gene % e.speciesSetAsStr() % e._height));
+                    output(format("***   Coalescent event in gene %d, species %s, at height %.9f\n") % e._gene % e.speciesSetAsStr() % e._height, 2);
                 }
 #endif
                 
@@ -1330,7 +1330,7 @@ namespace proj {
 #if defined(DEBUG_COAL_LIKE)
                         if (_debug_coal_like) {
                             lnLparts.push_back(str(format("%.9f") % log_prob_no_coal));
-                            output(str(format("***     %.9f log prob no coal in gene %d, spp %s (%d lineages)\n") % log_prob_no_coal % gene % speciesSetAsString(it->first) % n));
+                            output(format("***     %.9f log prob no coal in gene %d, spp %s (%d lineages)\n") % log_prob_no_coal % gene % speciesSetAsString(it->first) % n, 2);
                         }
 #endif
                     }
@@ -1346,9 +1346,9 @@ namespace proj {
                 if (_debug_coal_like) {
                     lnLparts.push_back(str(format("%.9f") % log_prob_coal));
                     if (common_pool)
-                        output(str(format("***     %.9f log prob coal gene %d, common pool (%d lineages)\n") % log_prob_coal % gene % n));
+                        output(format("***     %.9f log prob coal gene %d, common pool (%d lineages)\n") % log_prob_coal % gene % n, 2);
                     else
-                        output(str(format("***     %.9f log prob coal gene %d, spp %s (%d lineages)\n") % log_prob_coal % gene % speciesSetAsString(e._species) % n));
+                        output(format("***     %.9f log prob coal gene %d, spp %s (%d lineages)\n") % log_prob_coal % gene % speciesSetAsString(e._species) % n, 2);
                 }
 #endif
                 
@@ -1370,7 +1370,7 @@ namespace proj {
                     --ncommonpool;
 #if defined(DEBUG_COAL_LIKE)
                     if (_debug_coal_like) {
-                        output(str(format("***     ncommonpool updated to: %d\n") % ncommonpool));
+                        output(format("***     ncommonpool updated to: %d\n") % ncommonpool, 2);
                     }
 #endif
                 }
@@ -1378,16 +1378,16 @@ namespace proj {
                     _counts_workspace[e._species] -= 1;
 #if defined(DEBUG_COAL_LIKE)
                     if (_debug_coal_like) {
-                        output("***     _counts_workspace updated to:\n");
-                        output(Forest::lineageCountsMapToString(_counts_workspace));
+                        output("***     _counts_workspace updated to:\n", 2);
+                        output(Forest::lineageCountsMapToString(_counts_workspace), 2);
                     }
 #endif
                 }
                 
 #if defined(DEBUG_COAL_LIKE)
                 if (_debug_coal_like) {
-                    output(str(format("***     %.9f lnL this epoch (=(%s))\n") % lnL % join(lnLparts, ")+(")));
-                    output(str(format("***     %.9f log_coal_like\n") % (log_coal_like + lnL)));
+                    output(format("***     %.9f lnL this epoch (=(%s))\n") % lnL % join(lnLparts, ")+("), 2);
+                    output(format("***     %.9f log_coal_like\n") % (log_coal_like + lnL), 2);
                 }
 #endif
                 log_coal_like += lnL;
@@ -1399,10 +1399,10 @@ namespace proj {
                 
 #if defined(DEBUG_COAL_LIKE)
                 if (_debug_coal_like) {
-                    output(str(format("***   Speciation event at height %.9f\n") % e._height));
-                    output(str(format("***      %s is the left species\n") % e.leftSpeciesAsStr()));
-                    output(str(format("***      %s is the right species\n") % e.rightSpeciesAsStr()));
-                    output(str(format("***      %s is the ancestral species\n") % e.ancSpeciesAsStr()));
+                    output(format("***   Speciation event at height %.9f\n") % e._height, 2);
+                    output(format("***      %s is the left species\n") % e.leftSpeciesAsStr(), 2);
+                    output(format("***      %s is the right species\n") % e.rightSpeciesAsStr(), 2);
+                    output(format("***      %s is the ancestral species\n") % e.ancSpeciesAsStr(), 2);
                 }
 #endif
                 // Calculate probability of no coalescence over time t
@@ -1428,10 +1428,10 @@ namespace proj {
                 _counts_workspace.erase(e._right_species);
 #if defined(DEBUG_COAL_LIKE)
                 if (_debug_coal_like) {
-                    output("***     _counts_workspace updated to:\n");
-                    output(Forest::lineageCountsMapToString(_counts_workspace));
-                    output(str(format("***   %.9f lnL this epoch\n") % lnL));
-                    output(str(format("***   %.9f log_coal_like\n") % (log_coal_like + lnL)));
+                    output("***     _counts_workspace updated to:\n", 2);
+                    output(Forest::lineageCountsMapToString(_counts_workspace), 2);
+                    output(format("***   %.9f lnL this epoch\n") % lnL, 2);
+                    output(format("***   %.9f log_coal_like\n") % (log_coal_like + lnL), 2);
                 }
 #endif
                 log_coal_like += lnL;

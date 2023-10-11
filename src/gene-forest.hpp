@@ -3,6 +3,13 @@
 extern proj::Lot rng;
 extern proj::PartialStore ps;
 
+#if defined(USING_MPI)
+extern int my_rank;
+extern int ntasks;
+extern unsigned my_first_gene;
+extern unsigned my_last_gene;
+#endif
+
 namespace proj {
 
     class Particle;
@@ -36,6 +43,8 @@ namespace proj {
             // Overrides of abstract base class functions
             void createTrivialForest(bool compute_partials = true);
             bool isSpeciesForest() const {return false;}
+            
+            static void clearLeafPartials();
             
             void operator=(const GeneForest & other);
             
@@ -74,7 +83,6 @@ namespace proj {
         // Return partials to PartialStore
         for (auto & nd : _nodes) {
             if (nd._partial) {
-                ps.stowPartial(nd._partial, _gene_index);
                 nd._partial.reset();
             }
         }
@@ -83,6 +91,13 @@ namespace proj {
         _lineages_within_species.clear();
     }
 
+    inline void GeneForest::clearLeafPartials() {
+        for (unsigned g = 0; g < _leaf_partials.size(); ++g) {
+            _leaf_partials[g].clear();
+        }
+        _leaf_partials.clear();
+    }
+    
     inline void GeneForest::setData(Data::SharedPtr d) {
         _data = d;
     }
@@ -186,9 +201,19 @@ namespace proj {
             _nodes[i]._species = {Forest::_taxon_to_species[taxon_name]};
             if (compute_partials) {
                 assert(_data);
+
+                //temporary!
+                //cerr << "~~> GeneForest::createTrivialForest" << endl;
+                //cerr << str(format("~~>   _gene_index                        = %d") % _gene_index) << endl;
+                //cerr << str(format("~~>   i (leaf index)                     = %d") % i) << endl;
+                //cerr << str(format("~~>   _leaf_partials.size()              = %d") % _leaf_partials.size()) << endl;
+                //cerr << str(format("~~>   _leaf_partials[_gene_index].size() = %d") % _leaf_partials.size()) << endl;
+                //cerr << str(format("~~>   rank                               = %d") % ::my_rank) << endl;
+                //cerr << str(format("~~>   first                              = %d") % ::my_first_gene) << endl;
+                //cerr << str(format("~~>   last                               = %d") % ::my_last_gene) << endl;
+
                 assert(_leaf_partials[_gene_index].size() > i);
-                _nodes[i]._partial = ps.getPartial(_gene_index);
-                (*_nodes[i]._partial) = (*_leaf_partials[_gene_index][i]);
+                _nodes[i]._partial = _leaf_partials[_gene_index][i];
             }
             _lineages.push_back(&_nodes[i]);
         }
@@ -301,10 +326,10 @@ namespace proj {
                 Data::state_t state = (Data::state_t)1 << s;
                 Data::state_t d = data_matrix[number][pp];
                 double result = state & d;
-                (*partial)[p*Forest::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
+                partial->_v[p*Forest::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
             }
             // Ensure that the _nstates partials add up to at least 1
-            assert(accumulate(partial->begin()+p*Forest::_nstates, partial->begin()+p*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
+            assert(accumulate(partial->_v.begin() + p*Forest::_nstates, partial->_v.begin() + p*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
         }
     }
     
@@ -379,10 +404,10 @@ namespace proj {
     }
 
     inline void GeneForest::calcPartialArray(Node * new_nd) {
-        auto & parent_partial_array = *(new_nd->_partial);
+        auto & parent_partial_array = new_nd->_partial->_v;
         unsigned npatterns = _data->getNumPatternsInSubset(_gene_index);
         for (Node * child = new_nd->_left_child; child; child = child->_right_sib) {
-            auto & child_partial_array = *(child->_partial);
+            auto & child_partial_array = child->_partial->_v;
 
             for (unsigned p = 0; p < npatterns; p++) {
 
@@ -474,7 +499,7 @@ namespace proj {
                 unsigned pp = first_pattern + p;
                 double site_like = 0.0;
                 for (unsigned s = 0; s < Forest::_nstates; s++) {
-                    double child_partial = (*nd->_partial)[p*Forest::_nstates+s];
+                    double child_partial = nd->_partial->_v[p*Forest::_nstates+s];
                     site_like += 0.25*child_partial;
                 }
                 
@@ -672,6 +697,7 @@ namespace proj {
             unsigned npairs = n*(n-1)/2;
             vector<double> log_weights;
             vector<pair<unsigned,unsigned> > pairs;
+
             vector<PartialStore::partial_t> partials(npairs);
             
             vector<double> log_likelihoods;
@@ -766,17 +792,12 @@ namespace proj {
                 //anc_node->_partial = ps.getPartial(_gene_index); //bug: just transfer existing, no need to allocate anew
                 assert(anc_node->_left_child);
                 assert(anc_node->_left_child->_right_sib);
+
                 anc_node->_partial = partials[which_pair];
                 partials[which_pair].reset();
-                            
-                // Store unused partials
-                for (unsigned p = 0; p < partials.size(); p++) {
-                    if (p != which_pair) {
-                        ps.stowPartial(partials[p], _gene_index);
-                        partials[p].reset();
-                    }
-                }
             }
+            
+            partials.clear();
             
             // Update lineage vector
             removeTwoAddOne(_lineages_within_species[s], first_node, second_node, anc_node);
@@ -829,9 +850,8 @@ namespace proj {
         _data = other._data;
         _gene_index = other._gene_index;
 
-        // Node _partial data members not copied in base class because
-        // partials are only relevant for gene forests (and gene index
-        // must be known
+        // Node _partial data members not copied in base class because partials are
+        // only relevant for gene forests (and gene index must be known)
         for (unsigned i = 0; i < other._nodes.size(); ++i) {
             // Find out whether this and other have partials
             bool this_partial_exists = (_nodes[i]._partial != nullptr);
@@ -839,32 +859,24 @@ namespace proj {
             
             if (this_partial_exists && other_partial_exists) {
                 // Sanity check: make sure _partials are both of the correct length
-                assert(other._nodes[i]._partial->size() == ps.getNElements(_gene_index));
-                assert(_nodes[i]._partial->size() == ps.getNElements(_gene_index));
+                assert(other._nodes[i]._partial->_v.size() == ps.getNElements(_gene_index));
                 
-                // OK to copy
-                *(_nodes[i]._partial)  = *(other._nodes[i]._partial);
+                _nodes[i]._partial.reset(); // should call stowPartial?
+                _nodes[i]._partial = other._nodes[i]._partial;
             }
             else if (this_partial_exists && !other_partial_exists) {
                 // Sanity check: make sure this _partial is of the correct length
-                assert(_nodes[i]._partial->size() == ps.getNElements(_gene_index));
-                
-                // OK to stow existing partial
-                ps.stowPartial(_nodes[i]._partial, _gene_index);
+                assert(_nodes[i]._partial->_v.size() == ps.getNElements(_gene_index));
                 
                 // OK to set partial to null
-                _nodes[i]._partial = nullptr;
+                _nodes[i]._partial.reset();
             }
             else if (other_partial_exists && !this_partial_exists) {
                 // Sanity check: make sure other _partial is of the correct length
-                assert(other._nodes[i]._partial->size() == ps.getNElements(_gene_index));
-                
-                // Grab a partial of the correct length
-                _nodes[i]._partial     = ps.getPartial(_gene_index);
-                assert(_nodes[i]._partial->size() == ps.getNElements(_gene_index));
+                assert(other._nodes[i]._partial->_v.size() == ps.getNElements(_gene_index));
                 
                 // OK to copy
-                *(_nodes[i]._partial)  = *(other._nodes[i]._partial);
+                _nodes[i]._partial = other._nodes[i]._partial;
             }
         }
         
@@ -874,6 +886,12 @@ namespace proj {
     }
     
     inline void GeneForest::computeLeafPartials(Data::SharedPtr data) {
+        //temporary!
+        //cerr << "~~> GeneForest::computeLeafPartials" << endl;
+        //cerr << str(format("~~> rank  = %d") % ::my_rank) << endl;
+        //cerr << str(format("~~> first = %d") % ::my_first_gene) << endl;
+        //cerr << str(format("~~> last  = %d") % ::my_last_gene) << endl;
+        
         assert(data);
         assert(_leaf_partials.size() == 0);
         assert(Forest::_ngenes > 0);
@@ -887,7 +905,11 @@ namespace proj {
         auto data_matrix = data->getDataMatrix();
 
         // Create vector of leaf partials
+#if defined(USING_MPI)
+        for (unsigned g = ::my_first_gene; g < ::my_last_gene; ++g) {
+#else
         for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+#endif
             // Get number of patterns and first pattern index for gene g
             unsigned npatterns = data->getNumPatternsInSubset(g);
             Data::begin_end_pair_t be = data->getSubsetBeginEnd(g);
@@ -897,11 +919,15 @@ namespace proj {
             // _leaf_partials is vector< vector<partial_t> >
             // _leaf_partials[g] is vector<partial_t>
             // _leaf_partials[g][t] is partial_t (i.e. shared pointer to partial array)
+
+            //temporary!
+            //cerr << str(format("allocating leaf partials for gene %g (rank %d, first = %d, last = %d\n") % g % ::my_rank % ::my_first_gene % ::my_last_gene);
+            
             _leaf_partials[g].resize(Forest::_ntaxa);
 
             for (unsigned t = 0; t < Forest::_ntaxa; ++t) {
                 PartialStore::partial_t partial_ptr = ps.getPartial(g);
-                vector<double> & leaf_partial = *partial_ptr;
+                vector<double> & leaf_partial = partial_ptr->_v;
                 
                 // Set each partial according to the observed data for leaf t
                 for (unsigned p = 0; p < npatterns; p++) {
@@ -914,7 +940,7 @@ namespace proj {
                     }
                     
                     // Ensure that the _nstates partials add up to at least 1
-                    assert(accumulate(partial_ptr->begin()+p*Forest::_nstates, partial_ptr->begin()+p*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
+                    assert(accumulate(partial_ptr->_v.begin() + p*Forest::_nstates, partial_ptr->_v.begin() + p*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
                 }
 
                 _leaf_partials[g][t] = partial_ptr;
@@ -934,12 +960,12 @@ namespace proj {
         for (auto & preorder : _preorders) {
             for (auto nd : boost::adaptors::reverse(preorder)) {
                 assert(nd->_partial == nullptr);
-                nd->_partial = ps.getPartial(_gene_index);
                 if (nd->_left_child) {
+                    nd->_partial = ps.getPartial(_gene_index);
                     calcPartialArray(nd);
                 }
                 else {
-                    *(nd->_partial) = *(_leaf_partials[_gene_index][nd->_number]);
+                    nd->_partial = _leaf_partials[_gene_index][nd->_number];
                 }
             }
         }

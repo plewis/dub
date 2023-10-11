@@ -1,8 +1,12 @@
 #pragma once
 
-extern void output(string msg);
 extern void output(string msg, unsigned level);
 extern void output(format & fmt, unsigned level);
+
+#if defined(USING_SIGNPOSTS)
+extern os_log_t log_handle;
+extern os_signpost_id_t signpost_id;
+#endif
 
 namespace proj {
 
@@ -262,6 +266,9 @@ namespace proj {
     }
 
     inline void Data::compressPatterns() {
+#if defined(USING_SIGNPOSTS)
+        os_signpost_event_emit(log_handle, signpost_id, "compressPatterns", "start");
+#endif
         // Perform sanity checks
         if (_data_matrix.empty())
             throw XProj("Attempted to compress an empty data matrix");
@@ -586,7 +593,7 @@ namespace proj {
 
         // Compress _data_matrix so that it holds only unique patterns (counts stored in _pattern_counts)
         if (_data_matrix.empty()) {
-            output(str(format("No data were stored from the file \"%s\"\n") % filename));
+            output(format("No data were stored from the file \"%s\"\n") % filename, 2);
             clear();
         }
         else {

@@ -2,179 +2,157 @@
 
 namespace proj {
 
+    struct Partial {
+        Partial(unsigned g, unsigned n);
+        ~Partial();
+        vector<double> _v;
+        unsigned _g;
+        
+#if defined(LOG_MEMORY)
+        static vector<unsigned> _nconstructed;
+        static vector<unsigned> _ndestroyed;
+        static vector<unsigned> _max_in_use;
+        static vector<unsigned long> _bytes_per_partial;
+        static unsigned _total_max_in_use;
+        static unsigned _total_max_bytes;
+        static unsigned _nstates;
+#endif
+    };
+
+    inline Partial::Partial(unsigned g, unsigned n) {
+        _g = g;
+        _v.resize(n);
+
+#if defined(LOG_MEMORY)
+        assert(g < _nconstructed.size());
+        _nconstructed[g]++;
+        
+        if (_nconstructed[g] -_ndestroyed[g] > _max_in_use[g]) {
+            _max_in_use[g] = _nconstructed[g] -_ndestroyed[g];
+        }
+        
+        _total_max_in_use = 0;
+        _total_max_bytes = 0;
+        for (unsigned g = 0; g < _nconstructed.size(); ++g) {
+            unsigned in_use = _nconstructed[g] -_ndestroyed[g];
+            _total_max_in_use += in_use;
+            _total_max_bytes = in_use*_bytes_per_partial[g];
+        }
+#endif
+    }
+    
+    inline Partial::~Partial() {
+#if defined(LOG_MEMORY)
+        _ndestroyed[_g]++;
+#endif
+    }
+
     class PartialStore {
     
         public:
                                     PartialStore();
                                     ~PartialStore();
                                     
-            typedef shared_ptr<vector<double> >  partial_t;
+            typedef shared_ptr<Partial>          partial_t;
+            
             typedef vector<partial_t>            vect_partial_t;
             typedef vector<vect_partial_t>       leaf_partials_t;
             typedef vector<vect_partial_t>       storage_t;
             
-            void       setNGenes(unsigned ngenes);
-            partial_t  getPartial(unsigned gene);
-            void       stowPartial(partial_t & p, unsigned gene);
-            void       setNElements(unsigned nelements, unsigned gene);
-            unsigned   getNElements(unsigned gene) const {return _nelements[gene];}
-            unsigned   getNAllocated(unsigned gene) const {return _nallocated[gene];}
+            void            setNGenes(unsigned ngenes);
+            partial_t       getPartial(unsigned gene);
+            void            setNElements(unsigned nelements, unsigned gene);
+            unsigned        getNElements(unsigned gene) const {return _nelements[gene];}
             
-            void           memoryReport(ofstream & memf) const;
-            unsigned long  getTotalBytesAllocated() const;
-            
-#if defined(DEBUG_PARTIAL_STORE)
-            void       showStorage(unsigned gene);
-            void       history(string message);
+#if defined(LOG_MEMORY)
+            void            memoryReport(ofstream & memf) const;
 #endif
             
         private:
         
             vector<unsigned> _nelements;
             storage_t        _storage;
-            vector<unsigned> _nallocated;
     };
 
     inline PartialStore::PartialStore() {
-#if defined(DEBUG_PARTIAL_STORE)
-        history("Created PartialStore object.");
-#endif
     }
 
     inline PartialStore::~PartialStore() {
         _nelements.clear();
-        _nallocated.clear();
         _storage.clear();
-        
-#if defined(DEBUG_PARTIAL_STORE)
-        history("Destroyed PartialStore object.");
-#endif
     }
     
-#if defined(DEBUG_PARTIAL_STORE)
-    inline void PartialStore::history(string message) {
-        ofstream histf("pshistory.txt", ios::out | ios::app);
-        histf << message << endl;
-        histf.close();
-    }
-#endif
-
     inline void PartialStore::setNGenes(unsigned ngenes) {
         // Should be called before any partials are stored
         assert(_nelements.empty());
-        assert(_nallocated.empty());
         assert(_storage.empty());
         
         // Resize both containers
         _nelements.resize(ngenes);
-        _nallocated.resize(ngenes, 0);
-        _storage.resize(ngenes);
         
-#if defined(DEBUG_PARTIAL_STORE)
-        history(str(format("Setting number of genes to %d") % ngenes));
+#if defined(LOG_MEMORY)
+        Partial::_nconstructed.clear();
+        Partial::_nconstructed.resize(ngenes, 0);
+        Partial::_ndestroyed.clear();
+        Partial::_ndestroyed.resize(ngenes, 0);
+        Partial::_max_in_use.clear();
+        Partial::_max_in_use.resize(ngenes, 0);
+        Partial::_bytes_per_partial.clear();
+        Partial::_bytes_per_partial.resize(ngenes, 0);
 #endif
     }
 
     inline void PartialStore::setNElements(unsigned nelements, unsigned gene) {
         assert(_nelements.size() > gene);
         _nelements[gene] = nelements;
-        
-#if defined(DEBUG_PARTIAL_STORE)
-        history(str(format("Setting number of elements for gene %d to %d") % gene % nelements));
+#if defined(LOG_MEMORY)
+        Partial::_bytes_per_partial[gene] = (unsigned)nelements*sizeof(double);
 #endif
     }
 
     inline PartialStore::partial_t PartialStore::getPartial(unsigned gene) {
         assert(_nelements.size() > gene);
-        assert(_nallocated.size() > gene);
-        assert(_storage.size() > gene);
         assert(_nelements[gene] > 0);
-        if (_storage[gene].size() > 0) {
-            partial_t last = _storage[gene].back();
-            _storage[gene].pop_back();
-#if defined(DEBUG_PARTIAL_STORE)
-            ostringstream memory_address;
-            memory_address << last.get();
-            history(str(format("Popping partial %s (%d)") % memory_address.str() % last.use_count()));
-#endif
-            // //temporary!
-            //cerr << str(format("~~~> using stored partial for gene %d\n") % gene);
-
-            return last;
-        }
-        else {
-            partial_t ptr = partial_t(new vector<double>(_nelements[gene]));
-            _nallocated[gene]++;
-#if defined(DEBUG_PARTIAL_STORE)
-            ostringstream memory_address;
-            memory_address << ptr.get();
-            history(str(format("Allocating partial %s (%d)") % memory_address.str() % ptr.use_count()));
-#endif
-
-            // //temporary!
-            //cerr << str(format("~~~> allocating new partial for gene %d\n") % gene);
-
-            return ptr;
-        }
+        partial_t ptr = partial_t(new Partial(gene, _nelements[gene]));
+        return ptr;
     }
     
-    inline void PartialStore::stowPartial(partial_t & p, unsigned gene) {
-        assert(_storage.size() > gene);
-        fill(p->begin(), p->end(), 0.0);
-        
-#if defined(DEBUG_PARTIAL_STORE)
-        ostringstream memory_address;
-        memory_address << p.get();
-        history(str(format("Pushing partial %s (%d)") % memory_address.str() % p.use_count()));
-#endif
-
-        // //temporary!
-        //cerr << str(format("~~~> stowing partial for gene %d\n") % gene);
-
-        _storage[gene].push_back(p);
-    }
-    
-#if defined(DEBUG_PARTIAL_STORE)
-    inline void PartialStore::showStorage(unsigned gene) {
-        history(str(format("Storage for gene %d") % gene));
-        for (unsigned i = 0; i < _storage[gene].size(); ++i) {
-            ostringstream memory_address;
-            memory_address << _storage[gene][i].get();
-            history(str(format("  stored partial %s (%d)") % memory_address.str() % _storage[gene][i].use_count()));
-        }
-    }
-#endif
-
-    inline unsigned long PartialStore::getTotalBytesAllocated() const {
-        unsigned long total_bytes = 0L;
-        for (unsigned g = 0; g < _nallocated.size(); ++g) {
-            total_bytes += _nelements[g]*_nallocated[g];
-        }
-        return total_bytes;
-    }
-    
+#if defined(LOG_MEMORY)
     inline void PartialStore::memoryReport(ofstream & memf) const {
         memf << "\nPartialStore memory report:\n\n";
-        memf << str(format("  %12s %12s %12s %12s %12s %12s\n") %         "gene" %         "size" %       "in use" %       "stored" %        "total" %        "bytes");
+        memf << "Note: one partial is computed for each leaf and simply copied when\n";
+        memf << "      trivial gene forests are created. Thus, the upper bound for the\n";
+        memf << "      number of partials needed is (nleaves - 1)*nparticles + nleaves\n\n";
+        memf << str(format("  %12s %12s %12s %12s %12s %12s\n") %         "gene" %        "bytes" %    "allocated" %       "in use" %   "max in use" %    "max bytes");
         memf << str(format("  %12s %12s %12s %12s %12s %12s\n") % " -----------" % " -----------" % " -----------" % " -----------" % " -----------" % " -----------");
-        unsigned long total_bytes = 0L;
-        unsigned total_in_use = 0;
-        unsigned total_stored = 0;
         unsigned total_allocated = 0;
-        for (unsigned g = 0; g < _nallocated.size(); ++g) {
-            unsigned long nbytes = _nelements[g]*_nallocated[g];
-            unsigned nallocated = _nallocated[g];
+        unsigned total_in_use = 0;
+        unsigned total_max_in_use = 0;
+        unsigned long total_max_nbytes = 0L;
+        unsigned ngenes = (unsigned)Partial::_nconstructed.size();
+        for (unsigned g = 0; g < ngenes; ++g) {
+            unsigned nallocated = Partial::_nconstructed[g];
             total_allocated += nallocated;
-            unsigned nstored = (unsigned)_storage[g].size();
-            total_stored += nstored;
-            unsigned in_use = nallocated - nstored;
+            
+            unsigned in_use = Partial::_nconstructed[g] - Partial::_ndestroyed[g];
             total_in_use += in_use;
-            memf << str(format("  %12d %12d %12d %12d %12d %12d\n") % g % _nelements[g] % in_use % nstored % nallocated % nbytes);
-            total_bytes += nbytes;
+
+            unsigned max_in_use = Partial::_max_in_use[g];
+            total_max_in_use += max_in_use;
+
+            unsigned long max_nbytes = _nelements[g]*max_in_use*sizeof(double);
+            total_max_nbytes += max_nbytes;
+            
+            unsigned bytes_each = _nelements[g]*sizeof(double);
+            
+            memf << str(format("  %12d %12d %12d %12d %12d %12d\n") % g % bytes_each % nallocated % in_use % max_in_use % max_nbytes);
         }
         memf << str(format("  %12s %12s %12s %12s %12s %12s\n") % " -----------" % " -----------" % " -----------" % " -----------" % " -----------" % " -----------");
-        memf << str(format("  %12s %12s %12s %12d %12d %12d\n") % " " % " " % total_in_use % total_stored % total_allocated % total_bytes);
-        memf << str(format("  Total megabytes: %.5f\n") % (1.0*total_bytes/1048576));
+        memf << str(format("  %12s %12s %12s %12d %12d %12d\n") % " " % " " % total_allocated % total_in_use % total_max_in_use % total_max_nbytes);
+        memf << str(format("  Total megabytes: %.5f\n") % (1.0*total_max_nbytes/1048576));
+        memf << str(format("\n  %12d Maximum partials in use at any one time over all genes\n") % Partial::_total_max_in_use);
+        memf << str(format("  %12d Maximum bytes in use by partials at any one time over all genes\n") % Partial::_total_max_bytes);
     }
+#endif
     
  }
