@@ -31,7 +31,8 @@ namespace proj {
             
             double getLastLogLikelihood() const {return _prev_log_likelihood;}
             double calcLogLikelihood() const;
-            static void computeLeafPartials(Data::SharedPtr data);
+            static void computeLeafPartials(unsigned gene, Data::SharedPtr data);
+            static void releaseLeafPartials(unsigned gene);
             
 #if defined(SAVE_PARAMS_FOR_LORAD)
             void saveParamsForLoRaD(vector<string> & params, vector<string> & splits);
@@ -797,11 +798,21 @@ namespace proj {
                 partials[which_pair].reset();
             }
             
+            // Clear the temporary partials vector
             partials.clear();
+            
+            // Clear partials for first_node and second_node as they will no longer be needed
+            first_node->_partial.reset();
+            second_node->_partial.reset();
             
             // Update lineage vector
             removeTwoAddOne(_lineages_within_species[s], first_node, second_node, anc_node);
             removeTwoAddOne(_lineages, first_node, second_node, anc_node);
+            
+            // Clear partial for final lineage if we are down to just one
+            if (_lineages.size() == 1) {
+                anc_node->_partial.reset();
+            }
             
             // Create entry in _epochs for this coalescent event
             updateLineageCountsVector(species_lineage_counts);
@@ -885,13 +896,57 @@ namespace proj {
         // every time it is used
     }
     
-    inline void GeneForest::computeLeafPartials(Data::SharedPtr data) {
-        //temporary!
-        //cerr << "~~> GeneForest::computeLeafPartials" << endl;
-        //cerr << str(format("~~> rank  = %d") % ::my_rank) << endl;
-        //cerr << str(format("~~> first = %d") % ::my_first_gene) << endl;
-        //cerr << str(format("~~> last  = %d") % ::my_last_gene) << endl;
+    inline void GeneForest::releaseLeafPartials(unsigned gene) {
+        assert(_leaf_partials.size() == Forest::_ngenes);
+        _leaf_partials[gene].clear();
+    }
+    
+#if 1
+    inline void GeneForest::computeLeafPartials(unsigned gene, Data::SharedPtr data) {
+        assert(data);
+        assert(_leaf_partials.size() == 0 || _leaf_partials.size() == Forest::_ngenes);
+        assert(Forest::_ngenes > 0);
+        assert(Forest::_ntaxa > 0);
+        assert(Forest::_nstates == 4);
         
+        // Allocate a vector of leaf partials for each gene
+        _leaf_partials.resize(Forest::_ngenes);
+                
+        // Get reference to raw data matrix, which is a vector of vector<state_t>
+        auto data_matrix = data->getDataMatrix();
+
+        // Create vector of leaf partials
+        
+        // Get number of patterns and first pattern index for gene g
+        unsigned npatterns = data->getNumPatternsInSubset(gene);
+        Data::begin_end_pair_t be = data->getSubsetBeginEnd(gene);
+        unsigned first_pattern = be.first;
+        
+        _leaf_partials[gene].resize(Forest::_ntaxa);
+
+        for (unsigned t = 0; t < Forest::_ntaxa; ++t) {
+            PartialStore::partial_t partial_ptr = ps.getPartial(gene);
+            vector<double> & leaf_partial = partial_ptr->_v;
+            
+            // Set each partial according to the observed data for leaf t
+            for (unsigned p = 0; p < npatterns; p++) {
+                unsigned pp = first_pattern + p;
+                for (unsigned s = 0; s < Forest::_nstates; s++) {
+                    Data::state_t state = (Data::state_t)1 << s;
+                    Data::state_t d = data_matrix[t][pp];
+                    double result = state & d;
+                    leaf_partial[p*Forest::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
+                }
+                
+                // Ensure that the _nstates partials add up to at least 1
+                assert(accumulate(partial_ptr->_v.begin() + p*Forest::_nstates, partial_ptr->_v.begin() + p*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
+            }
+
+            _leaf_partials[gene][t] = partial_ptr;
+        }
+    }
+#else
+    inline void GeneForest::computeLeafPartials(Data::SharedPtr data) {
         assert(data);
         assert(_leaf_partials.size() == 0);
         assert(Forest::_ngenes > 0);
@@ -947,7 +1002,8 @@ namespace proj {
             }
         }
     }
-        
+#endif
+
     inline void GeneForest::computeAllPartials() {
         // Assumes _leaf_partials have been computed but that every node in the tree
         // has _partial equal to nullptr.

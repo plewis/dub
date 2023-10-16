@@ -65,6 +65,7 @@ namespace proj {
             unsigned        getNElements(unsigned gene) const {return _nelements[gene];}
             
 #if defined(LOG_MEMORY)
+            unsigned        getInUse();
             void            memoryReport(ofstream & memf) const;
 #endif
             
@@ -82,6 +83,18 @@ namespace proj {
         _storage.clear();
     }
     
+#if defined(LOG_MEMORY)
+    inline unsigned PartialStore::getInUse() {
+        unsigned total_in_use = 0;
+        unsigned ngenes = (unsigned)Partial::_nconstructed.size();
+        for (unsigned g = 0; g < ngenes; ++g) {
+            unsigned in_use = Partial::_nconstructed[g] - Partial::_ndestroyed[g];
+            total_in_use += in_use;
+        }
+        return total_in_use;
+    }
+#endif
+
     inline void PartialStore::setNGenes(unsigned ngenes) {
         // Should be called before any partials are stored
         assert(_nelements.empty());

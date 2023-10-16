@@ -1,5 +1,5 @@
 SRCDIR		= .
-O		    = o
+O		= o
 CC		= mpic++
 CLINKER		= mpic++
 CFLAGS		= -std=c++11 
@@ -9,19 +9,19 @@ LIBS            = $(LIBDIR)/libboost_filesystem.a $(LIBDIR)/libboost_system.a $(
 OPTF		= -O3
 DEFINES         = -DUSING_MPI
 MATHLIB		= -lm
-EXECS		= dubmpi
+EXECS		= amdmpi
 OBJS		= main.o
 
-default: dubmpi
+default: amdmpi
 
 all: $(EXECS)
 
-dubmpi: main.o proj.hpp
-	$(CLINKER) $(CFLAGS) -L$(LIBDIR) -o dubmpi $(OBJS) -lm $(LIBS)
+amdmpi: main.o proj.hpp
+	$(CLINKER) $(CFLAGS) -L$(LIBDIR) -o amdmpi $(OBJS) -lm $(LIBS)
 	rm main.o
-	mv dubmpi ..
+	mv amdmpi ..
 
 main.o: $(SRCDIR)/main.cpp
-	$(CC) $(CFLAGS) $(INCLUDES) $(OPTF) $(DEFINES)-c $(SRCDIR)/main.cpp
+	$(CC) $(CFLAGS) $(INCLUDES) $(OPTF) $(DEFINES) -c $(SRCDIR)/main.cpp
 
 FORCE:

@@ -18,7 +18,7 @@ all: $(EXECS)
 dubser: main.o proj.hpp
 	$(CLINKER) $(CFLAGS) -L$(LIBDIR) -o dubser $(OBJS) -lm $(LIBS)
 	rm main.o
-	mv dubser ../sertest
+	mv dubser ..
 
 main.o: $(SRCDIR)/main.cpp
 	$(CC) $(CFLAGS) $(INCLUDES) $(OPTF) -c $(SRCDIR)/main.cpp

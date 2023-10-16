@@ -13,8 +13,9 @@
 
 //#define LOG_MEMORY
 //#define USING_SIGNPOSTS
-#define USING_MPI
+//#define USING_MPI
 //#define ENABLE_PAUSE
+#define PLOT_MULTIPLE_TRY_UPDATES
 
 #if defined(USING_MPI)
 #   include <mpi.h>
