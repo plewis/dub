@@ -1,27 +1,27 @@
 SRCDIR		= .
 O		    = o
-CC		    = /usr/local/bin/mpic++
-CLINKER		= /usr/local/bin/mpic++
-CFLAGS		= -std=c++11 
-INCLUDES    = -I/Users/plewis/Documents/software/libraries/boost_1_73_0 -I/Users/plewis/Documents/software/libraries/ncl-2.1.18
-LIBDIR      = /Users/plewis/lib/static
+CC		    = mpic++
+CLINKER		= mpic++
+CFLAGS		= -std=c++11
+INCLUDES    = -I/home/pol02003/boost_1_72_0 -I/home/pol02003/ncl-2.1.18
+LIBDIR      = /home/pol02003/lib/static
 LIBS        = $(LIBDIR)/libboost_filesystem.a $(LIBDIR)/libboost_system.a $(LIBDIR)/libboost_program_options.a $(LIBDIR)/libncl.a
 OPTF		= -O3
+DEFINES     = -DUSING_MPI
 MATHLIB		= -lm
-EXECS		= mpipversion
+EXECS		= dubmpi
 OBJS		= main.o
 
-default: mpipversion
+default: dubmpi
 
 all: $(EXECS)
 
-mpipversion: FORCE
-	$(MAKE) dubmpi
-
 dubmpi: main.o proj.hpp
 	$(CLINKER) $(CFLAGS) -L$(LIBDIR) -o dubmpi $(OBJS) -lm $(LIBS)
+	rm main.o
+	mv dubmpi ..
 
 main.o: $(SRCDIR)/main.cpp
-	$(CC) $(CFLAGS) $(INCLUDES) $(OPTF) -c $(SRCDIR)/main.cpp
+	$(CC) $(CFLAGS) $(INCLUDES) $(OPTF) $(DEFINES)-c $(SRCDIR)/main.cpp
 
 FORCE:

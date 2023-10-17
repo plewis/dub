@@ -2,7 +2,7 @@ SRCDIR		= .
 O		    = o
 CC		    = g++
 CLINKER		= g++
-CFLAGS		= -std=c++11 
+CFLAGS		= -std=c++11
 INCLUDES    = -I/home/pol02003/boost_1_72_0 -I/home/pol02003/ncl-2.1.18
 LIBDIR      = /home/pol02003/lib/static
 LIBS        = $(LIBDIR)/libboost_filesystem.a $(LIBDIR)/libboost_system.a $(LIBDIR)/libboost_program_options.a $(LIBDIR)/libncl.a

@@ -141,6 +141,9 @@ namespace proj {
                         
             double                      _theta_delta;
             double                      _lambda_delta;
+            
+            double                      _ntries_theta;
+            double                      _ntries_lambda;
 
             vector<vect_particle_t>     _gene_particles;
             vect_particle_t             _species_particles;
@@ -194,6 +197,9 @@ namespace proj {
         
         _theta_delta = 1.0;
         _lambda_delta = 20.0;
+        
+        _ntries_theta = 100;
+        _ntries_lambda = 100;
     }
 
     inline void Proj::processCommandLineOptions(int argc, const char * argv[]) {
@@ -221,6 +227,8 @@ namespace proj {
         ("lambda",  value(&_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
         ("thetapriormean",  value(&Forest::_theta_prior_mean)->default_value(0.05), "mean of exponential prior for theta")
         ("lambdapriormean",  value(&Forest::_lambda_prior_mean)->default_value(1.0), "mean of exponential prior for lambda")
+        ("ntriestheta",  value(&_ntries_theta)->default_value(100), "number of multiple-try Metropolis trials when updating theta")
+        ("ntrieslambda",  value(&_ntries_lambda)->default_value(100), "number of multiple-try Metropolis trials when updating lambda")
         ("thetadelta",  value(&_theta_delta)->default_value(1.0), "mean of exponential prior for theta")
         ("lambdadelta",  value(&_lambda_delta)->default_value(20.0), "mean of exponential prior for lambda")
         ("updatetheta",  value(&Forest::_update_theta)->default_value(true), "if yes, update theta at the end of each iteration")
@@ -414,13 +422,6 @@ namespace proj {
         
         output(format("\n  Initializing %d particles for gene %d...\n") % _gene_nparticles % gene, 2);
 
-        //temporary!
-        //cerr << "~~> Proj::initializeGeneParticles" << endl;
-        //cerr << str(format("~~>   gene  = %d") % gene) << endl;
-        //cerr << str(format("~~>   rank  = %d") % ::my_rank) << endl;
-        //cerr << str(format("~~>   first = %d") % ::my_first_gene) << endl;
-        //cerr << str(format("~~>   last  = %d") % ::my_last_gene) << endl;
-
         clearGeneParticles(gene);
         _gene_particles.resize(Forest::_ngenes);
         _gene_particles[gene].resize(_gene_nparticles);
@@ -436,8 +437,10 @@ namespace proj {
         _template_particle.clear();
         _template_particle.setGeneIndex(gene);
         _template_particle.setData(_data);
-        _template_particle.initSpeciesForest(_starting_species_newick);
-        _template_particle.digestSpeciesTree(/*append*/false);
+        if (_starting_species_newick.size() > 0) {
+            _template_particle.initSpeciesForest(_starting_species_newick);
+            _template_particle.digestSpeciesTree(/*append*/false);
+        }
         _template_particle.resetGeneForest();
         _template_particle.sortEpochs();
         
@@ -639,7 +642,7 @@ namespace proj {
         }
         else {
             // Just finished updating species tree, so update theta before next round
-            updateTheta(_template_particle, 100, 0.5);
+            updateTheta(_template_particle, _ntries_theta, 0.5);
             
             // Prepare for growing gene forests
             _template_particle.resetGeneForests();
@@ -662,7 +665,9 @@ namespace proj {
     }
     
     inline void Proj::growGeneTrees(unsigned iter, unsigned gene) {
-        // Grows forests for the given gene conditional on the species tree stored in each particle
+        // Grows forests for the given gene. If iter == 0, gene forests do not condition
+        // on a species tree; later iterations are conditional on the species tree stored
+        // in each particle.
         // Assumes gene forests are trivial and species forest has been digested into epochs
 
         //output(format("\nGrowing forests for gene %d (%s)...\n") % gene % Forest::_gene_names[gene], 2);
@@ -1660,7 +1665,7 @@ namespace proj {
                 // Make a list of genes that we haven't heard from yet
                 list<unsigned> outstanding;
                 for (unsigned rank = 1; rank < ntasks; ++rank) {
-                    for (unsigned g = ::my_first_gene; g < ::my_last_gene; ++g) {
+                    for (unsigned g = _mpi_first_gene[rank]; g < _mpi_last_gene[rank]; ++g) {
                         outstanding.push_back(g);
                     }
                 }
@@ -1723,10 +1728,10 @@ namespace proj {
                 }
                 
                 // Update theta
-                updateTheta(iter, chosen_particle, 100, _theta_delta);
+                updateTheta(iter, chosen_particle, _ntries_theta, _theta_delta);
             
                 // Update lambda
-                updateLambda(iter, chosen_particle, 100, _lambda_delta);
+                updateLambda(iter, chosen_particle, _ntries_lambda, _lambda_delta);
             
                 if (_verbosity > 1 || last_iter) {
                     // Report log-likelihood of current parameter values
@@ -1798,7 +1803,7 @@ namespace proj {
     }
 #else   // not MPI
     inline void Proj::runRandom() {
-        drawStartingSpeciesTree();
+        //drawStartingSpeciesTree();
         for (unsigned iter = 0; iter < _niter; ++iter) {
             bool last_iter = (iter == _niter - 1);
             stopwatch.start();
@@ -1841,10 +1846,10 @@ namespace proj {
             os_signpost_event_emit(log_handle, signpost_id, "Proj::run", "Update theta and lambda");
 #endif
             // Update theta
-            updateTheta(iter, chosen_particle, 100, _theta_delta);
+            updateTheta(iter, chosen_particle, _ntries_theta, _theta_delta);
             
             // Update lambda
-            updateLambda(iter, chosen_particle, 100, _lambda_delta);
+            updateLambda(iter, chosen_particle, _ntries_lambda, _lambda_delta);
             
             if (_verbosity > 1 || last_iter) {
                 // Report log-likelihood of current parameter values

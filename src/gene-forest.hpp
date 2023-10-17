@@ -51,13 +51,13 @@ namespace proj {
             
         protected:
                   
-            Epoch & createInitEpoch();
+            Epoch & createInitEpoch(bool ancestral_species_only);
             epoch_list_t & digest();
             double calcTransitionProbability(unsigned from, unsigned to, double edge_length);
             void debugComputeLeafPartials(unsigned gene, int number, PartialStore::partial_t partial);
             void calcPartialArray(Node * new_nd);
             void computeAllPartials();
-            void initSpeciesLineageCountsVector(Epoch::lineage_counts_t & species_lineage_counts) const;
+            void initSpeciesLineageCountsVector(Epoch::lineage_counts_t & species_lineage_counts, bool ancestral_species_only) const;
             void buildLineagesWithinSpeciesMap();
             double computeCoalRatesForSpecies(vector<Node::species_t> & species, vector<double> & rates);
             void updateLineageCountsVector(Epoch::lineage_counts_t & slc);
@@ -227,14 +227,14 @@ namespace proj {
         _prev_log_coalescent_likelihood = 0.0;
     }
     
-    inline Epoch & GeneForest::createInitEpoch() {
+    inline Epoch & GeneForest::createInitEpoch(bool ancestral_species_only) {
         // Create an init entry in _epochs for this gene that just stores the starting
         // species_lineage_counts vector
         refreshAllPreorders();
 
         Epoch iepoch(Epoch::init_epoch, -1.0);
         iepoch._gene = _gene_index;
-        initSpeciesLineageCountsVector(iepoch._lineage_counts);
+        initSpeciesLineageCountsVector(iepoch._lineage_counts, ancestral_species_only);
         auto it = pushFrontEpoch(_epochs, iepoch);
         
         return *it;
@@ -256,7 +256,7 @@ namespace proj {
         // will have 3 + 2 = 5 elements and only the first 3 will have non-zero
         // counts upon initialization. E.g. [2,3,2,0,0]. This says that species
         // 0 has 2 lineages, species 1 has 3 lineages, and species 2 has 2 lineages.
-        Epoch & init_epoch = createInitEpoch();
+        Epoch & init_epoch = createInitEpoch(/*ancestral_species_only*/false);
         Epoch::lineage_counts_t species_lineage_counts = init_epoch._lineage_counts;
 
         // Record coalescent events in the gene forest using a post-order
@@ -523,7 +523,7 @@ namespace proj {
         }
     }
     
-    inline void GeneForest::initSpeciesLineageCountsVector(Epoch::lineage_counts_t & species_lineage_counts) const {
+    inline void GeneForest::initSpeciesLineageCountsVector(Epoch::lineage_counts_t & species_lineage_counts, bool ancestral_species_only) const {
         // Assumes _preorders is up-to-date.
         // Assumes forest is trivial.
         // Assumes every leaf node is assigned to the correct species
@@ -533,25 +533,46 @@ namespace proj {
         //species_lineage_counts.resize(sz);
         //species_lineage_counts.assign(sz, 0);
         
-        // Start out each species with count of zero
-        species_lineage_counts.clear();
-        for (unsigned i = 0; i < Forest::_nspecies; i++) {
-            Node::species_t s = {i};
-            species_lineage_counts[s] = 0;
-        }
-        
-        for (auto preorder : _preorders) {
-            for (auto nd : preorder) {
-                if (!nd->_left_child) {
-                    if (nd->_species.size() > 1) {
-                        // Leaf nodes are supposed to belong to single species
-                        // so if _species_set includes more than one species,
-                        // then this must be left over from when the gene forest
-                        // was built conditional on a previous species tree
-                        unsigned spp = Forest::_taxon_to_species[nd->_name];
-                        nd->setSpeciesFromUnsigned(spp);
+        if (ancestral_species_only) {
+            // All taxa begin in the ancestral species
+            // Used when there is not yet a species tree to condition on
+            species_lineage_counts.clear();
+            Node::species_t s;
+            for (unsigned i = 0; i < Forest::_nspecies; i++) {
+                s.insert(i);
+            }
+            species_lineage_counts[s] = Forest::_ntaxa;
+            
+            for (auto preorder : _preorders) {
+                for (auto nd : preorder) {
+                    if (!nd->_left_child) {
+                        // Set all tip nodes to the ancestral species s
+                        nd->setSpecies(s);
                     }
-                    species_lineage_counts[nd->getSpecies()]++;
+                }
+            }
+        }
+        else {
+            // Start out each species with count of zero
+            species_lineage_counts.clear();
+            for (unsigned i = 0; i < Forest::_nspecies; i++) {
+                Node::species_t s = {i};
+                species_lineage_counts[s] = 0;
+            }
+        
+            for (auto preorder : _preorders) {
+                for (auto nd : preorder) {
+                    if (!nd->_left_child) {
+                        if (nd->_species.size() > 1) {
+                            // Leaf nodes are supposed to belong to single species
+                            // so if _species_set includes more than one species,
+                            // then this must be left over from when the gene forest
+                            // was built conditional on a previous species tree
+                            unsigned spp = Forest::_taxon_to_species[nd->_name];
+                            nd->setSpeciesFromUnsigned(spp);
+                        }
+                        species_lineage_counts[nd->getSpecies()]++;
+                    }
                 }
             }
         }
@@ -562,7 +583,7 @@ namespace proj {
         //setData(_data);
         setGeneIndex(gene);
         copyEpochsFrom(epochs);
-        createInitEpoch();
+        createInitEpoch(/*ancestral_species_only*/false);
         resetAllEpochs(_epochs);
         debugShowEpochs(_epochs);
         
@@ -632,7 +653,7 @@ namespace proj {
         // Build _lineages_within_species, a map that provides a vector
         // of Node pointers for each species
         buildLineagesWithinSpeciesMap();
-        
+
         debugShowEpochs(_epochs);
         
         // Get iterator (sit) to next speciation epoch

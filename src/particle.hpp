@@ -226,7 +226,7 @@ namespace proj {
         if (step == 0) {
             // Each gene forest gets a copy of the species tree epochs
             gf.copyEpochsFrom(_epochs);
-            gf.createInitEpoch();
+            gf.createInitEpoch(/*ancestral_species_only*/_epochs.size() == 0 ? true : false);
             resetAllEpochs(gf._epochs);
         }
         bool coalescent_event = false;

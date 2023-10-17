@@ -155,7 +155,7 @@ namespace proj {
         _lineages.clear();
         _epochs.clear();
         _counts_workspace.clear();
-        _debug_coal_like = false;
+        _debug_coal_like = true;
     }
     
     inline void Forest::copyEpochsFrom(const epoch_list_t & other) {
@@ -1132,7 +1132,7 @@ namespace proj {
                 assert(epoch._left_species.size() > 0);
                 assert(epoch._right_species.size() > 0);
                 assert(epoch._anc_species.size() > 0);
-                output(format("  %s%.9f: speciation event (%s,%s -> %s)") % (epoch._valid ? " " : "x") % h % epoch.leftSpeciesAsStr() % epoch.rightSpeciesAsStr() % epoch.ancSpeciesAsStr(), 2);
+                output(format("  %s%.9f: speciation event (%s,%s -> %s)\n") % (epoch._valid ? " " : "x") % h % epoch.leftSpeciesAsStr() % epoch.rightSpeciesAsStr() % epoch.ancSpeciesAsStr(), 2);
             }
          }
 #endif
@@ -1314,7 +1314,7 @@ namespace proj {
 #if defined(DEBUG_COAL_LIKE)
                     if (_debug_coal_like) {
                         lnLparts.push_back(str(format("%.9f") % log_prob_no_coal));
-                        output(str(format("***     %.9f log prob no coal in gene %d, common pool (%d lineages)\n") % log_prob_no_coal % gene % ncommonpool));
+                        output(str(format("***     %.9f log prob no coal in gene %d, common pool (%d lineages)\n") % log_prob_no_coal % gene % ncommonpool), 2);
                     }
 #endif
                 }
@@ -1359,9 +1359,9 @@ namespace proj {
                 if (_debug_coal_like) {
                     lnLparts.push_back(str(format("%.9f") % log_prob_join));
                     if (common_pool)
-                        output(str(format("***     %.9f log prob join gene %d, common pool (%d lineages)\n") % log_prob_join % gene % n));
+                        output(str(format("***     %.9f log prob join gene %d, common pool (%d lineages)\n") % log_prob_join % gene % n), 2);
                     else
-                        output(str(format("***     %.9f log prob join gene %d, spp %s (%d lineages)\n") % log_prob_join % gene % speciesSetAsString(e._species) % n));
+                        output(str(format("***     %.9f log prob join gene %d, spp %s (%d lineages)\n") % log_prob_join % gene % speciesSetAsString(e._species) % n), 2);
                 }
 #endif
 
@@ -1416,7 +1416,7 @@ namespace proj {
                     }
 #if defined(DEBUG_COAL_LIKE)
                     if (_debug_coal_like) {
-                        output(str(format("***     %.9f log prob no coal gene %d, spp %s (%d lineages)\n") % log_prob_no_coal % gene % speciesSetAsString(it->first) % n));
+                        output(str(format("***     %.9f log prob no coal gene %d, spp %s (%d lineages)\n") % log_prob_no_coal % gene % speciesSetAsString(it->first) % n), 2);
                     }
 #endif
                 }
