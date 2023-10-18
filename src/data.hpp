@@ -266,7 +266,7 @@ namespace proj {
     }
 
     inline void Data::compressPatterns() {
-#if defined(USING_SIGNPOSTS)
+#if 0 && defined(USING_SIGNPOSTS)
         os_signpost_event_emit(log_handle, signpost_id, "compressPatterns", "start");
 #endif
         // Perform sanity checks

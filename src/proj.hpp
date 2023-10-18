@@ -91,7 +91,9 @@ namespace proj {
             void                       saveSpeciesTreeParamsForLoRaD();
 #endif
 
+#if defined(DEBUGGING) && !defined(USING_MPI)
             void                       debugCheckGeneTrees() const;
+#endif
 
             void                       growGeneTrees(unsigned iter, unsigned gene);
             Particle &                 growSpeciesTrees(unsigned iter);
@@ -235,7 +237,7 @@ namespace proj {
         ("updatelambda",  value(&Forest::_update_lambda)->default_value(true), "if yes, update lambda at the end of each iteration")
         ("rnseed",  value(&_rnseed)->default_value(13579), "pseudorandom number seed")
         ("sortforests",  value(&_sort_forests)->default_value(false), "sort forests by weight when saving to file")
-        //("priorpost",  value(&Forest::_prior_post)->default_value(true), "if yes, use prior-post to choose gene tree pairings; if no, use prior-prior (species tree always uses prior-prior)")
+        ("priorprior",  value(&Forest::_prior_prior)->default_value(true), "if yes, use fast prior-prior to choose gene forest joins (will take more iterations to converge); if no, use slower prior-post (fewer iterations, but each iteration may take a long time)")
         ("visualizationcutoff", value(&_visualization_cutoff)->default_value(0.99), "particles sorted from highest to lowest weight will be saved for visualization if cumulative weight is less than this value")
         ;
         
@@ -348,7 +350,7 @@ namespace proj {
         Forest::_species_names.clear();
         Forest::_taxon_to_species.clear();
         
-        output("\nMapping taxa to species\n", 2);
+        output("\nMapping taxon names to species\n", 2);
         const Data::taxon_names_t & tnames = _data->getTaxonNames();
         unsigned ntax = (unsigned)tnames.size();
         for (auto & tname : tnames) {
@@ -366,6 +368,14 @@ namespace proj {
             }
             Forest::_taxon_to_species[tname] = species_index;
         }
+
+        output("\nMapping species names to species index\n", 2);
+        for (auto & sname : Forest::_species_names) {
+            unsigned species_index = species_name_to_index.at(sname);
+            output(format("  %s --> %d\n") % sname % species_index, 2);
+            Forest::_taxon_to_species[sname] = species_index;
+        }
+
         return (unsigned)Forest::_species_names.size();
     }
     
@@ -439,9 +449,16 @@ namespace proj {
         _template_particle.setData(_data);
         if (_starting_species_newick.size() > 0) {
             _template_particle.initSpeciesForest(_starting_species_newick);
+            //_template_particle.getSpeciesForest().debugShowNodeInfo();
             _template_particle.digestSpeciesTree(/*append*/false);
+            //_template_particle.getSpeciesForest().debugShowNodeInfo();
+            _template_particle.resetGeneForest(/*prior_post*/true);
+            output("    prior-post being used\n", 2);
         }
-        _template_particle.resetGeneForest();
+        else {
+            _template_particle.resetGeneForest(/*prior_post*/false);
+            output("    prior-prior being used\n", 2);
+        }
         _template_particle.sortEpochs();
         
         // //temporary!
@@ -471,7 +488,7 @@ namespace proj {
         _template_particle.setData(_data);
         _template_particle.resetSpeciesForest();
         _template_particle.initGeneForests(_starting_gene_newicks);
-        _template_particle.digestGeneTrees(/*append*/false);
+        //_template_particle.digestGeneTrees(/*append*/false);
         _template_particle.sortEpochs();
         
         // Now use first as a template and copy to all other particles
@@ -653,16 +670,16 @@ namespace proj {
     }
 #endif
     
-    inline void Proj::debugCheckGeneTrees() const {
 #if defined(DEBUGGING) && !defined(USING_MPI)
+    inline void Proj::debugCheckGeneTrees() const {
         for (auto & p : _species_particles) {
             for (unsigned g = 0; g < Forest::_ngenes; g++) {
                 const GeneForest & gf = p.getGeneForest(g);
                 gf.debugCheckSpeciesSets();
             }
         }
-#endif
     }
+#endif
     
     inline void Proj::growGeneTrees(unsigned iter, unsigned gene) {
         // Grows forests for the given gene. If iter == 0, gene forests do not condition
@@ -671,7 +688,7 @@ namespace proj {
         // Assumes gene forests are trivial and species forest has been digested into epochs
 
         //output(format("\nGrowing forests for gene %d (%s)...\n") % gene % Forest::_gene_names[gene], 2);
-
+        
         GeneForest::computeLeafPartials(gene, _data);
 
         // Ensure all of the particles for this gene have trivial gene forests and
@@ -685,7 +702,7 @@ namespace proj {
         double log_marg_like = 0.0;
         vector<unsigned> counts;
         for (unsigned step = 0; step < nsteps; step++) {
-#if defined(USING_SIGNPOSTS)
+#if 0 && defined(USING_SIGNPOSTS)
             os_signpost_event_emit(log_handle, signpost_id, "growGeneTrees", "Step %d of %d", (step + 1), nsteps);
 #endif
             output(format("    step %d of %d: ") % (step + 1) % nsteps, 2);
@@ -749,12 +766,14 @@ namespace proj {
     }
     
     inline Particle & Proj::growSpeciesTrees(unsigned iter) {
+#if defined(USING_SIGNPOSTS)
+        os_signpost_event_emit(log_handle, signpost_id, "Proj::growSpeciesTrees", "start");
+#endif
         bool last_iter = (iter == _niter - 1);
         
         // Grows species trees conditional on the gene trees stored in each particle
         
-        // Ensure all of the particles for this gene have trivial gene forests and
-        // a species tree built from _starting_species_newick
+        // Ensure all particles have trivial species forests
         initializeSpeciesParticles();
         
         // Number of joins is one fewer than the number of species
@@ -785,15 +804,15 @@ namespace proj {
         if (_verbosity > 1 || last_iter) {
             string fn = str(format("species-trees-after-iter-%d.tre") % iter);
             saveUniqueSpeciesTrees(fn, counts);
-            
+        
             auto maxit = max_element(counts.begin(), counts.end());
             assert(maxit != counts.end());
             unsigned maxi = (unsigned)distance(counts.begin(), maxit);
             output(format("  Best particle had index %d with count %d\n") % maxi % (*maxit), 2);
-            
-            string fnprefix = str(format("newicks-%d") % iter);
-            double log_coal_like = _species_particles[maxi].debugSaveTreesAsJavascript(fnprefix);
-            output(format("  log(coal. like.) after iter %d = %.9f\n") % iter % log_coal_like, 2);
+        
+            //string fnprefix = str(format("newicks-%d") % iter);
+            //double log_coal_like = _species_particles[maxi].debugSaveTreesAsJavascript(fnprefix);
+            //output(format("  log(coal. like.) after iter %d = %.9f\n") % iter % log_coal_like, 2);
         }
 
         // Choose one particle at random and save its tree to _starting_species_tree
@@ -801,6 +820,9 @@ namespace proj {
         SpeciesForest & sf = _species_particles[which].getSpeciesForest();
         _starting_species_newick = sf.makeNewick(/*precision*/9, /*use_names*/false, /*coalunts*/false);
                 
+#if defined(USING_SIGNPOSTS)
+        os_signpost_event_emit(log_handle, signpost_id, "Proj::growSpeciesTrees", "end");
+#endif
         return _species_particles[which];
     }
     
@@ -832,9 +854,13 @@ namespace proj {
         
         // Create the file
         ofstream tmpf(fn);
-        tmpf << str(format("x <- c(%s)") % xstrvect) << endl;
-        tmpf << str(format("y <- c(%s)") % ystrvect) << endl;
-        tmpf << "plot(x, y, type=\"p\", pch=19)" << endl;
+        tmpf << "cwd = system('cd \"$( dirname \"$0\" )\" && pwd', intern = TRUE)\n";
+        tmpf << "setwd(cwd)\n";
+        tmpf << str(format("pdf(\"update-%s-%d.pdf\")\n") % param % iter);
+        tmpf << str(format("x <- c(%s)\n") % xstrvect);
+        tmpf << str(format("y <- c(%s)\n") % ystrvect);
+        tmpf << "plot(x, y, type=\"p\", pch=19)\n";
+        tmpf << "dev.off()\n";
         tmpf.close();
     }
 #endif
@@ -1149,6 +1175,11 @@ namespace proj {
         // The vector counts should represent the results of multinomial sampling, so make a copy
         // to use for filtering particles
         vector<unsigned> working_counts(counts.begin(), counts.end());
+        
+        // //temporary!
+        // cerr << "gene " << gene << " ~~> ";
+        // copy(working_counts.begin(), working_counts.end(), ostream_iterator<unsigned>(cerr, " "));
+        // cerr << endl;
         
         // Find index of first element of working_counts with value == 0
         auto copy_to_iter = find_if(working_counts.begin(), working_counts.end(), [](unsigned c){return c == 0;});
@@ -1532,11 +1563,11 @@ namespace proj {
         ::my_first_gene = _mpi_first_gene[::my_rank];
         ::my_last_gene  = _mpi_last_gene[::my_rank];
 
-        //temporary!
-        //cerr << "~~> Proj::mpiSetSchedule\n";
-        //cerr << str(format("~~> my_rank       = %d\n") % ::my_rank );
-        //cerr << str(format("~~> my_first_gene = %d\n") % ::my_first_gene );
-        //cerr << str(format("~~> my_last_gene  = %d\n") % ::my_last_gene );
+        // //temporary!
+        // cerr << "~~> Proj::mpiSetSchedule\n";
+        // cerr << str(format("~~> my_rank       = %d\n") % ::my_rank );
+        // cerr << str(format("~~> my_first_gene = %d\n") % ::my_first_gene );
+        // cerr << str(format("~~> my_last_gene  = %d\n") % ::my_last_gene );
     }
 #endif
 
@@ -1810,7 +1841,7 @@ namespace proj {
             
             output(format("\nIteration %d of %d...\n") % (iter+1) % _niter, 2);
                         
-#if defined(USING_SIGNPOSTS)
+#if 0 && defined(USING_SIGNPOSTS)
             os_signpost_event_emit(log_handle, signpost_id, "Proj::run", "Iteration %d of %d", (iter+1), _niter);
 #endif
 
@@ -1819,7 +1850,7 @@ namespace proj {
             _starting_gene_newicks.clear();
             _starting_gene_newicks.resize(Forest::_ngenes);
             output("\nGrowing gene trees...\n", 2);
-#if defined(USING_SIGNPOSTS)
+#if 0 && defined(USING_SIGNPOSTS)
             os_signpost_event_emit(log_handle, signpost_id, "Proj::run", "Growing gene trees");
 #endif
             for (unsigned g = 0; g < Forest::_ngenes; ++g) {
@@ -1831,7 +1862,7 @@ namespace proj {
                 saveStartingGeneTrees(str(format("gene-trees-chosen-iter-%d-numbers.tre") % iter));
             }
                         
-#if defined(USING_SIGNPOSTS)
+#if 0 && defined(USING_SIGNPOSTS)
             os_signpost_event_emit(log_handle, signpost_id, "Proj::run", "Growing species trees");
 #endif
             // Estimate the species tree distribution (conditional on gene trees)
@@ -1842,7 +1873,7 @@ namespace proj {
                 saveStartingSpeciesTree(str(format("species-tree-chosen-iter-%d.tre") % iter));
             }
                         
-#if defined(USING_SIGNPOSTS)
+#if 0 && defined(USING_SIGNPOSTS)
             os_signpost_event_emit(log_handle, signpost_id, "Proj::run", "Update theta and lambda");
 #endif
             // Update theta
@@ -1851,20 +1882,20 @@ namespace proj {
             // Update lambda
             updateLambda(iter, chosen_particle, _ntries_lambda, _lambda_delta);
             
-            if (_verbosity > 1 || last_iter) {
-                // Report log-likelihood of current parameter values
-                output("\nUsing current parameter values:\n", 2);
-                double log_coal_like = chosen_particle.calcLogCoalLikeGivenTheta(Forest::_theta);
-                output(format("    log(coalescent likelihood) = %.5f\n") % log_coal_like, 2);
-                double total_log_like = 0.0;
-                for (unsigned g = 0; g < Forest::_ngenes; ++g) {
-                    GeneForest::computeLeafPartials(g, _data);
-                    double log_like = chosen_particle.calcLogLikelihoodForGene(g);
-                    GeneForest::releaseLeafPartials(g);
-                    total_log_like += log_like;
-                }
-                output(format("    log(likelihood) = %.5f\n") % total_log_like, 2);
-            }
+            //if (_verbosity > 1 || last_iter) {
+            //    // Report log-likelihood of current parameter values
+            //    output("\nUsing current parameter values:\n", 2);
+            //    double log_coal_like = chosen_particle.calcLogCoalLikeGivenTheta(Forest::_theta);
+            //    output(format("    log(coalescent likelihood) = %.5f\n") % log_coal_like, 2);
+            //    double total_log_like = 0.0;
+            //    for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+            //        GeneForest::computeLeafPartials(g, _data);
+            //        double log_like = chosen_particle.calcLogLikelihoodForGene(g);
+            //        GeneForest::releaseLeafPartials(g);
+            //        total_log_like += log_like;
+            //    }
+            //    output(format("    log(likelihood) = %.5f\n") % total_log_like, 2);
+            //}
             
             double secs = stopwatch.stop();
             output(format("\nTime used for iteration %d was %.5f seconds\n") % iter % secs, 2);
@@ -1908,8 +1939,8 @@ namespace proj {
                 for (unsigned g = _mpi_first_gene[rank]; g < _mpi_last_gene[rank]; ++g) {
                     outstanding.push_back(g);
 
-                    //temporary!
-                    //cerr << "pushing gene " << g << " to outstanding\n";
+                    // //temporary!
+                    // cerr << "pushing gene " << g << " to outstanding\n";
                 }
             }
             
@@ -1947,10 +1978,10 @@ namespace proj {
                 newick.resize(message_length - 1);  // remove '\0' at end
                 _starting_gene_newicks[gene] = newick;
                                                 
-                //temporary!
-                //cerr << "searching for gene " << gene << " in outstanding\n  outstanding = (";
-                //copy(outstanding.begin(), outstanding.end(), ostream_iterator<unsigned>(cerr, " "));
-                //cerr << ")" << endl;
+                // //temporary!
+                // cerr << "searching for gene " << gene << " in outstanding\n  outstanding = (";
+                // copy(outstanding.begin(), outstanding.end(), ostream_iterator<unsigned>(cerr, " "));
+                // cerr << ")" << endl;
                 
                 auto it = find(outstanding.begin(), outstanding.end(), gene);
                 assert(it != outstanding.end());
@@ -1999,6 +2030,9 @@ namespace proj {
                 _data->copyTaxonNames(Forest::_taxon_names);
                 
                 Forest::_nspecies = buildSpeciesMap();
+#if defined(SPECIES_IS_BITSET)
+                Node::setSpeciesMask(Forest::_species_mask, Forest::_nspecies);
+#endif
                 debugShowStringVector("Species names", Forest::_species_names);
                 
                 // //temporary!
@@ -2029,7 +2063,7 @@ namespace proj {
                     _starting_species_tree_from_file = true;
                     for (unsigned iter = 0; iter < _niter; ++iter) {
                         output(format("\nIteration %d of %d...\n") % (iter+1) % _niter, 2);
-#if defined(USING_SIGNPOSTS)
+#if 0 && defined(USING_SIGNPOSTS)
                         os_signpost_event_emit(log_handle, signpost_id, "Proj::run", "Iteration %d of %d: growing gene trees", (iter+1), _niter);
 #endif
                         for (unsigned g = 0; g < Forest::_ngenes; ++g) {
@@ -2042,7 +2076,7 @@ namespace proj {
                             saveGeneTreesUsingNumbers(fn, _starting_gene_newicks);
                         }
                         
-#if defined(USING_SIGNPOSTS)
+#if 0 && defined(USING_SIGNPOSTS)
                         os_signpost_event_emit(log_handle, signpost_id, "Proj::run", "Iteration %d of %d: growing species trees", (iter+1), _niter);
 #endif
                         growSpeciesTrees(iter);
@@ -2065,11 +2099,11 @@ namespace proj {
                     _starting_gene_trees_from_file = true;
                     for (unsigned iter = 0; iter < _niter; ++iter) {
                         output(format("\nIteration %d of %d...\n") % (iter+1) % _niter, 3);
-#if defined(USING_SIGNPOSTS)
+#if 0 && defined(USING_SIGNPOSTS)
                         os_signpost_event_emit(log_handle, signpost_id, "Proj::run", "Iteration %d of %d: growing species trees", (iter+1), _niter);
 #endif
                         growSpeciesTrees(iter);
-#if defined(USING_SIGNPOSTS)
+#if 0 && defined(USING_SIGNPOSTS)
                         os_signpost_event_emit(log_handle, signpost_id, "Proj::run", "Iteration %d of %d: growing gene trees", (iter+1), _niter);
 #endif
                         for (unsigned g = 0; g < Forest::_ngenes; ++g)
@@ -2109,6 +2143,9 @@ namespace proj {
                 }
                 else if (_start_mode == "lambdatest") {
                     Forest::_nspecies = _nsimspecies;
+#if defined(SPECIES_IS_BITSET)
+                    Node::setSpeciesMask(Forest::_species_mask, Forest::_nspecies);
+#endif
                     Forest::_species_names.resize(_nsimspecies);
                     for (unsigned i = 0; i < Forest::_nspecies; ++i) {
                         string species_name = inventName(i, false);

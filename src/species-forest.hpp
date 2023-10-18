@@ -61,7 +61,11 @@ namespace proj {
             _nodes[i]._name = Forest::_species_names[i];
             _nodes[i]._edge_length = 0.0;
             _nodes[i]._height = 0.0;
+#if defined(SPECIES_IS_BITSET)
+            Node::setSpeciesBit(_nodes[i]._species, i, /*init_to_zero_first*/true);
+#else
             _nodes[i]._species = {i};
+#endif
             _lineages.push_back(&_nodes[i]);
         }
         _forest_height = 0.0;
@@ -160,7 +164,11 @@ namespace proj {
             else {
                 // nd is a leaf
                 nd->setHeight(0.0);
+#if defined(SPECIES_IS_BITSET)
+                Node::setSpeciesBit(nd->_species, (unsigned)nd->_number, /*init_to_zero_first*/true);
+#else
                 nd->setSpeciesFromUnsigned((unsigned)nd->_number);
+#endif
             }
         }
 
@@ -306,6 +314,21 @@ namespace proj {
             Node::species_t & ss = it->_species;
 
             // Remove all elements of species1 from the set if found
+#if defined(SPECIES_IS_BITSET)
+            Node::species_t origss = ss;
+            Node::unsetSpeciesBits(ss, species1);
+            bool found1 = (origss != ss);
+            
+            origss = ss;
+            Node::unsetSpeciesBits(ss, species2);
+            bool found2 = (origss != ss);
+
+            // If either species1 or species2 was found in species (and removed), need
+            // to add new_species to the set
+            if (found1 || found2) {
+                Node::setSpeciesBits(ss, new_species, /*init_to_zero_first*/false);
+            }
+#else
             unsigned n1 = 0;
             for (auto it1 = species1.begin(); it1 != species1.end(); ++it1) {
                 auto tmp = ss.find(*it1);
@@ -331,11 +354,12 @@ namespace proj {
             // Check to make sure that if one element of species2 was found then they all were found
             assert(n2 == 0 || n2 == species2.size());
 
-            // If either species1 or species1 was found in species (and removed), need
+            // If either species1 or species2 was found in species (and removed), need
             // to add new_species to the set
             if (n1 > 0 || n2 > 0) {
                 ss.insert(new_species.begin(), new_species.end());
             }
+#endif
             
             it->_lineage_counts[new_species] += it->_lineage_counts[species1];
             it->_lineage_counts[new_species] += it->_lineage_counts[species2];
@@ -371,10 +395,10 @@ namespace proj {
         //
         //    0   0   1   1   1   2   2      0   0   1   1   1   2   2  0   _
         //    |   |   |   |   |   |   |      |   |   |   |   |   |   |  1   |
-        //    |   |   |   |   |   |   |      +-0-+   |   |   |   |   |  2   | first speciation event must occur
-        //    +-0-+   |   |   |   |   |        |     +-1-+   |   |   |  3   | in this interval, regardless of
-        //      |     |   |   |   |   |        |       |     |   |   |  4   |
-        //      |     |   +-1-+   |   |        |       |     |   |   |  5   | the species joined
+        //    |   |   |   |   |   |   |      +-0-+   |   |   |   |   |  2   | first speciation event must
+        //    +-0-+   |   |   |   |   |        |     +-1-+   |   |   |  3   | occur in this interval,
+        //      |     |   |   |   |   |        |       |     |   |   |  4   | regardless of the species
+        //      |     |   +-1-+   |   |        |       |     |   |   |  5   | joined
         //      |     |     |     +-2-+        |       |     +1,2+   |  6   -
         //      |     +--1--+       |          |       |       |     |  7
         //      |        |          |          |       +--1,2--+     |  8
@@ -411,15 +435,15 @@ namespace proj {
         // Step 1
         //    <------ gene tree 0 ---->      <------ gene tree 1 ---->
         //
-        //    0   0   1   1   1   2   2      0   0   1   1   1   2   2  0
-        //    |   |   |   |   |   |   |      |   |   |   |   |   |   |  1
-        //    |   |   |   |   |   |   |      +-0-+   |   |   |   |   |  2
-        //    +-0-+   |   |   |   |   |        |     +-1-+   |   |   |  3
-        //      |     |   |   |   |   |        |       |     |   |   |  4
+        //    0   0   1   1   1   2   2      0   0   1   1   1   2   2  0   Begin by choosing two species
+        //    |   |   |   |   |   |   |      |   |   |   |   |   |   |  1   to join: choose to join 0 and 1
+        //    |   |   |   |   |   |   |      +-0-+   |   |   |   |   |  2   to create species 01. All 0 and 1
+        //    +-0-+   |   |   |   |   |        |     +-1-+   |   |   |  3   species are converted to 01 below
+        //      |     |   |   |   |   |        |       |     |   |   |  4   speciation event.
         //    --------------------------------------------------------- 4.5 -
-        //      |     |   +-01+   |   |        |       |     |   |   |  5   | Second speciation event joining
-        //      |     |     |     +-2-+        |       |     01,2+   |  6   - species 01 and 2 must occur in
-        //      |     +--01-+       |          |       |       |     |  7     this interval
+        //      |     |   +-01+   |   |        |       |     |   |   |  5   | Second speciation event
+        //      |     |     |     +-2-+        |       |     01,2+   |  6   - must occur in this interval
+        //      |     +--01-+       |          |       |       |     |  7
         //      |        |          |          |       +-01,2--+     |  8
         //      |        |          |          |           |         |  9
         //      |        |          |          |           |         | 10

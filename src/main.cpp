@@ -128,19 +128,23 @@ unsigned                            Epoch::_bytes_base_epoch = (unsigned long)(
     2*sizeof(int)               // _type, _gene
     + sizeof(double)            // _height
     + sizeof(bool)              // _valid
-    + sizeof(Node *)            // _coalescence_node
-    + 4*sizeof(set<unsigned>)   // _left_species, _right_species, _anc_species, _species
+    //+ sizeof(Node *)            // _coalescence_node
+    + 4*sizeof(Node::species_t)   // _left_species, _right_species, _anc_species, _species
     + sizeof(map<set<unsigned>, unsigned>)  // _lineage_counts
 );
 unsigned long                       Epoch::_max_bytes_any_epoch = Epoch::_bytes_base_epoch;
 #endif
-        
+
+bool                                Forest::_debug_coal_like    = false;
 unsigned                            Forest::_nstates            = 4;
 
 unsigned                            Forest::_ntaxa              = 0;
 vector<string>                      Forest::_taxon_names;
 
 unsigned                            Forest::_nspecies           = 0;
+#if defined(SPECIES_IS_BITSET)
+Node::species_t                     Forest::_species_mask       = (Node::species_t)0;
+#endif
 vector<string>                      Forest::_species_names;
 map<unsigned,unsigned>              Forest::_nexus_taxon_map;
 
@@ -165,6 +169,8 @@ double                              Forest::_infinity = numeric_limits<double>::
 double                              Forest::_negative_infinity = -numeric_limits<double>::infinity();
 
 vector<double>                      Forest::_cumprobs;
+
+bool                                Forest::_prior_prior        = true;
 
 PartialStore::leaf_partials_t       GeneForest::_leaf_partials;
 

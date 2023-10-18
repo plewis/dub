@@ -18,6 +18,8 @@ namespace proj {
         Epoch(const Epoch & e);
         Epoch(epoch_t t, double h);
         ~Epoch();
+        
+        void clear();
 
 #if defined(LOG_MEMORY)
         static unsigned _nconstructed;
@@ -49,16 +51,13 @@ namespace proj {
         lineage_counts_t    _lineage_counts;    // counts of the number of lineages in each species just prior to coalescence
         
         // Used only for coalescent_epoch
-        Node *              _coalescence_node;   // the coalescent node created by the coalescence event
+        //Node *              _coalescence_node;   // the coalescent node created by the coalescence event
         Node::species_t _species;               // species of coalescent node
         
         // Used only for init_epoch and coalescent_epoch
         int                 _gene;              // index of gene in which coalescence occurred
         
         // Used only for speciation_epoch
-        //unsigned _left_species;
-        //unsigned _right_species;
-        //unsigned _anc_species;
         Node::species_t _left_species;
         Node::species_t _right_species;
         Node::species_t _anc_species;
@@ -69,6 +68,7 @@ namespace proj {
     typedef list<Epoch> epoch_list_t;
     
     inline Epoch::Epoch() {
+        clear();
 #if defined(LOG_MEMORY)
         _nconstructed++;
         if (_nconstructed - _ndestroyed > _max_in_use) {
@@ -78,6 +78,7 @@ namespace proj {
     }
 
     inline Epoch::Epoch(const Epoch & e) {
+        clear();
         *this = e;
 #if defined(LOG_MEMORY)
         _nconstructed++;
@@ -88,18 +89,32 @@ namespace proj {
     }
 
     inline Epoch::Epoch(epoch_t t, double h) {
-        _type                       = t;        // int
-        _height                     = h;        // double
+        clear();
+        _type   = t;
+        _height = h;
+    }
+    
+    inline void Epoch::clear() {
+        _type                       = 0;        // int
+        _height                     = 0.0;      // double
         _valid                      = false;    // bool
         _gene                       = -1;       // int
-        _coalescence_node           = nullptr;  // Node *
-        //_left_species               = -1;     // set<unsigned>
-        //_right_species              = -1;     // set<unsigned>
-        //_anc_species                = -1;     // set<unsigned>
-        // _lineage_counts                      // map<set<unsigned>, unsigned>
-        //      empty by default and does not need to be initialized
+#if defined(SPECIES_IS_BITSET)
+        _left_species               = 0;        // unsigned long
+        _right_species              = 0;        // unsigned long
+        _anc_species                = 0;        // unsigned long
+        _species                    = 0;        // set<unsigned>
+#else
+        // Empty by default and do not need to be initialized
+        // _left_species                        // set<unsigned>
+        // _right_species                       // set<unsigned>
+        // _anc_species                         // set<unsigned>
         // _species                             // set<unsigned>
-        //      empty by default and does not need to be initialized
+#endif
+
+        // Empty by default and does not need to be initialized
+        // _lineage_counts                      // map<Node::species_t, unsigned>
+
 #if defined(LOG_MEMORY)
         _nconstructed++;
         if (_nconstructed -_ndestroyed > _max_in_use) {
@@ -120,7 +135,7 @@ namespace proj {
         eq = eq && _height                  == other._height;
         eq = eq && _valid                   == other._valid;
         eq = eq && _gene                    == other._gene;
-        eq = eq && _coalescence_node        == other._coalescence_node;
+        //eq = eq && _coalescence_node        == other._coalescence_node;
         eq = eq && _left_species            == other._left_species;
         eq = eq && _right_species           == other._right_species;
         eq = eq && _anc_species             == other._anc_species;
@@ -130,6 +145,9 @@ namespace proj {
     }
     
     inline string Epoch::speciesSetToStr(const Node::species_t & s) {
+#if defined(SPECIES_IS_BITSET)
+        return Node::speciesStringRepresentation(s);
+#else
         ostringstream oss;
         copy(s.begin(), s.end(), ostream_iterator<unsigned>(oss, "+"));
 
@@ -138,6 +156,7 @@ namespace proj {
         returned_str.pop_back();
         
         return returned_str;
+#endif
     }
     
     inline void Epoch::reset() {

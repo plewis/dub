@@ -11,6 +11,13 @@
 // not p(D)
 //#define SAVE_PARAMS_FOR_LORAD
 
+// If defined, species are represented as bits set in an unsigned long
+// If not defined, species are std::set
+// Leaf nodes in gene trees are always assigned to one species, so
+// their set would have one element or the unsigned long would have one bit set
+// Ancestral species are unions of their descendant species.
+#define SPECIES_IS_BITSET
+
 //#define LOG_MEMORY
 //#define USING_SIGNPOSTS
 //#define USING_MPI

@@ -34,7 +34,9 @@ namespace proj {
             static void createDefaultGeneTreeNexusTaxonMap();
             static void createDefaultSpeciesTreeNexusTaxonMap();
             
+#if defined(DEBUGGING)
             void debugCheckSpeciesSets() const;
+#endif
 
             static void readTreefile(const string filename,
                                         unsigned skip,
@@ -46,14 +48,17 @@ namespace proj {
             double  calcMaxT(epoch_list_t & epochs, double h0, set<Node::species_t> current_species);
             string  makeNewick(unsigned precision = 6, bool use_names = true, bool coalunits = false) const;
             void    buildFromNewick(const string newick);
-            void    debugShowEpochs(const epoch_list_t & epochs) const;
+            void    debugShowNodeInfo() const;
             
             virtual void createTrivialForest(bool compute_partials) = 0;
             virtual bool isSpeciesForest() const = 0;
             
+            static void debugShowEpochs(const epoch_list_t & epochs);
             static double calcLogSum(const vector<double> & log_values);
             static string memoryAddressAsString(const void * ptr);
+#if !defined(SPECIES_IS_BITSET)
             static string speciesSetAsString(const Node::species_t & s);
+#endif
             
             static unsigned multinomialDraw(const vector<double> & probs);
 
@@ -65,6 +70,9 @@ namespace proj {
             static vector<string>           _taxon_names;
 
             static unsigned                 _nspecies;
+#if defined(SPECIES_IS_BITSET)
+            static Node::species_t          _species_mask;
+#endif
             static vector<string>           _species_names;
             static map<unsigned,unsigned>   _nexus_taxon_map;
 
@@ -83,6 +91,8 @@ namespace proj {
             static double                   _small_enough;
             static double                   _infinity;
             static double                   _negative_infinity;
+            
+            static bool                     _prior_prior;
             
             static vector<double>           _cumprobs;  // workspace used by multinomialDraw
                         
@@ -134,7 +144,7 @@ namespace proj {
             mutable Epoch::lineage_counts_t _counts_workspace;
             
             // Debugging tool, should not affect const status
-            mutable bool _debug_coal_like;
+            static bool _debug_coal_like;
 };
     
     inline Forest::Forest() {
@@ -155,7 +165,6 @@ namespace proj {
         _lineages.clear();
         _epochs.clear();
         _counts_workspace.clear();
-        _debug_coal_like = true;
     }
     
     inline void Forest::copyEpochsFrom(const epoch_list_t & other) {
@@ -215,7 +224,15 @@ namespace proj {
     }
 
     inline void Forest::setSpeciesFromNodeName(Node * nd) {
-        nd->_species = {Forest::_taxon_to_species[nd->_name]};
+#if defined(SPECIES_IS_BITSET)
+        try {
+            Node::setSpeciesBit(nd->_species, Forest::_taxon_to_species.at(nd->_name), /*init_to_zero_first*/true);
+        } catch(out_of_range) {
+            throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % nd->_name));
+        }
+#else
+        nd->_species = {Forest::_taxon_to_species.at(nd->_name)};
+#endif
     }
     
     inline void Forest::setNodeNameFromNumber(Node * nd) {
@@ -806,7 +823,11 @@ namespace proj {
         oss << "***   ";
         for (auto iter = lcm.begin(); iter != lcm.end(); ++iter) {
             if (iter->second > 0)
+#if defined(SPECIES_IS_BITSET)
+                oss << str(format("%10s") % Node::speciesStringRepresentation(iter->first));
+#else
                 oss << str(format("%10s") % speciesSetAsString(iter->first));
+#endif
         }
         oss << endl;
 
@@ -842,17 +863,21 @@ namespace proj {
         }
     }
     
-    inline void Forest::debugCheckSpeciesSets() const {
 #if defined(DEBUGGING)
+    inline void Forest::debugCheckSpeciesSets() const {
         for (auto & preorder : _preorders) {
             for (auto nd : preorder) {
+#if defined(SPECIES_IS_BIGSET)
+                assert(nd->_species & ~Forest::_species_mask == 0);
+#else
                 for (auto s : nd->_species) {
                     assert(s < Forest::_nspecies);
                 }
+#endif
             }
         }
-#endif
     }
+#endif
 
     inline void Forest::readTreefile(const string filename,
                                      unsigned skip,
@@ -1108,7 +1133,38 @@ namespace proj {
         v.push_back(add2);
     }
     
-    inline void Forest::debugShowEpochs(const epoch_list_t & epochs) const {
+#if defined(SPECIES_IS_BITSET)
+    inline void Forest::debugShowNodeInfo() const {
+        cerr << str(format("%12s %12s %12s %12s") % "name" % "number" % "species" % "tax2spp") << endl;
+        for (auto & nd : _nodes) {
+            if (!nd._left_child) {
+                try {
+                    unsigned spp_index = Forest::_taxon_to_species.at(nd._name);
+                    cerr << str(format("%12s %12d %12d %12d") % nd._name % nd._number % nd._species % spp_index) << endl;
+                } catch(out_of_range) {
+                    throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % nd._name));
+                }
+            }
+        }
+    }
+#else
+    inline void Forest::debugShowNodeInfo() const {
+        cerr << str(format("%12s %12s %12s %12s") % "name" % "number" % "species" % "tax2spp") << endl;
+        for (auto & nd : _nodes) {
+            if (!nd._left_child) {
+                try {
+                    unsigned spp_index = Forest::_taxon_to_species.at(nd._name);
+                    string spp_str = speciesSetAsString(nd._species);
+                    cerr << str(format("%12s %12d %12s %12d") % nd._name % nd._number % spp_str % spp_index) << endl;
+                } catch(out_of_range) {
+                    throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % nd._name));
+                }
+            }
+        }
+    }
+#endif
+
+    inline void Forest::debugShowEpochs(const epoch_list_t & epochs) {
 #if defined(DEBUG_COAL_LIKE)
         if (!_debug_coal_like)
             return;
@@ -1124,15 +1180,28 @@ namespace proj {
                 output(format("  %s%.9f: init gene tree %d (lineage counts: %s)\n") % (epoch._valid ? " " : "x") % h % epoch._gene % oss.str(), 2);
             }
             else if (epoch.isCoalescentEpoch()) {
+#if defined(SPECIES_IS_BITSET)
+                assert(epoch._species);
+                string species_str = Node::speciesStringRepresentation(epoch._species);
+                output(format("  %s%.9f: coalescence in gene tree %d (species %s = %d)\n") % (epoch._valid ? " " : "x") % h % epoch._gene % species_str % epoch._species, 2);
+#else
                 assert(epoch._species.size() > 0);
                 string species_set = Forest::speciesSetAsString(epoch._species);
                 output(format("  %s%.9f: coalescence in gene tree %d (species %s)\n") % (epoch._valid ? " " : "x") % h % epoch._gene % species_set, 2);
+#endif
             }
             else {
+#if defined(SPECIES_IS_BITSET)
+                assert(epoch._left_species);
+                assert(epoch._right_species);
+                assert(epoch._anc_species);
+                output(format("  %s%.9f: speciation event (%s,%s -> %s) (%d,%d -> %d)\n") % (epoch._valid ? " " : "x") % h % epoch.leftSpeciesAsStr() % epoch.rightSpeciesAsStr() % epoch.ancSpeciesAsStr() % epoch._left_species % epoch._right_species % epoch._anc_species, 2);
+#else
                 assert(epoch._left_species.size() > 0);
                 assert(epoch._right_species.size() > 0);
                 assert(epoch._anc_species.size() > 0);
                 output(format("  %s%.9f: speciation event (%s,%s -> %s)\n") % (epoch._valid ? " " : "x") % h % epoch.leftSpeciesAsStr() % epoch.rightSpeciesAsStr() % epoch.ancSpeciesAsStr(), 2);
+#endif
             }
          }
 #endif
@@ -1144,6 +1213,7 @@ namespace proj {
         return memory_address.str();
     }
     
+#if !defined(SPECIES_IS_BITSET)
     inline string Forest::speciesSetAsString(const Node::species_t & s) {
         if (s.size() == 0)
             return string();
@@ -1159,6 +1229,7 @@ namespace proj {
             return join(species, "+");
         }
     }
+#endif
     
     inline void Forest::debugShowNodeInfo(string title) {
 #if defined(DEBUGGING)
@@ -1170,7 +1241,11 @@ namespace proj {
             string lchild = _nodes[i]._left_child ? to_string(_nodes[i]._left_child->_number) : "null";
             string rsib   = _nodes[i]._right_sib ? to_string(_nodes[i]._right_sib->_number) : "null";
             string parent = _nodes[i]._parent ? to_string(_nodes[i]._parent->_number) : "null";
+#if defined(SPECIES_IS_BITSET)
+            string species_set = Node::speciesStringRepresentation(_nodes[i]._species);
+#else
             string species_set = speciesSetAsString(_nodes[i]._species);
+#endif
             output(format("%6d %12s %6d %10s %10s %6s %6s %6s %12.5f %12.5f\n") % i % memory_address % _nodes[i]._number % species_set % type % lchild % rsib % parent % _nodes[i]._height % _nodes[i]._edge_length, 2);
         }
         output("\n", 2);
@@ -1183,7 +1258,11 @@ namespace proj {
         output(format("%6s %12s %6s %10s\n") % "index" % "address" % "number" % "species", 2);
         for (unsigned i = 0; i < v.size(); ++i) {
             string memory_address = memoryAddressAsString((void *)&_nodes[i]);
+#if defined(SPECIES_IS_BITSET)
+            string species_set = Node::speciesStringRepresentation(v[i]->getSpecies());
+#else
             string species_set = speciesSetAsString(v[i]->getSpecies());
+#endif
             output(format("%6d %12s %6d %10s\n") % i % memory_address % v[i]->_number % species_set, 2);
         }
         output("\n", 2);
@@ -1247,8 +1326,17 @@ namespace proj {
                         common_pool = true;
                         ncommonpool = 0;
                         Node::species_t anc;
+#if defined(SPECIES_IS_BITSET)
+                        anc = (Node::species_t)0;
+#endif
                         for (auto & map_pair : _counts_workspace) {
+#if defined(SPECIES_IS_BITSET)
+                            // map_pair.first is a Node::species_t
+                            // map_pair.second is the count
+                            Node::setSpeciesBits(anc, map_pair.first, /*init_to_zero_first*/false);
+#else
                             anc.insert(map_pair.first.begin(), map_pair.first.end());
+#endif
                             ncommonpool += map_pair.second;
                         }
                         _counts_workspace.clear();
@@ -1330,7 +1418,11 @@ namespace proj {
 #if defined(DEBUG_COAL_LIKE)
                         if (_debug_coal_like) {
                             lnLparts.push_back(str(format("%.9f") % log_prob_no_coal));
+#if defined(SPECIES_IS_BITSET)
+                            output(format("***     %.9f log prob no coal in gene %d, spp %s (%d lineages)\n") % log_prob_no_coal % gene % Node::speciesStringRepresentation(it->first) % n, 2);
+#else
                             output(format("***     %.9f log prob no coal in gene %d, spp %s (%d lineages)\n") % log_prob_no_coal % gene % speciesSetAsString(it->first) % n, 2);
+#endif
                         }
 #endif
                     }
@@ -1348,7 +1440,11 @@ namespace proj {
                     if (common_pool)
                         output(format("***     %.9f log prob coal gene %d, common pool (%d lineages)\n") % log_prob_coal % gene % n, 2);
                     else
+#if defined(SPECIES_IS_BITSET)
+                        output(format("***     %.9f log prob coal gene %d, spp %s (%d lineages)\n") % log_prob_coal % gene % Node::speciesStringRepresentation(e._species) % n, 2);
+#else
                         output(format("***     %.9f log prob coal gene %d, spp %s (%d lineages)\n") % log_prob_coal % gene % speciesSetAsString(e._species) % n, 2);
+#endif
                 }
 #endif
                 
@@ -1361,7 +1457,11 @@ namespace proj {
                     if (common_pool)
                         output(str(format("***     %.9f log prob join gene %d, common pool (%d lineages)\n") % log_prob_join % gene % n), 2);
                     else
+#if defined(SPECIES_IS_BITSET)
+                        output(str(format("***     %.9f log prob join gene %d, spp %s (%d lineages)\n") % log_prob_join % gene % Node::speciesStringRepresentation(e._species) % n), 2);
+#else
                         output(str(format("***     %.9f log prob join gene %d, spp %s (%d lineages)\n") % log_prob_join % gene % speciesSetAsString(e._species) % n), 2);
+#endif
                 }
 #endif
 
@@ -1416,7 +1516,11 @@ namespace proj {
                     }
 #if defined(DEBUG_COAL_LIKE)
                     if (_debug_coal_like) {
+#if defined(SPECIES_IS_BITSET)
+                        output(str(format("***     %.9f log prob no coal gene %d, spp %s (%d lineages)\n") % log_prob_no_coal % gene % Node::speciesStringRepresentation(it->first) % n), 2);
+#else
                         output(str(format("***     %.9f log prob no coal gene %d, spp %s (%d lineages)\n") % log_prob_no_coal % gene % speciesSetAsString(it->first) % n), 2);
+#endif
                     }
 #endif
                 }
@@ -1444,7 +1548,6 @@ namespace proj {
     }
     
     inline void Forest::operator=(const Forest & other) {
-        _debug_coal_like                = other._debug_coal_like;
         _forest_height                  = other._forest_height;
         _next_node_index                = other._next_node_index;
         _next_node_number               = other._next_node_number;

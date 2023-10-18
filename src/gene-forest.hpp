@@ -37,6 +37,7 @@ namespace proj {
 #if defined(SAVE_PARAMS_FOR_LORAD)
             void saveParamsForLoRaD(vector<string> & params, vector<string> & splits);
 #endif
+            void setPriorPost(bool use_prior_post);
             
             // Overrides of base class functions
             void clear();
@@ -71,6 +72,7 @@ namespace proj {
             
             Data::SharedPtr _data;
             unsigned _gene_index;
+            bool _prior_post;
     };
     
     inline GeneForest::GeneForest() {
@@ -199,11 +201,19 @@ namespace proj {
             _nodes[i]._name = taxon_name;
             _nodes[i].setEdgeLength(0.0);
             _nodes[i]._height = 0.0;
-            _nodes[i]._species = {Forest::_taxon_to_species[taxon_name]};
+#if defined(SPECIES_IS_BITSET)
+            try {
+                Node::setSpeciesBit(_nodes[i]._species, Forest::_taxon_to_species.at(taxon_name), /*init_to_zero_first*/true);
+            } catch(out_of_range) {
+                throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % taxon_name));
+            }
+#else
+            _nodes[i]._species = {Forest::_taxon_to_species.at(taxon_name)};
+#endif
             if (compute_partials) {
                 assert(_data);
 
-                //temporary!
+                // //temporary!
                 //cerr << "~~> GeneForest::createTrivialForest" << endl;
                 //cerr << str(format("~~>   _gene_index                        = %d") % _gene_index) << endl;
                 //cerr << str(format("~~>   i (leaf index)                     = %d") % i) << endl;
@@ -295,7 +305,7 @@ namespace proj {
                 // Create entry in _epochs for this coalescent event
                 Epoch cepoch(Epoch::coalescent_epoch, h);
                 cepoch._gene = _gene_index;
-                cepoch._coalescence_node = nd;
+                //cepoch._coalescence_node = nd;
                 cepoch._lineage_counts = species_lineage_counts;
                 cepoch._species = nd->getSpecies();
                 pushBackEpoch(_epochs, cepoch);
@@ -519,7 +529,8 @@ namespace proj {
         _lineages_within_species.clear();
         for (auto nd : _lineages) {
             // Add nd to the vector of nodes belonging to this species
-            _lineages_within_species[nd->getSpecies()].push_back(nd);
+            Node::species_t spp = nd->getSpecies();
+            _lineages_within_species[spp].push_back(nd);
         }
     }
     
@@ -538,8 +549,15 @@ namespace proj {
             // Used when there is not yet a species tree to condition on
             species_lineage_counts.clear();
             Node::species_t s;
+#if defined(SPECIES_IS_BITSET)
+            s = (Node::species_t)0;
+#endif
             for (unsigned i = 0; i < Forest::_nspecies; i++) {
+#if defined(SPECIES_IS_BITSET)
+                Node::setSpeciesBit(s, i, /*init_to_zero_first*/false);
+#else
                 s.insert(i);
+#endif
             }
             species_lineage_counts[s] = Forest::_ntaxa;
             
@@ -556,21 +574,35 @@ namespace proj {
             // Start out each species with count of zero
             species_lineage_counts.clear();
             for (unsigned i = 0; i < Forest::_nspecies; i++) {
+#if defined(SPECIES_IS_BITSET)
+                Node::species_t s;
+                Node::setSpeciesBit(s, i, /*init_to_zero_first*/true);
+#else
                 Node::species_t s = {i};
+#endif
                 species_lineage_counts[s] = 0;
             }
         
             for (auto preorder : _preorders) {
                 for (auto nd : preorder) {
                     if (!nd->_left_child) {
+#if defined(SPECIES_IS_BITSET)
+                        try {
+                            unsigned spp = Forest::_taxon_to_species.at(nd->_name);
+                            Node::setSpeciesBit(nd->_species, spp, /*init_to_zero_first*/true);
+                        } catch(out_of_range) {
+                            throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % nd->_name));
+                        }
+#else
                         if (nd->_species.size() > 1) {
                             // Leaf nodes are supposed to belong to single species
                             // so if _species_set includes more than one species,
                             // then this must be left over from when the gene forest
                             // was built conditional on a previous species tree
-                            unsigned spp = Forest::_taxon_to_species[nd->_name];
+                            unsigned spp = Forest::_taxon_to_species.at(nd->_name);
                             nd->setSpeciesFromUnsigned(spp);
                         }
+#endif
                         species_lineage_counts[nd->getSpecies()]++;
                     }
                 }
@@ -598,15 +630,10 @@ namespace proj {
         }
     }
     
-    //inline void GeneForest::updateLineageCountsVector(Epoch::lineage_counts_t & slc, unsigned slc_size) {
     inline void GeneForest::updateLineageCountsVector(Epoch::lineage_counts_t & slc) {
-        //slc.assign(slc_size, 0);
         slc.clear();
         for (auto & x : _lineages_within_species) {
-            //assert(x.first.size() == 1);
-            //unsigned s = *(x.first.begin());
             unsigned n = (unsigned)x.second.size();
-            //slc[s] = n;
             slc[x.first] = n;
         }
     }
@@ -616,6 +643,7 @@ namespace proj {
         for (auto & x : _lineages_within_species) {
             // Key is the species s (a set containing one or more integer values)
             Node::species_t s = x.first;
+            assert(species.size() > i);
             species[i] = s;
             
             // Value is vector of node pointers belonging to species s
@@ -633,6 +661,10 @@ namespace proj {
         // The total coalescence rate is the sum of individual species-specific rates
         double total_rate = accumulate(rates.begin(), rates.end(), 0.0);
         return total_rate;
+    }
+    
+    inline void GeneForest::setPriorPost(bool use_prior_post) {
+        _prior_post = use_prior_post;
     }
     
     inline pair<bool,double> GeneForest::advanceGeneForest(unsigned step, unsigned particle, bool simulating) {
@@ -701,7 +733,7 @@ namespace proj {
         // coalescence_occurred is true if case 2a or 4, false if case 1 or 2b
         bool coalescence_occurred = t > 0.0 && t < time_to_next_speciation;
         if (coalescence_occurred) {
-            // Extend all lineages by t
+            // Extend all lineages by t, updating _forest_height accordingly
             advanceAllLineagesBy(t);
             
             // Normalize the rates to create a vector of probabilities
@@ -715,119 +747,175 @@ namespace proj {
             // Get number of lineages in the chosen species
             unsigned n = (unsigned)_lineages_within_species[s].size();
             
-            // Perform prior-post (multinomial draw from all n-choose-2 possible joins in species s)
-            unsigned npairs = n*(n-1)/2;
-            vector<double> log_weights;
-            vector<pair<unsigned,unsigned> > pairs;
-
-            vector<PartialStore::partial_t> partials(npairs);
+            Node * first_node  = nullptr;
+            Node * second_node = nullptr;
+            Node * anc_node    = nullptr;
+            pair<unsigned,unsigned> chosen_pair;
             
-            vector<double> log_likelihoods;
-            vector<double> log_coalescent_likelihoods;
-            unsigned the_pair = 0;
-            for (unsigned i = 0; i < n - 1; i++) {
-                for (unsigned j = i + 1; j < n; j++) {
-                    Node * first_node  = _lineages_within_species[s][i];
-                    Node * second_node = _lineages_within_species[s][j];
-                    Node * anc_node    = joinLineagePair(first_node, second_node);
-                    removeTwoAddOne(_lineages, first_node, second_node, anc_node);
-                    anc_node->setSpecies(s);
-                    
-                    updateLineageCountsVector(species_lineage_counts);
-                    Epoch cepoch(Epoch::coalescent_epoch, _forest_height);
-                    cepoch._gene = _gene_index;
-                    cepoch._coalescence_node = anc_node;
-                    cepoch._lineage_counts = species_lineage_counts;
-                    cepoch._species = anc_node->getSpecies();
-                    auto eit = speciation_found ? insertEpochBefore(_epochs, cepoch, sit) : pushBackEpoch(_epochs, cepoch);
-                    
-                    // Compute partial likelihood array
-                    assert(anc_node->_partial == nullptr);
-                    anc_node->_partial = ps.getPartial(_gene_index);
-                                                            
-                    assert(anc_node->_left_child);
-                    assert(anc_node->_left_child->_right_sib);
-                    if (!simulating) {
-                        assert(_data);
-                        calcPartialArray(anc_node);
-                    }
-                    
-                    double log_likelihood = 0.0;
-                    double log_coalescent_likelihood = 0.0;
-                    double log_weight = 0.0;
-                    if (!simulating) {
-                        // Compute log Felsenstein likelihood
-                        log_likelihood = calcLogLikelihood();
-                        log_weight = log_likelihood - _prev_log_likelihood;
+            //TODO: simplify prior-post/prior-prior specification
+            // currently, global Forest::_prior_prior = true forces prior-prior for gene forests
+            // but if Forest::_prior_prior = false, then prior-prior used for first iteration only
+            if (Forest::_prior_prior || !_prior_post) {
+                // Perform prior-prior (randomly join two lineages in species s)
+                // Choose a random pair of lineages to join
+                chosen_pair = rng.nchoose2(n);
+                unsigned i = chosen_pair.first;
+                unsigned j = chosen_pair.second;
                 
-                        // Compute log coalescent likelihood
-                        log_coalescent_likelihood = calcLogCoalescentLikelihood(_epochs, _gene_index);
-#if 0 //temporary!
-                        log_weight += log_coalescent_likelihood - _prev_log_coalescent_likelihood;
-#endif
-                    }
-                    
-                    // Store all relevant information about this pair
-                    pairs.push_back(make_pair(i,j));
-                    
-                    partials[the_pair++] = anc_node->_partial;
-                    anc_node->_partial.reset();
-
-                    log_weights.push_back(log_weight);
-                    log_likelihoods.push_back(log_likelihood);
-                    log_coalescent_likelihoods.push_back(log_coalescent_likelihood);
-                    
-                    // Unjoin lineage pair
-                    unjoinLineagePair(anc_node, first_node, second_node);
-                    addTwoRemoveOne(_lineages, first_node, second_node, anc_node);
-                                        
-                    removeEpochAt(_epochs, eit);
-                }
-            }
-
-            // Compute sum of weights on log scale
-            log_sum_weights = calcLogSum(log_weights);
-            
-            // Normalize log weights to create a discrete probability distribution
-            probs.resize(log_weights.size());
-            transform(log_weights.begin(), log_weights.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
-            
-            // Choose one pair to join
-            unsigned which_pair = Forest::multinomialDraw(probs);
-            auto chosen_pair = pairs[which_pair];
-            
-            // Update previous log-likelihood and log-coalescent-likelihood values
-            _prev_log_likelihood            = log_likelihoods[which_pair];
-            _prev_log_coalescent_likelihood = log_coalescent_likelihoods[which_pair];
-            
-            Node * first_node  = _lineages_within_species[s][chosen_pair.first];
-            Node * second_node = _lineages_within_species[s][chosen_pair.second];
-            Node * anc_node    = joinLineagePair(first_node, second_node);
-            
-            // Ancestral node is in the same species as the nodes that were joined
-            anc_node->setSpecies(s);
-            
-            // Set ancestral node partial likelihood array to the one already calculated
-            if (!simulating) {
-                assert(_data);
-                assert(anc_node->_partial == nullptr);
-                //anc_node->_partial = ps.getPartial(_gene_index); //bug: just transfer existing, no need to allocate anew
+                // Join the chosen pair of lineages
+                auto & node_vect = _lineages_within_species.at(s);
+                first_node  = node_vect[i];
+                second_node = node_vect[j];
+                anc_node    = joinLineagePair(first_node, second_node);
+                anc_node->setSpecies(s);
+                                                
+                // Compute partial likelihood array of ancestral node
                 assert(anc_node->_left_child);
                 assert(anc_node->_left_child->_right_sib);
-
-                anc_node->_partial = partials[which_pair];
-                partials[which_pair].reset();
+                assert(anc_node->_partial == nullptr);
+                anc_node->_partial = ps.getPartial(_gene_index);
+                if (!simulating) {
+                    assert(_data);
+                    calcPartialArray(anc_node);
+                }
+                
+                double log_likelihood = 0.0;
+                double log_weight = 0.0;
+                if (!simulating) {
+                    // Compute log Felsenstein likelihood
+                    log_likelihood = calcLogLikelihood();
+                    log_weight = log_likelihood - _prev_log_likelihood;
+                }
+                
+                // Function returns log_sum_weights; name is holdover from when
+                // prior-post was only thing done
+                log_sum_weights = log_weight;
+                
+                // Update previous log-likelihood and log-coalescent-likelihood values
+                _prev_log_likelihood = log_likelihood;
             }
-            
-            // Clear the temporary partials vector
-            partials.clear();
+            else {
+                // Perform prior-post (multinomial draw from all n-choose-2 possible joins in species s)
+                unsigned npairs = n*(n-1)/2;
+                vector<double> log_weights;
+                vector<pair<unsigned,unsigned> > pairs;
+                vector<PartialStore::partial_t> partials;
+                vector<double> log_likelihoods;
+                
+                for (unsigned i = 0; i < n - 1; i++) {
+                    for (unsigned j = i + 1; j < n; j++) {
+                        // Get pointers to nodes i and j within species s
+                        auto & node_vect = _lineages_within_species.at(s);
+                        first_node  = node_vect[i];
+                        second_node = node_vect[j];
+                        anc_node    = joinLineagePair(first_node, second_node);
+                        anc_node->setSpecies(s);
+                        
+                        // Temporarily remove first_node and second_node from _lineages, adding anc_node
+                        removeTwoAddOne(_lineages, first_node, second_node, anc_node);
+
+                        // Update map relating species (keys) to counts of lineages (values)
+                        updateLineageCountsVector(species_lineage_counts);
+                        
+                        // Create a coalescence epoch for this join
+                        Epoch cepoch(Epoch::coalescent_epoch, _forest_height);
+                        cepoch._gene = _gene_index;
+                        cepoch._lineage_counts = species_lineage_counts;
+                        cepoch._species = anc_node->getSpecies();
+                        auto eit = speciation_found ? insertEpochBefore(_epochs, cepoch, sit) : pushBackEpoch(_epochs, cepoch);
+                        
+                        // Compute partial likelihood array
+                        assert(anc_node->_partial == nullptr);
+                        anc_node->_partial = ps.getPartial(_gene_index);
+                        assert(anc_node->_left_child);
+                        assert(anc_node->_left_child->_right_sib);
+                        if (!simulating) {
+                            assert(_data);
+                            calcPartialArray(anc_node);
+                        }
+                        
+                        // Compute log_weight corresponding to this proposed join
+                        double log_likelihood = 0.0;
+                        double log_coalescent_likelihood = 0.0;
+                        double log_weight = 0.0;
+                        if (!simulating) {
+                            // Compute log Felsenstein likelihood
+                            log_likelihood = calcLogLikelihood();
+                            log_weight = log_likelihood - _prev_log_likelihood;
+                    
+                            // Compute log coalescent likelihood
+                            log_coalescent_likelihood = calcLogCoalescentLikelihood(_epochs, _gene_index);
+                        }
+                        
+                        // Store the pair in pairs vector
+                        pairs.push_back(make_pair(i,j));
+                        
+                        // Store the ancestor's partial in the partials vector
+                        partials.push_back(anc_node->_partial);
+                        anc_node->_partial.reset();
+
+                        // Store the log_weight in the log_weights vector
+                        log_weights.push_back(log_weight);
+
+                        // Store the log_likelihood in the log_likelihoods vector
+                        log_likelihoods.push_back(log_likelihood);
+                        
+                        // Unjoin lineage pair
+                        unjoinLineagePair(anc_node, first_node, second_node);
+                        
+                        // Add first_node and second_node back into _lineages, removing anc_node
+                        addTwoRemoveOne(_lineages, first_node, second_node, anc_node);
+                                            
+                        // Remove the coalescent epoch added for this pair
+                        removeEpochAt(_epochs, eit);
+                    }
+                }
+
+                // Compute sum of weights on log scale (this is *the* log_weight for prior-post)
+                log_sum_weights = calcLogSum(log_weights);
+                
+                // Normalize log weights to create a discrete probability distribution
+                probs.resize(log_weights.size());
+                transform(log_weights.begin(), log_weights.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
+                
+                // Choose one pair to join
+                unsigned which_pair = Forest::multinomialDraw(probs);
+                chosen_pair = pairs[which_pair];
+                
+                // //temporary!
+                //cerr << str(format("~~> log_sum_weights = %.6f (%d, %d of %d pairs) for step %d, particle %d, gene %d\n") % log_sum_weights % chosen_pair.first % chosen_pair.second % log_weights.size() % step % particle % _gene_index);
+                
+                // Update previous log-likelihood
+                _prev_log_likelihood = log_likelihoods[which_pair];
+                
+                auto & node_vect = _lineages_within_species.at(s);
+                first_node  = node_vect[chosen_pair.first];
+                second_node = node_vect[chosen_pair.second];
+                anc_node    = joinLineagePair(first_node, second_node);
+                
+                // Ancestral node is in the same species as the nodes that were joined
+                anc_node->setSpecies(s);
+                
+                // Set ancestral node partial likelihood array to the one already calculated
+                if (!simulating) {
+                    assert(_data);
+                    assert(anc_node->_partial == nullptr);
+                    assert(anc_node->_left_child);
+                    assert(anc_node->_left_child->_right_sib);
+                    anc_node->_partial = partials[which_pair];
+                    partials[which_pair].reset();
+                }
+                
+                // Clear the temporary partials vector
+                partials.clear();
+            }
             
             // Clear partials for first_node and second_node as they will no longer be needed
             first_node->_partial.reset();
             second_node->_partial.reset();
             
             // Update lineage vector
-            removeTwoAddOne(_lineages_within_species[s], first_node, second_node, anc_node);
+            removeTwoAddOne(_lineages_within_species.at(s), first_node, second_node, anc_node);
             removeTwoAddOne(_lineages, first_node, second_node, anc_node);
             
             // Clear partial for final lineage if we are down to just one
@@ -835,11 +923,12 @@ namespace proj {
                 anc_node->_partial.reset();
             }
             
-            // Create entry in _epochs for this coalescent event
+            // Update species_lineage_counts to reflect updated _lineages_within_species
             updateLineageCountsVector(species_lineage_counts);
+            
+            // Create entry in _epochs for this coalescent event
             Epoch cepoch(Epoch::coalescent_epoch, _forest_height);
             cepoch._gene = _gene_index;
-            cepoch._coalescence_node = anc_node;
             cepoch._lineage_counts = species_lineage_counts;
             cepoch._species = anc_node->getSpecies();
             if (speciation_found)
@@ -847,7 +936,15 @@ namespace proj {
             else
                 pushBackEpoch(_epochs, cepoch);
 
-            debugShow(format("    coalesced %d and %d in species %d at height %.5f\n    %s") % chosen_pair.first % chosen_pair.second % *(s.begin()) % _forest_height % makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false));
+#if defined(SPECIES_IS_BITSET)
+#           if defined(DEBUGGING)
+                debugShow(format("    coalesced %d and %d in species %d at height %.5f\n    %s") % chosen_pair.first % chosen_pair.second % s % _forest_height % makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false));
+#           endif
+#else
+#           if defined(DEBUGGING)
+                debugShow(format("    coalesced %d and %d in species %d at height %.5f\n    %s") % chosen_pair.first % chosen_pair.second % *(s.begin()) % _forest_height % makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false));
+#           endif
+#endif
         }
         else {
             // No gene tree coalescence before the end of the species tree epoch
@@ -857,22 +954,43 @@ namespace proj {
             advanceAllLineagesBy(time_to_next_speciation);
             
             // Ensure that this speciation epoch will not be used again until it is reset
+            // by a call to Epoch::resetAllEpochs. This is necessary because roundoff error
+            // can sometimes result in an already-used speciation epoch being reused unless
+            // it is flagged as having already been consumed.
             sit->_valid = false;
             
             // Every lineage previously assigned to left_species or right_species
             // should be reassigned to anc_species
+            
+            // Begin by getting the left, right, and anc species from the iterator (sit)
+            // sitting on the next speciation epoch
             Node::species_t left_species  = sit->_left_species;
             Node::species_t right_species = sit->_right_species;
             Node::species_t anc_species   = sit->_anc_species;
-            auto reassign = [&left_species, &right_species, &anc_species](Node * nd) {
-                Node::species_t & ndsppset = nd->getSpecies();
-                if (ndsppset == left_species || ndsppset == right_species)
+            
+            // Create a functor that assigns anc_species to the supplied nd if it is currently
+            // in either left_species or right_species
+            auto reassign = [&left_species, &right_species, &anc_species, this](Node * nd) {
+                Node::species_t & ndspp = nd->getSpecies();
+                if (ndspp == left_species || ndspp == right_species) {
                     nd->setSpecies(anc_species);
+                }
             };
+            
+            // Apply functor reassign to each node in _lineages
             for_each(_lineages.begin(), _lineages.end(), reassign);
             
+#if defined(DEBUGGING)
             debugShow(format("    hit speciation event at height %.5f\n    %s") % _forest_height % makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false));
+#endif
         }
+
+        //if (particle == 0) {
+        //    cerr << "\n~~> step = " << step << ", particle = " << particle << endl;
+        //    Forest::_debug_coal_like = true;
+        //    debugShowEpochs(_epochs);
+        //    Forest::_debug_coal_like = false;
+        //}
 
         return make_pair(coalescence_occurred, log_sum_weights);
     }
@@ -881,6 +999,7 @@ namespace proj {
         Forest::operator=(other);
         _data = other._data;
         _gene_index = other._gene_index;
+        _prior_post = other._prior_post;
 
         // Node _partial data members not copied in base class because partials are
         // only relevant for gene forests (and gene index must be known)
@@ -996,7 +1115,7 @@ namespace proj {
             // _leaf_partials[g] is vector<partial_t>
             // _leaf_partials[g][t] is partial_t (i.e. shared pointer to partial array)
 
-            //temporary!
+            // //temporary!
             //cerr << str(format("allocating leaf partials for gene %g (rank %d, first = %d, last = %d\n") % g % ::my_rank % ::my_first_gene % ::my_last_gene);
             
             _leaf_partials[g].resize(Forest::_ntaxa);

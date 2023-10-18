@@ -39,7 +39,7 @@ namespace proj {
             void initGeneForest(string newick);
             void initGeneForests(vector<string> & newicks);
             void resetSpeciesForest();
-            void resetGeneForest();
+            void resetGeneForest(bool prior_post);
             void digestSpeciesTree(bool append);
             void digestGeneTrees(bool append);
             void sortEpochs();
@@ -127,11 +127,13 @@ namespace proj {
     }
     
     inline void Particle::initGeneForests(vector<string> & newicks) {
+        assert(_gene_index == -1);   // should only be called by a "species" particle
         assert(Forest::_ntaxa > 0);
         assert(Forest::_ngenes > 0);
         assert(Forest::_ngenes == newicks.size());
         _gene_forests.clear();
         _gene_forests.resize(Forest::_ngenes);
+        _epochs.clear();
 #if defined(USING_MPI)
         for (unsigned g = ::my_first_gene; g < ::my_last_gene; ++g) {
 #else
@@ -139,16 +141,19 @@ namespace proj {
 #endif
             _gene_forests[g].setData(_data);
             _gene_forests[g].setGeneIndex(g);
-
             _gene_forests[g].buildFromNewick(newicks[g]);
+            auto & e = _gene_forests[g].digest();
+            move(e.begin(), e.end(), inserter(_epochs, _epochs.end()));
+            _gene_forests[g].clear();
         }
+        _gene_forests.clear();
     }
     
     inline void Particle::resetSpeciesForest() {
         _species_forest.createTrivialForest();
     }
 
-    inline void Particle::resetGeneForest() {
+    inline void Particle::resetGeneForest(bool prior_post) {
         assert(Forest::_ntaxa > 0);
         assert(Forest::_ngenes > 0);
         assert(_gene_index >= 0 && _gene_index < Forest::_ngenes);
@@ -156,19 +161,23 @@ namespace proj {
         _gene_forests.resize(Forest::_ngenes);
         _gene_forests[_gene_index].setData(_data);
         _gene_forests[_gene_index].setGeneIndex(_gene_index);
+        _gene_forests[_gene_index].setPriorPost(prior_post);
 
-        //temporary!
-        //cerr << "~~> Particle::resetGeneForest" << endl;
-        //cerr << str(format("~~>   _gene_index  = %d") % _gene_index) << endl;
-        //cerr << str(format("~~>   rank         = %d") % ::my_rank) << endl;
-        //cerr << str(format("~~>   first        = %d") % ::my_first_gene) << endl;
-        //cerr << str(format("~~>   last         = %d") % ::my_last_gene) << endl;
+        // //temporary!
+        // cerr << "~~> Particle::resetGeneForest" << endl;
+        // cerr << str(format("~~>   _gene_index  = %d") % _gene_index) << endl;
+        // cerr << str(format("~~>   rank         = %d") % ::my_rank) << endl;
+        // cerr << str(format("~~>   first        = %d") % ::my_first_gene) << endl;
+        // cerr << str(format("~~>   last         = %d") % ::my_last_gene) << endl;
 
         _gene_forests[_gene_index].createTrivialForest();
     }
 
     inline void Particle::digestSpeciesTree(bool append) {
         auto & e = _species_forest.digest();
+        //Forest::_debug_coal_like = true;
+        //Forest::debugShowEpochs(e);
+        //Forest::_debug_coal_like = false;
         if (append) {
             move(e.begin(), e.end(), inserter(_epochs, _epochs.end()));
         }
@@ -180,7 +189,7 @@ namespace proj {
     inline void Particle::digestGeneTrees(bool append) {
         assert(_gene_index == -1);   // should only be called by a "species" particle
         
-        // Populate _epochs based on all gene trees'
+        // Populate _epochs based on all gene trees
         if (!append)
             _epochs.clear();
         
@@ -243,6 +252,7 @@ namespace proj {
         double log_weight = 0.0;
         if (step == 0) {
             // The species forest gets a copy of the combined epochs from all gene trees
+            //TODO: necessary to copy epochs, can we just get a pointer?
             _species_forest.copyEpochsFrom(_epochs);
         }
         log_weight = _species_forest.advanceSpeciesForest(particle, step);
@@ -292,12 +302,12 @@ namespace proj {
             // "gene" particle
             _gene_forests[_gene_index] = other._gene_forests[_gene_index];
         }
-        else {
-            // "species" particle
-            for (unsigned g = 0; g < Forest::_ngenes; ++g) {
-                _gene_forests[g] = other._gene_forests[g];
-            }
-        }
+        //else {
+        //    // "species" particle
+        //    for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+        //        _gene_forests[g] = other._gene_forests[g];
+        //    }
+        //}
 
         // Copy species forest
         _species_forest = other._species_forest;

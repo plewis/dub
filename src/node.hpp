@@ -31,7 +31,11 @@ namespace proj {
                                         ~Node();
 
                     typedef vector<Node *>  ptr_vect_t;
+#if defined(SPECIES_IS_BITSET)
+                    typedef unsigned long   species_t;
+#else
                     typedef set<unsigned>   species_t;
+#endif
         
                     Node *              getParent()                 {return _parent;}
                     const Node *        getParent() const           {return _parent;}
@@ -78,7 +82,9 @@ namespace proj {
                     species_t &         getSpecies() {return _species;}
                     void                setSpecies(const species_t & other);
                     void                setSpeciesToUnion(const species_t & left, const species_t & right);
+#if !defined(SPECIES_IS_BITSET)
                     void                setSpeciesFromUnsigned(unsigned spp);
+#endif
         
                     double              getHeight() const       {return _height;}
                     void                setHeight(double v);
@@ -88,6 +94,15 @@ namespace proj {
                     void                clearPointers()             {_left_child = _right_sib = _parent = 0;}
                     
                     static string       taxonNameToSpeciesName(string taxon_name);
+
+#if defined(SPECIES_IS_BITSET)
+                    static string       speciesStringRepresentation(species_t species);
+                    static void         setSpeciesMask(species_t & mask, unsigned nspecies);
+                    static void         setSpeciesBits(species_t & to_species, const species_t & from_species, bool init_to_zero_first);
+                    static void         unsetSpeciesBits(species_t & to_species, const species_t & from_species);
+                    static void         setSpeciesBit(species_t & to_species, unsigned i, bool init_to_zero_first);
+                    static void         unsetSpeciesBit(species_t & to_species, unsigned i);
+#endif
                                         
             static const double _smallest_edge_length;
 
@@ -119,6 +134,62 @@ namespace proj {
             PartialStore::partial_t _partial;
     };
     
+#if defined(SPECIES_IS_BITSET)
+    inline string Node::speciesStringRepresentation(species_t species) {
+        species_t species_copy = species;
+        unsigned bits_avail = (unsigned)sizeof(species_t);
+        string s;
+        for (unsigned i = 0; i < bits_avail; ++i) {
+            species_t bitmask = ((species_t)1 << i);
+            bool bit_is_set = ((species_copy & bitmask) > (species_t)0);
+            if (bit_is_set) {
+                // Add species i to the string
+                s += to_string(i);
+                
+                // Zero that bit so we know when we are done
+                species_copy &= ~bitmask;
+            }
+            if (!species_copy) {
+                // If species_copy is zero, there are no more bits set
+                break;
+            }
+        }
+        return s;
+    }
+    
+    inline void Node::setSpeciesMask(species_t & mask, unsigned nspecies) {
+        mask = (species_t)0;
+        for (unsigned i = 0; i < nspecies; ++i) {
+            mask |= ((species_t)1 << i);
+        }
+    }
+    
+    inline void Node::setSpeciesBits(species_t & to_species, const species_t & from_species, bool init_to_zero_first) {
+        if (init_to_zero_first)
+            to_species = (species_t)0;
+
+        // Copy bits in from_species to to_species
+        to_species |= from_species;
+    }
+    
+    inline void Node::unsetSpeciesBits(species_t & to_species, const species_t & from_species) {
+        // Zero from_species' bits in to_species
+        to_species &= ~from_species;
+    }
+    
+    inline void Node::setSpeciesBit(species_t & to_species, unsigned i, bool init_to_zero_first) {
+        if (init_to_zero_first)
+            to_species = (species_t)0;
+            
+        // Set ith bit in to_species
+        to_species |= ((species_t)1 << i);
+    }
+    
+    inline void Node::unsetSpeciesBit(species_t & to_species, unsigned i) {
+        // Unset ith bit in to_species
+        to_species &= ~((species_t)1 << i);
+    }
+#endif
     
     inline Node::Node() {
         clear();
@@ -137,7 +208,11 @@ namespace proj {
         _name = "";
         _edge_length = _smallest_edge_length;
         _height = 0.0;
+#if defined(SPECIES_IS_BITSET)
+        _species = (species_t)0;
+#else
         _species.clear();
+#endif
         _partial = nullptr;
     }   
 
@@ -163,7 +238,11 @@ namespace proj {
     
     inline void Node::setSpeciesToUnion(const species_t & left, const species_t & right) {
         _species = left;
+#if defined(SPECIES_IS_BITSET)
+        Node::setSpeciesBits(_species, right, /*init_to_zero_first*/false);
+#else
         _species.insert(right.begin(), right.end());
+#endif
         
         // Internal nodes can have species that are unions and hence have size > 1, but
         // leaf nodes should be assigned to just a single species. This function should only
@@ -171,6 +250,9 @@ namespace proj {
         assert(_left_child);
     }
     
+#if defined(SPECIES_IS_BITSET)
+    // setSpeciesFromUnsigned not defined
+#else
     inline void Node::setSpeciesFromUnsigned(unsigned spp) {
         _species = {spp};
         
@@ -179,6 +261,7 @@ namespace proj {
         // be called for leaf nodes.
         assert(!_left_child);
     }
+#endif
     
     inline string Node::taxonNameToSpeciesName(string tname) {
         vector<string> before_after;
