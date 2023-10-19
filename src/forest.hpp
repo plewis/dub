@@ -1363,6 +1363,36 @@ namespace proj {
                 }
             }
 
+            //temporary! below here
+            if (!common_pool && _counts_workspace.empty()) {
+                cerr << "crash imminent: in Forest::calcLogCoalescentLikelihood" << endl;
+                cerr << str(format("  gene=%d, _forest_height=%.6f, e._height=%.6f, prev_height=%.6f") % gene % _forest_height % e._height % prev_height) << endl;
+                cerr << "  epochs:" << endl;
+                for (const Epoch & ee : epochs) {
+                    double h = ee._height;
+                    if (ee.isInitEpoch()) {
+                        ostringstream oss;
+                        for (auto it = ee._lineage_counts.begin(); it != ee._lineage_counts.end(); it++)
+                            oss << it->second << " ";
+                        oss.seekp(-1, oss.cur); // Remove the trailing ' '
+                        cerr << str(format("  %s%.9f: init gene tree %d (lineage counts: %s)\n") % (ee._valid ? " " : "x") % h % ee._gene % oss.str());
+                    }
+                    else if (ee.isCoalescentEpoch()) {
+                        assert(ee._species);
+                        string species_str = Node::speciesStringRepresentation(ee._species);
+                        cerr << str(format("  %s%.9f: coalescence in gene tree %d (species %s = %d)\n") % (ee._valid ? " " : "x") % h % ee._gene % species_str % ee._species);
+                    }
+                    else {
+                        assert(ee._left_species);
+                        assert(ee._right_species);
+                        assert(ee._anc_species);
+                        cerr << str(format("  %s%.9f: speciation event (%s,%s -> %s) (%d,%d -> %d)\n") % (ee._valid ? " " : "x") % h % ee.leftSpeciesAsStr() % ee.rightSpeciesAsStr() % ee.ancSpeciesAsStr() % ee._left_species % ee._right_species % ee._anc_species);
+                    }
+                    if (h > _forest_height)
+                        break;
+                 }
+            }
+            //temporary! above here
             assert(common_pool || !_counts_workspace.empty());
                                 
             // This is the time since the previous coalescence or speciation
