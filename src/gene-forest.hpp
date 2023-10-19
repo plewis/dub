@@ -752,10 +752,8 @@ namespace proj {
             Node * anc_node    = nullptr;
             pair<unsigned,unsigned> chosen_pair;
             
-            //TODO: simplify prior-post/prior-prior specification
-            // currently, global Forest::_prior_prior = true forces prior-prior for gene forests
-            // but if Forest::_prior_prior = false, then prior-prior used for first iteration only
-            if (Forest::_prior_prior || !_prior_post) {
+            //if (Forest::_prior_prior || !_prior_post) {
+            if (!_prior_post) {
                 // Perform prior-prior (randomly join two lineages in species s)
                 // Choose a random pair of lineages to join
                 chosen_pair = rng.nchoose2(n);

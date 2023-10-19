@@ -92,7 +92,7 @@ namespace proj {
             static double                   _infinity;
             static double                   _negative_infinity;
             
-            static bool                     _prior_prior;
+            //static bool                     _prior_prior;
             
             static vector<double>           _cumprobs;  // workspace used by multinomialDraw
                         
@@ -1363,6 +1363,7 @@ namespace proj {
                 }
             }
 
+#if defined(SPECIES_IS_BITSET)
             //temporary! below here
             if (!common_pool && _counts_workspace.empty()) {
                 cerr << "crash imminent: in Forest::calcLogCoalescentLikelihood" << endl;
@@ -1393,6 +1394,7 @@ namespace proj {
                  }
             }
             //temporary! above here
+#endif
             assert(common_pool || !_counts_workspace.empty());
                                 
             // This is the time since the previous coalescence or speciation

@@ -170,7 +170,7 @@ double                              Forest::_negative_infinity = -numeric_limits
 
 vector<double>                      Forest::_cumprobs;
 
-bool                                Forest::_prior_prior        = true;
+//bool                                Forest::_prior_prior        = true;
 
 PartialStore::leaf_partials_t       GeneForest::_leaf_partials;
 

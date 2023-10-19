@@ -237,7 +237,7 @@ namespace proj {
         ("updatelambda",  value(&Forest::_update_lambda)->default_value(true), "if yes, update lambda at the end of each iteration")
         ("rnseed",  value(&_rnseed)->default_value(13579), "pseudorandom number seed")
         ("sortforests",  value(&_sort_forests)->default_value(false), "sort forests by weight when saving to file")
-        ("priorprior",  value(&Forest::_prior_prior)->default_value(true), "if yes, use fast prior-prior to choose gene forest joins (will take more iterations to converge); if no, use slower prior-post (fewer iterations, but each iteration may take a long time)")
+        //("priorprior",  value(&Forest::_prior_prior)->default_value(true), "if yes, use fast prior-prior to choose gene forest joins (will take more iterations to converge); if no, use slower prior-post (fewer iterations, but each iteration may take a long time)")
         ("visualizationcutoff", value(&_visualization_cutoff)->default_value(0.99), "particles sorted from highest to lowest weight will be saved for visualization if cumulative weight is less than this value")
         ;
         
@@ -1834,7 +1834,7 @@ namespace proj {
     }
 #else   // not MPI
     inline void Proj::runRandom() {
-        //drawStartingSpeciesTree();
+        drawStartingSpeciesTree();
         for (unsigned iter = 0; iter < _niter; ++iter) {
             bool last_iter = (iter == _niter - 1);
             stopwatch.start();

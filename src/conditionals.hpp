@@ -16,7 +16,9 @@
 // Leaf nodes in gene trees are always assigned to one species, so
 // their set would have one element or the unsigned long would have one bit set
 // Ancestral species are unions of their descendant species.
-#define SPECIES_IS_BITSET
+// NOTE: This setting yields branch lengths that are an order of magnitude too small
+// on a simulated data set; not sure why at this point
+//#define SPECIES_IS_BITSET
 
 //#define LOG_MEMORY
 //#define USING_SIGNPOSTS
