@@ -109,7 +109,8 @@ namespace proj {
             void                       showSettings() const;
             void                       outputGeneTreesToFile(string fn, const vector<string> & newicks) const;
             void                       outputNexusTreefile(string fn, const vector<string> & newicks) const;
-            void                       outputAnnotatedNexusTreefile(string fn, const vector<string> & newicks, const vector<string> & treenames, const vector<string> & annotations) const;
+            void                       outputAnnotatedNexusTreefile(string fn, const vector<tuple<unsigned, double, string, string, string> > & treeinfo) const;
+            //void                       outputAnnotatedNexusTreefile(string fn, const vector<string> & newicks, const vector<string> & treenames, const vector<string> & annotations) const;
             
             string                     _data_file_name;
             string                     _species_tree_file_name;
@@ -1037,6 +1038,26 @@ namespace proj {
     }
     
     inline void Proj::saveUniqueSpeciesTrees(string fn, const vector<unsigned> & counts) {
+#if 1
+        vector<tuple<unsigned, double, string, string, string> > treeinfo;
+        unsigned p = 0;
+        unsigned i = 0;
+        for (auto c : counts) {
+            if (c > 0) {
+                unsigned nparticles = (unsigned)_species_particles.size();
+                double pct = 100.0*c/nparticles;
+                string note = str(format("This tree found in %d particles (%.1f%% of %d total particles)") % c % pct % nparticles);
+                string treename = str(format("tree%d-%d") % i % c);
+                string newick = _species_particles[p].getSpeciesForest().makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false);
+                treeinfo.push_back(make_tuple(c, pct, note, treename, newick));
+                ++i;
+            }
+            ++p;
+        }
+        sort(treeinfo.begin(), treeinfo.end());
+        reverse(treeinfo.begin(), treeinfo.end());
+        outputAnnotatedNexusTreefile(fn, treeinfo);
+#else
         vector<string> tree_names;
         vector<string> notes;
         vector<string> species_tree_newicks;
@@ -1054,6 +1075,7 @@ namespace proj {
             ++p;
         }
         outputAnnotatedNexusTreefile(fn, species_tree_newicks, tree_names, notes);
+#endif
     }
 
 #if 1
@@ -1373,6 +1395,25 @@ namespace proj {
         streef.close();
     }
     
+#if 1
+    inline void Proj::outputAnnotatedNexusTreefile(string fn, const vector<tuple<unsigned, double, string, string, string> > & treeinfo) const {
+        ofstream streef(fn);
+        streef << "#NEXUS\n\n";
+        streef << "begin trees;\n";
+        unsigned t = 0;
+        for (auto tinfo : treeinfo) {
+            //unsigned  count = get<0>(tinfo);
+            //double      pct = get<1>(tinfo);
+            string     note = get<2>(tinfo);
+            string treename = get<3>(tinfo);
+            string   newick = get<4>(tinfo);
+            streef << str(format("  tree %s = [%s] [&R] %s;\n") % treename % note % newick);
+            ++t;
+        }
+        streef << "end;\n";
+        streef.close();
+    }
+#else
     inline void Proj::outputAnnotatedNexusTreefile(string fn, const vector<string> & newicks, const vector<string> & treenames, const vector<string> & annotations) const {
         ofstream streef(fn);
         streef << "#NEXUS\n\n";
@@ -1385,6 +1426,7 @@ namespace proj {
         streef << "end;\n";
         streef.close();
     }
+#endif
     
     inline void Proj::drawStartingSpeciesTree() {
         // This should be a setting
@@ -1764,18 +1806,18 @@ namespace proj {
                 // Update lambda
                 updateLambda(iter, chosen_particle, _ntries_lambda, _lambda_delta);
             
-                if (_verbosity > 1 || last_iter) {
-                    // Report log-likelihood of current parameter values
-                    output("\nUsing current parameter values:\n", 2);
-                    double log_coal_like = chosen_particle.calcLogCoalLikeGivenTheta(Forest::_theta);
-                    output(format("    log(coalescent likelihood) = %.5f\n") % log_coal_like, 2);
-                    double total_log_like = 0.0;
-                    for (unsigned g = 0; g < Forest::_ngenes; ++g) {
-                        double log_like = chosen_particle.calcLogLikelihoodForGene(g);
-                        total_log_like += log_like;
-                    }
-                    output(format("    log(likelihood) = %.5f\n") % total_log_like, 2);
-                }
+                //if (_verbosity > 1 || last_iter) {
+                //    // Report log-likelihood of current parameter values
+                //    output("\nUsing current parameter values:\n", 2);
+                //    double log_coal_like = chosen_particle.calcLogCoalLikeGivenTheta(Forest::_theta);
+                //    output(format("    log(coalescent likelihood) = %.5f\n") % log_coal_like, 2);
+                //    double total_log_like = 0.0;
+                //    for (unsigned g = 0; g < Forest::_ngenes; ++g) {
+                //        double log_like = chosen_particle.calcLogLikelihoodForGene(g);
+                //        total_log_like += log_like;
+                //    }
+                //    output(format("    log(likelihood) = %.5f\n") % total_log_like, 2);
+                //}
                 
                 // Broadcast gene trees, species tree, theta, and lambda all in one message
                 // with values separated by | characters

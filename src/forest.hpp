@@ -1389,8 +1389,8 @@ namespace proj {
                         assert(ee._anc_species);
                         cerr << str(format("  %s%.9f: speciation event (%s,%s -> %s) (%d,%d -> %d)\n") % (ee._valid ? " " : "x") % h % ee.leftSpeciesAsStr() % ee.rightSpeciesAsStr() % ee.ancSpeciesAsStr() % ee._left_species % ee._right_species % ee._anc_species);
                     }
-                    if (h > _forest_height)
-                        break;
+                    //if (h > _forest_height)
+                    //    break;
                  }
             }
             //temporary! above here
@@ -1420,8 +1420,8 @@ namespace proj {
                         assert(ee._anc_species.size() > 0);
                         cerr << str(format("  %s%.9f: speciation event (%s,%s -> %s)\n") % (ee._valid ? " " : "x") % h % ee.leftSpeciesAsStr() % ee.rightSpeciesAsStr() % ee.ancSpeciesAsStr());
                     }
-                    if (h > _forest_height)
-                        break;
+                    //if (h > _forest_height)
+                    //    break;
                  }
             }
             //temporary! above here
