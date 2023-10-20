@@ -1394,6 +1394,37 @@ namespace proj {
                  }
             }
             //temporary! above here
+#else
+            //temporary! below here
+            if (!common_pool && _counts_workspace.empty()) {
+                cerr << "crash imminent: in Forest::calcLogCoalescentLikelihood" << endl;
+                cerr << str(format("  gene=%d, _forest_height=%.6f, e._height=%.6f, prev_height=%.6f") % gene % _forest_height % e._height % prev_height) << endl;
+                cerr << "  epochs:" << endl;
+                for (const Epoch & ee : epochs) {
+                    double h = ee._height;
+                    if (ee.isInitEpoch()) {
+                        ostringstream oss;
+                        for (auto it = ee._lineage_counts.begin(); it != ee._lineage_counts.end(); it++)
+                            oss << it->second << " ";
+                        oss.seekp(-1, oss.cur); // Remove the trailing ' '
+                        cerr << str(format("  %s%.9f: init gene tree %d (lineage counts: %s)\n") % (ee._valid ? " " : "x") % h % ee._gene % oss.str());
+                    }
+                    else if (ee.isCoalescentEpoch()) {
+                        assert(ee._species.size() > 0);
+                        string species_str = speciesSetAsString(ee._species);
+                        cerr << str(format("  %s%.9f: coalescence in gene tree %d (species %s)\n") % (ee._valid ? " " : "x") % h % ee._gene % species_str);
+                    }
+                    else {
+                        assert(ee._left_species.size() > 0);
+                        assert(ee._right_species.size() > 0);
+                        assert(ee._anc_species.size() > 0);
+                        cerr << str(format("  %s%.9f: speciation event (%s,%s -> %s)\n") % (ee._valid ? " " : "x") % h % ee.leftSpeciesAsStr() % ee.rightSpeciesAsStr() % ee.ancSpeciesAsStr());
+                    }
+                    if (h > _forest_height)
+                        break;
+                 }
+            }
+            //temporary! above here
 #endif
             assert(common_pool || !_counts_workspace.empty());
                                 
