@@ -3,13 +3,6 @@
 extern proj::Lot rng;
 extern proj::PartialStore ps;
 
-#if defined(USING_MPI)
-extern int my_rank;
-extern int ntasks;
-extern unsigned my_first_gene;
-extern unsigned my_last_gene;
-#endif
-
 namespace proj {
 
     class Particle;
@@ -24,20 +17,29 @@ namespace proj {
             ~GeneForest();
                                 
             void setData(Data::SharedPtr d);
-            void simulateData(Data::SharedPtr data, unsigned starting_site, unsigned nsites);
+            pair<bool,double> advanceGeneForest(unsigned step,
+                                                unsigned particle,
+                                                bool simulating);
+            void simulateData(Data::SharedPtr data,
+                                unsigned starting_site,
+                                unsigned nsites);
             void setGeneIndex(unsigned i);
-            void simulateGeneTree(unsigned gene, epoch_list_t & epochs);
-            pair<bool,double> advanceGeneForest(unsigned step, unsigned particle, bool simulating = false);
+            void simulateGeneTree(unsigned gene);
             
             double getLastLogLikelihood() const {return _prev_log_likelihood;}
             double calcLogLikelihood() const;
             static void computeLeafPartials(unsigned gene, Data::SharedPtr data);
             static void releaseLeafPartials(unsigned gene);
             
-#if defined(SAVE_PARAMS_FOR_LORAD)
-            void saveParamsForLoRaD(vector<string> & params, vector<string> & splits);
-#endif
             void setPriorPost(bool use_prior_post);
+            
+#if defined(NEWWAY)
+            void drawIncrement(vector<SMCGlobal::incr_tuple_t> & increments, double speciation_increment);
+#else
+            double calcRates(vector<SMCGlobal::rate_tuple_t> & rates);
+#endif
+            double coalescentEvent(SMCGlobal::species_t spp, bool compute_partial);
+            void mergeSpecies(SMCGlobal::species_t left_species, SMCGlobal::species_t right_species, SMCGlobal::species_t anc_species);
             
             // Overrides of base class functions
             void clear();
@@ -52,23 +54,19 @@ namespace proj {
             
         protected:
                   
-            Epoch & createInitEpoch(bool ancestral_species_only);
-            epoch_list_t & digest();
             double calcTransitionProbability(unsigned from, unsigned to, double edge_length);
             void debugComputeLeafPartials(unsigned gene, int number, PartialStore::partial_t partial);
-            void calcPartialArray(Node * new_nd);
+            double calcPartialArray(Node * new_nd);
             void computeAllPartials();
-            void initSpeciesLineageCountsVector(Epoch::lineage_counts_t & species_lineage_counts, bool ancestral_species_only) const;
             void buildLineagesWithinSpeciesMap();
-            double computeCoalRatesForSpecies(vector<Node::species_t> & species, vector<double> & rates);
-            void updateLineageCountsVector(Epoch::lineage_counts_t & slc);
+            double computeCoalRatesForSpecies(vector<SMCGlobal::species_t> & species, vector<double> & rates);
             
             static PartialStore::leaf_partials_t _leaf_partials;
             
             // NOTE: any variables added must be copied in operator=
             
             // key is species index, value is vector of Node pointers
-            map<Node::species_t, Node::ptr_vect_t > _lineages_within_species;
+            map<SMCGlobal::species_t, Node::ptr_vect_t > _lineages_within_species;
             
             Data::SharedPtr _data;
             unsigned _gene_index;
@@ -106,570 +104,149 @@ namespace proj {
     }
     
     inline void GeneForest::setGeneIndex(unsigned i) {
-        assert(i < Forest::_ngenes);
+        assert(i < SMCGlobal::_ngenes);
         _gene_index = i;
     }
     
-    inline void GeneForest::simulateData(Data::SharedPtr data, unsigned starting_site, unsigned nsites) {
+#if defined(NEWWAY)
+    inline void GeneForest::drawIncrement(vector<SMCGlobal::incr_tuple_t> & increments, double speciation_increment) {
+        bool found = false;
+        SMCGlobal::incr_tuple_t smallest_increment = make_tuple(SMCGlobal::_infinity, 0, 0);
         
-#if !defined(USE_JUKE_CANTOR_MODEL)
-#   error Must define USE_JUKE_CANTOR_MODEL as that is the only model currently implemented
-#endif
+        // Build _lineages_within_species, a map that provides a vector
+        // of Node pointers for each species
+        buildLineagesWithinSpeciesMap();
 
-        // Create vector of states for each node in the tree
-        unsigned nnodes = (unsigned)_nodes.size();
-        vector< vector<unsigned> > sequences(nnodes);
-        for (unsigned i = 0; i < nnodes; i++) {
-            sequences[i].resize(nsites, 4);
-        }
-        
-        // Walk through tree in preorder sequence, simulating all sites as we go
-        //    DNA   state      state
-        //         (binary)  (decimal)
-        //    A      0001        1
-        //    C      0010        2
-        //    G      0100        4
-        //    T      1000        8
-        //    ?      1111       15
-        //    R      0101        5
-        //    Y      1010       10
-        
-        // Simulate starting sequence at the root node
-        Node * nd = *(_lineages.begin());
-        unsigned ndnum = nd->_number;
-        assert(ndnum < nnodes);
-        for (unsigned i = 0; i < nsites; i++) {
-            sequences[ndnum][i] = rng.randint(0,3);
-        }
-        
-        nd = findNextPreorder(nd);
-        while (nd) {
-            ndnum = nd->_number;
-            assert(ndnum < nnodes);
-
-            // Get reference to parent sequence
-            assert(nd->_parent);
-            unsigned parnum = nd->_parent->_number;
-            assert(parnum < nnodes);
+        for (auto & kvpair : _lineages_within_species) {
+            // Get number of lineages in this species
+            double n = (double)kvpair.second.size();
             
-            // Evolve nd's sequence given parent's sequence and edge length
-            for (unsigned i = 0; i < nsites; i++) {
-                unsigned from_state = sequences[parnum][i];
-                double cum_prob = 0.0;
-                double u = rng.uniform();
-                for (unsigned to_state = 0; to_state < 4; to_state++) {
-                    cum_prob += calcTransitionProbability(from_state, to_state, nd->_edge_length);
-                    if (u < cum_prob) {
-                        sequences[ndnum][i] = to_state;
-                        break;
-                    }
-                }
-                assert(sequences[ndnum][i] < 4);
-            }
-            
-            // Move to next node in preorder sequence
-            nd = findNextPreorder(nd);
-        }
-
-        assert(data);
-        Data::data_matrix_t & dm = data->getDataMatrixNonConst();
-        
-        // Copy sequences to data object
-        for (unsigned t = 0; t < _ntaxa; t++) {
-            // Allocate row t of _data's _data_matrix data member
-            dm[t].resize(starting_site + nsites);
-            
-            // Get reference to nd's sequence
-            unsigned ndnum = _nodes[t]._number;
-            
-            // Translate to state codes and copy
-            for (unsigned i = 0; i < nsites; i++) {
-                dm[t][starting_site + i] = (Data::state_t)1 << sequences[ndnum][i];
-            }
-        }
-    }
-    
-    // This is an override of the abstract base class function
-    inline void GeneForest::createTrivialForest(bool compute_partials) {
-        assert(Forest::_ntaxa > 0);
-        assert(Forest::_ntaxa == Forest::_taxon_names.size());
-        clear();
-        _nodes.resize(2*Forest::_ntaxa - 1);
-        for (unsigned i = 0; i < Forest::_ntaxa; i++) {
-            string taxon_name = Forest::_taxon_names[i];
-            _nodes[i]._number = i;
-            _nodes[i]._name = taxon_name;
-            _nodes[i].setEdgeLength(0.0);
-            _nodes[i]._height = 0.0;
-#if defined(SPECIES_IS_BITSET)
-            try {
-                Node::setSpeciesBit(_nodes[i]._species, Forest::_taxon_to_species.at(taxon_name), /*init_to_zero_first*/true);
-            } catch(out_of_range) {
-                throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % taxon_name));
-            }
-#else
-            _nodes[i]._species = {Forest::_taxon_to_species.at(taxon_name)};
-#endif
-            if (compute_partials) {
-                assert(_data);
-
-                // //temporary!
-                //cerr << "~~> GeneForest::createTrivialForest" << endl;
-                //cerr << str(format("~~>   _gene_index                        = %d") % _gene_index) << endl;
-                //cerr << str(format("~~>   i (leaf index)                     = %d") % i) << endl;
-                //cerr << str(format("~~>   _leaf_partials.size()              = %d") % _leaf_partials.size()) << endl;
-                //cerr << str(format("~~>   _leaf_partials[_gene_index].size() = %d") % _leaf_partials.size()) << endl;
-                //cerr << str(format("~~>   rank                               = %d") % ::my_rank) << endl;
-                //cerr << str(format("~~>   first                              = %d") % ::my_first_gene) << endl;
-                //cerr << str(format("~~>   last                               = %d") % ::my_last_gene) << endl;
-
-                assert(_leaf_partials[_gene_index].size() > i);
-                _nodes[i]._partial = _leaf_partials[_gene_index][i];
-            }
-            _lineages.push_back(&_nodes[i]);
-        }
-        _forest_height = 0.0;
-        _next_node_index = Forest::_ntaxa;
-        _next_node_number = Forest::_ntaxa;
-        
-        _prev_log_likelihood = 0.0;
-        
-        _prev_log_coalescent_likelihood = 0.0;
-    }
-    
-    inline Epoch & GeneForest::createInitEpoch(bool ancestral_species_only) {
-        // Create an init entry in _epochs for this gene that just stores the starting
-        // species_lineage_counts vector
-        refreshAllPreorders();
-
-        Epoch iepoch(Epoch::init_epoch, -1.0);
-        iepoch._gene = _gene_index;
-        initSpeciesLineageCountsVector(iepoch._lineage_counts, ancestral_species_only);
-        auto it = pushFrontEpoch(_epochs, iepoch);
-        
-        return *it;
-    }
-    
-    inline epoch_list_t & GeneForest::digest() {
-        // Assumes gene forest is a complete tree
-        assert(_lineages.size() == 1);
-        refreshAllPreorders();
-        
-        // Begin with a clean slate
-        _epochs.clear();
-        
-        // Create an init entry in _epochs for this gene that just stores the starting
-        // species_lineage_counts vector
-
-        // Initialize vector of lineage counts for each species
-        // For example, if there are 3 species, then species_lineage_counts
-        // will have 3 + 2 = 5 elements and only the first 3 will have non-zero
-        // counts upon initialization. E.g. [2,3,2,0,0]. This says that species
-        // 0 has 2 lineages, species 1 has 3 lineages, and species 2 has 2 lineages.
-        Epoch & init_epoch = createInitEpoch(/*ancestral_species_only*/false);
-        Epoch::lineage_counts_t species_lineage_counts = init_epoch._lineage_counts;
-
-        // Record coalescent events in the gene forest using a post-order
-        // traversal, calculating heights of nodes along the way
-        Node::ptr_vect_t & preorder = _preorders[0];
-        for (Node * nd : boost::adaptors::reverse(preorder)) {
-            Node * lchild = nd->getLeftChild();
-            if (lchild) {
-                // nd is an internal
-                Node * rchild = lchild->getRightSib();
+            if (n > 1) {
+                // Calculate coalescence rate for this species
+                double r = n*(n-1)/SMCGlobal::_theta;
                 
-                // Assume tree has no polytomies
-                assert(!rchild->getRightSib());
-
-                // Gather info needed to compute height of nd
-                double height_left  = lchild->getHeight();
-                double brlen_left   = lchild->getEdgeLength();
-                double height_right = rchild->getHeight();
-                double brlen_right  = rchild->getEdgeLength();
-
-                // Height calculated through left and right children
-                // should be identical if this is an ultrametric time tree
-                double hleft        = height_left + brlen_left;
-                double hright       = height_right + brlen_right;
-                assert(fabs(hleft - hright) < Forest::_small_enough);
+                // Draw an increment
+                double incr = -log(1.0 - rng.uniform())/r;
                 
-                // Set height of this internal node so that later nodes can use it
-                double h = 0.5*(hleft + hright);
-                nd->setHeight(h);
-
-                // Internal node's species is the union of its childrens' species
-                nd->setSpeciesToUnion(lchild->getSpecies(), rchild->getSpecies());
-                
-                //unsigned ndnum = nd->getNumber();
-                
-                // Create entry in _epochs for this coalescent event
-                Epoch cepoch(Epoch::coalescent_epoch, h);
-                cepoch._gene = _gene_index;
-                //cepoch._coalescence_node = nd;
-                cepoch._lineage_counts = species_lineage_counts;
-                cepoch._species = nd->getSpecies();
-                pushBackEpoch(_epochs, cepoch);
-            }
-            else {
-                // nd is a leaf
-                nd->setHeight(0.0);
-            }
-        }
-
-        // Sort epochs by height
-        _epochs.sort(epochLess);
-        
-        return _epochs;
-    }
-    
-    inline void GeneForest::debugComputeLeafPartials(unsigned gene, int number, PartialStore::partial_t partial) {
-        assert(_data);
-
-        unsigned npatterns = _data->getNumPatternsInSubset(gene);
-        Data::begin_end_pair_t be = _data->getSubsetBeginEnd(gene);
-        unsigned first_pattern = be.first;
-
-        // Set each partial according to the observed data for this leaf
-        auto data_matrix=_data->getDataMatrix();
-        for (unsigned p = 0; p < npatterns; p++) {
-            unsigned pp = first_pattern + p;
-            for (unsigned s = 0; s < Forest::_nstates; s++) {
-                Data::state_t state = (Data::state_t)1 << s;
-                Data::state_t d = data_matrix[number][pp];
-                double result = state & d;
-                partial->_v[p*Forest::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
-            }
-            // Ensure that the _nstates partials add up to at least 1
-            assert(accumulate(partial->_v.begin() + p*Forest::_nstates, partial->_v.begin() + p*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
-        }
-    }
-    
-    inline double GeneForest::calcTransitionProbability(unsigned from, unsigned to, double edge_length){
-        double transition_prob = 0.0;
-#if defined(USE_JUKE_CANTOR_MODEL)
-        if (from == to) {
-            transition_prob = 0.25 + 0.75*exp(-4.0*edge_length/3.0);
-        }
-        
-        else {
-            transition_prob = 0.25 - 0.25*exp(-4.0*edge_length/3.0);
-        }
-#else   // HKY with hard-coded empirical frequencies specific to *beast tutorial example!
-        double pi[] = {0.25, 0.25, 0.25, 0.25};
-#       error need to create _index if this code is used
-        assert(_index >= 0 && _index <= 3);
-        if (_index == 1) {
-            pi[0] = 0.40783;
-            pi[1] = 0.20913;
-            pi[2] = 0.19049;
-            pi[3] = 0.19255;
-        }
-        else if (_index == 2) {
-            pi[0] = 0.24551;
-            pi[1] = 0.21386;
-            pi[2] = 0.23698;
-            pi[3] = 0.30364;
-        }
-        else if (_index == 3) {
-            pi[0] = 0.20185;
-            pi[1] = 0.21339;
-            pi[2] = 0.21208;
-            pi[3] = 0.37268;
-        }
-        double Pi[] = {pi[0] + pi[2], pi[1] + pi[3], pi[0] + pi[2], pi[1] + pi[3]};
-        bool is_transition = (from == 0 && to == 2) || (from == 1 && to == 3) || (from == 2 && to == 0) || (from == 3 && to == 1);
-        bool is_same = (from == 0 && to == 0) || (from == 1 && to == 1) | (from == 2 && to == 2) | (from == 3 && to == 3);
-        bool is_transversion = !(is_same || is_transition);
-
-        // JC expected number of substitutions per site
-        // v = betat*(AC + AG + AG + CA + CG + CT + GA + GC + GT + TA + TC + TG)
-        //   = betat*12*(1/16)
-        //   = (3/4)*betat
-        // betat = (4/3)*v
-
-        // HKY expected number of substitutions per site
-        //  v = betat*(AC + AT + CA + CG + GC + GT + TA + TG) + kappa*betat*(AG + CT + GA + TC)
-        //    = 2*betat*(AC + AT + CG + GT + kappa(AG + CT))
-        //    = 2*betat*((A + G)*(C + T) + kappa(AG + CT))
-        //  betat = v/[2*( (A + G)(C + T) + kappa*(AG + CT) )]
-        double kappa = 4.0349882; // (614.0*4.6444 + 601.0*4.0624 + 819.0*3.558)/(614.0 + 601.0 + 819.0);
-        //double kappa = 1.0;
-        double betat = 0.5*edge_length/((pi[0] + pi[2])*(pi[1] + pi[3]) + kappa*(pi[0]*pi[2] + pi[1]*pi[3]));
-        
-        if (is_transition) {
-            double pi_j = pi[to];
-            double Pi_j = Pi[to];
-            transition_prob = pi_j*(1.0 + (1.0 - Pi_j)*exp(-betat)/Pi_j - exp(-betat*(kappa*Pi_j + 1.0 - Pi_j))/Pi_j);
-        }
-        else if (is_transversion) {
-            double pi_j = pi[to];
-            transition_prob = pi_j*(1.0 - exp(-betat));
-        }
-        else {
-            double pi_j = pi[to];
-            double Pi_j = Pi[to];
-            transition_prob = pi_j*(1.0 + (1.0 - Pi_j)*exp(-betat)/Pi_j) + (Pi_j - pi_j)*exp(-betat*(kappa*Pi_j + 1.0 - Pi_j))/Pi_j;
-        }
-#endif
-        return transition_prob;
-    }
-
-    inline void GeneForest::calcPartialArray(Node * new_nd) {
-        auto & parent_partial_array = new_nd->_partial->_v;
-        unsigned npatterns = _data->getNumPatternsInSubset(_gene_index);
-        for (Node * child = new_nd->_left_child; child; child = child->_right_sib) {
-            auto & child_partial_array = child->_partial->_v;
-
-            for (unsigned p = 0; p < npatterns; p++) {
-
-                for (unsigned s = 0; s < Forest::_nstates; s++) {
-
-                    double sum_over_child_states = 0.0;
-                    for (unsigned s_child = 0; s_child < Forest::_nstates; s_child++) {
-                        double child_transition_prob = calcTransitionProbability(s, s_child, child->_edge_length);
-                        double child_partial = child_partial_array[p*Forest::_nstates + s_child];
-                        sum_over_child_states += child_transition_prob * child_partial;
-                    }   // child state loop
-                    
-                    if (child == new_nd->_left_child)
-                        parent_partial_array[p*Forest::_nstates + s] = sum_over_child_states;
-                    else
-                        parent_partial_array[p*Forest::_nstates + s] *= sum_over_child_states;
-                }   // parent state loop
-            }   // pattern loop
-        }   // child loop
-    }
-    
-#if defined(SAVE_PARAMS_FOR_LORAD)
-    inline void GeneForest::saveParamsForLoRaD(vector<string> & params, vector<string> & splits) {
-        // Appends to params and splits; clear these before calling if desired
-        
-        // Should only be called for complete gene trees
-        assert(_lineages.size() == 1);
-                
-        // Ensure each node has correct _height
-        refreshAllHeightsAndPreorders();
-        
-        // Save all internal node heights
-        vector< pair<double, string> > height_split_pairs;
-        for (auto nd : boost::adaptors::reverse(_preorders[0])) {
-            if (nd->_left_child) {
-                // internal
-                string split_repr = nd->_split.createPatternRepresentation();
-                height_split_pairs.push_back(make_pair(nd->_height, split_repr));
-            }
-        }
-        
-        // Sort heights from smallest to largest
-        sort(height_split_pairs.begin(), height_split_pairs.end());
-        
-        // Compute increments between coalescent events and store in params
-        double h0 = 0.0;
-        for (auto h : height_split_pairs) {
-            double incr = h.first - h0;
-            assert(incr > 0.0);
-            string incr_str = str(format("%.9f") % incr);
-            params.push_back(incr_str);
-            splits.push_back(h.second);
-            h0 = h.first;
-        }
-    }
-#endif
-    
-    inline double GeneForest::calcLogLikelihood() const {
-        // Computes the log of the Felsenstein likelihood. Note that this function just
-        // carries out the final summation. It assumes that all nodes (leaf nodes included)
-        // have partial likelihood arrays already computed.
-        if (!_data)
-            return 0.0;
-            
-        // Compute log likelihood of every lineage
-        double total_log_likelihood = 0.0;
-        
-        // Get the number of patterns
-        unsigned npatterns = _data->getNumPatternsInSubset(_gene_index);
-        
-        // Get the first and last pattern index for this gene's data
-        Data::begin_end_pair_t be = _data->getSubsetBeginEnd(_gene_index);
-        unsigned first_pattern = be.first;
-        //unsigned last_pattern = be.second;
-        
-        // Get the name of the gene (data subset)
-        string gene_name = _data->getSubsetName(_gene_index);
-
-        // Get pattern counts
-        auto counts = _data->getPatternCounts();
-        
-        // Sum log likelihood across all lineages. If forest is a tree, there will
-        // be just one lineage, which represents the root of the gene tree.
-        unsigned tmp = 0;
-        for (auto nd : _lineages) {
-        
-            double log_like = 0.0;
-            for (unsigned p = 0; p < npatterns; p++) {
-                unsigned pp = first_pattern + p;
-                double site_like = 0.0;
-                for (unsigned s = 0; s < Forest::_nstates; s++) {
-                    double child_partial = nd->_partial->_v[p*Forest::_nstates+s];
-                    site_like += 0.25*child_partial;
-                }
-                
-                log_like += log(site_like)*counts[pp];
-            }
-            total_log_likelihood += log_like;
-            tmp++;
-        }
-
-        return total_log_likelihood;
-    }
-
-    inline void GeneForest::buildLineagesWithinSpeciesMap() {
-        // Assumes every node in _lineages is correctly assigned to a species
-        
-        _lineages_within_species.clear();
-        for (auto nd : _lineages) {
-            // Add nd to the vector of nodes belonging to this species
-            Node::species_t spp = nd->getSpecies();
-            _lineages_within_species[spp].push_back(nd);
-        }
-    }
-    
-    inline void GeneForest::initSpeciesLineageCountsVector(Epoch::lineage_counts_t & species_lineage_counts, bool ancestral_species_only) const {
-        // Assumes _preorders is up-to-date.
-        // Assumes forest is trivial.
-        // Assumes every leaf node is assigned to the correct species
-        // Resizes supplied species_lineage_counts vector to 2*nspecies - 1 elements
-        // and zeros it. Each leaf node visited increases the count of that leaf's species by one.
-        //unsigned sz = (unsigned)(2*Forest::_nspecies - 1);
-        //species_lineage_counts.resize(sz);
-        //species_lineage_counts.assign(sz, 0);
-        
-        if (ancestral_species_only) {
-            // All taxa begin in the ancestral species
-            // Used when there is not yet a species tree to condition on
-            species_lineage_counts.clear();
-            Node::species_t s;
-#if defined(SPECIES_IS_BITSET)
-            s = (Node::species_t)0;
-#endif
-            for (unsigned i = 0; i < Forest::_nspecies; i++) {
-#if defined(SPECIES_IS_BITSET)
-                Node::setSpeciesBit(s, i, /*init_to_zero_first*/false);
-#else
-                s.insert(i);
-#endif
-            }
-            species_lineage_counts[s] = Forest::_ntaxa;
-            
-            for (auto preorder : _preorders) {
-                for (auto nd : preorder) {
-                    if (!nd->_left_child) {
-                        // Set all tip nodes to the ancestral species s
-                        nd->setSpecies(s);
-                    }
+                // Save increment only if it is less than speciation_increment
+                // and smaller than any previously-stored increment.
+                // The smallest_increment tuple stores:
+                //   (1) increment;
+                //   (2) gene (first gene is 1); and
+                //   (3) species for which rate was computed.
+                if (incr < speciation_increment && incr < get<0>(smallest_increment)) {
+                    found = true;
+                    smallest_increment = make_tuple(incr, _gene_index + 1, kvpair.first);
                 }
             }
         }
-        else {
-            // Start out each species with count of zero
-            species_lineage_counts.clear();
-            for (unsigned i = 0; i < Forest::_nspecies; i++) {
-#if defined(SPECIES_IS_BITSET)
-                Node::species_t s;
-                Node::setSpeciesBit(s, i, /*init_to_zero_first*/true);
-#else
-                Node::species_t s = {i};
-#endif
-                species_lineage_counts[s] = 0;
-            }
         
-            for (auto preorder : _preorders) {
-                for (auto nd : preorder) {
-                    if (!nd->_left_child) {
-#if defined(SPECIES_IS_BITSET)
-                        try {
-                            unsigned spp = Forest::_taxon_to_species.at(nd->_name);
-                            Node::setSpeciesBit(nd->_species, spp, /*init_to_zero_first*/true);
-                        } catch(out_of_range) {
-                            throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % nd->_name));
-                        }
+        if (found)
+            increments.push_back(smallest_increment);
+    }
 #else
-                        if (nd->_species.size() > 1) {
-                            // Leaf nodes are supposed to belong to single species
-                            // so if _species_set includes more than one species,
-                            // then this must be left over from when the gene forest
-                            // was built conditional on a previous species tree
-                            unsigned spp = Forest::_taxon_to_species.at(nd->_name);
-                            nd->setSpeciesFromUnsigned(spp);
-                        }
-#endif
-                        species_lineage_counts[nd->getSpecies()]++;
-                    }
-                }
-            }
-        }
-    }
-    
-    inline void GeneForest::simulateGeneTree(unsigned gene, epoch_list_t & epochs) {
-        createTrivialForest(false);
-        //setData(_data);
-        setGeneIndex(gene);
-        copyEpochsFrom(epochs);
-        createInitEpoch(/*ancestral_species_only*/false);
-        resetAllEpochs(_epochs);
-        debugShowEpochs(_epochs);
+    inline double GeneForest::calcRates(vector<SMCGlobal::rate_tuple_t> & rates) {
+        double total_rate = 0.0;
         
-        unsigned nsteps = Forest::_ntaxa - 1;
-        for (unsigned step = 0; step < nsteps; ++step) {
-            debugShow(format("  step %d of %d") % step % nsteps);
-            bool coalescent_event = false;
-            while (!coalescent_event) {
-                auto result = advanceGeneForest(step, 0, true);
-                coalescent_event = result.first;
-            }
-        }
-    }
-    
-    inline void GeneForest::updateLineageCountsVector(Epoch::lineage_counts_t & slc) {
-        slc.clear();
-        for (auto & x : _lineages_within_species) {
-            unsigned n = (unsigned)x.second.size();
-            slc[x.first] = n;
-        }
-    }
-    
-    inline double GeneForest::computeCoalRatesForSpecies(vector<Node::species_t> & species, vector<double> & rates) {
-        unsigned i = 0;
-        for (auto & x : _lineages_within_species) {
-            // Key is the species s (a set containing one or more integer values)
-            Node::species_t s = x.first;
-            assert(species.size() > i);
-            species[i] = s;
-            
-            // Value is vector of node pointers belonging to species s
-            unsigned n = (unsigned)x.second.size();
-            assert(n > 0);
-            
-            // Rate of coalescence in species s is n choose 2 divided by theta/2
-            // or, equivalently, n*(n-1)/theta
-            double coal_rate = float(n)*(n-1)/Forest::_theta;
-            rates[i] = coal_rate;
-            
-            ++i;
-        }
+        // Build _lineages_within_species, a map that provides a vector
+        // of Node pointers for each species
+        buildLineagesWithinSpeciesMap();
 
-        // The total coalescence rate is the sum of individual species-specific rates
-        double total_rate = accumulate(rates.begin(), rates.end(), 0.0);
+        for (auto & kvpair : _lineages_within_species) {
+            // Get number of lineages in this species
+            double n = (double)kvpair.second.size();
+            
+            if (n > 1) {
+                // Calculate coalescence rate for this species
+                double r = n*(n-1)/SMCGlobal::_theta;
+                total_rate += r;
+                
+                // rates entry stores: (1) rate; (2) gene (first gene is 1); and
+                // (3) species for which rate was computed
+                rates.push_back(make_tuple(r, _gene_index + 1, kvpair.first));
+            }
+        }
+        
         return total_rate;
     }
+#endif
     
-    inline void GeneForest::setPriorPost(bool use_prior_post) {
-        _prior_post = use_prior_post;
+    inline double GeneForest::coalescentEvent(SMCGlobal::species_t spp, bool compute_partial) {
+        double log_weight = 0.0;
+        
+        // Get vector of nodes in the specified species spp
+        auto & node_vect = _lineages_within_species.at(spp);
+        unsigned n = (unsigned)node_vect.size();
+        assert(n > 1);
+        
+        // Choose a random pair of lineages to join
+        pair<unsigned,unsigned> chosen_pair = rng.nchoose2(n);
+        unsigned i = chosen_pair.first;
+        unsigned j = chosen_pair.second;
+        
+        // Join the chosen pair of lineages
+        Node * first_node  = node_vect[i];
+        Node * second_node = node_vect[j];
+        Node * anc_node    = joinLineagePair(first_node, second_node);
+        anc_node->setSpecies(spp);
+        
+        if (compute_partial) {
+            // Compute partial likelihood array of ancestral node
+            assert(_data);
+            assert(anc_node->_left_child);
+            assert(anc_node->_left_child->_right_sib);
+            assert(anc_node->_partial == nullptr);
+            anc_node->_partial = ps.getPartial(_gene_index);
+            log_weight = calcPartialArray(anc_node);
+        }
+
+        // Update lineage vector
+        removeTwoAddOne(_lineages_within_species.at(spp), first_node, second_node, anc_node);
+        removeTwoAddOne(_lineages, first_node, second_node, anc_node);
+        
+#if defined(LOW_MEM)
+        // Stow partials from the two children of anc_node (if they are internals)
+        // as they will never be needed again. Don't stow leaf partials because
+        // those have copies in _leaf_partials
+        if (first_node->_left_child) {
+            // Internal node partials should point to just one object
+            assert(first_node->_partial.use_count() == 1);
+            ps.putPartial(_gene_index, first_node->_partial);
+        }
+        first_node->_partial.reset();
+        if (first_node->_left_child) {
+            // Internal node partials should point to just one object
+            assert(second_node->_partial.use_count() == 1);
+            ps.putPartial(_gene_index, second_node->_partial);
+        }
+        second_node->_partial.reset();
+#endif
+        
+        return log_weight;
     }
     
+    inline void GeneForest::mergeSpecies(SMCGlobal::species_t left_species, SMCGlobal::species_t right_species, SMCGlobal::species_t anc_species) {
+        // Every lineage previously assigned to left_species or right_species
+        // should be reassigned to anc_species
+                    
+        // Create a functor that assigns anc_species to the supplied nd if it is currently
+        // in either left_species or right_species
+        auto reassign = [&left_species, &right_species, &anc_species, this](Node * nd) {
+            SMCGlobal::species_t & ndspp = nd->getSpecies();
+            if (ndspp == left_species || ndspp == right_species) {
+                nd->setSpecies(anc_species);
+            }
+        };
+        
+        // Apply functor reassign to each node in _lineages
+        for_each(_lineages.begin(), _lineages.end(), reassign);
+    }
+
     inline pair<bool,double> GeneForest::advanceGeneForest(unsigned step, unsigned particle, bool simulating) {
+        return make_pair(true, 0.1);
+#if 0
         // Returns true if a coalescent event was realized, false if chosen coalescence was
-        // deep or if all species have only one lineaged.
+        // deep or if all species have only one lineage.
         
         // If coalescence_occurred, log_sum_weights is the log weight returned
         double log_sum_weights = 0.0;
@@ -879,10 +456,7 @@ namespace proj {
                 // Choose one pair to join
                 unsigned which_pair = Forest::multinomialDraw(probs);
                 chosen_pair = pairs[which_pair];
-                
-                // //temporary!
-                //cerr << str(format("~~> log_sum_weights = %.6f (%d, %d of %d pairs) for step %d, particle %d, gene %d\n") % log_sum_weights % chosen_pair.first % chosen_pair.second % log_weights.size() % step % particle % _gene_index);
-                
+                                
                 // Update previous log-likelihood
                 _prev_log_likelihood = log_likelihoods[which_pair];
                 
@@ -933,16 +507,6 @@ namespace proj {
                 insertEpochBefore(_epochs, cepoch, sit);
             else
                 pushBackEpoch(_epochs, cepoch);
-
-#if defined(SPECIES_IS_BITSET)
-#           if defined(DEBUGGING)
-                debugShow(format("    coalesced %d and %d in species %d at height %.5f\n    %s") % chosen_pair.first % chosen_pair.second % s % _forest_height % makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false));
-#           endif
-#else
-#           if defined(DEBUGGING)
-                debugShow(format("    coalesced %d and %d in species %d at height %.5f\n    %s") % chosen_pair.first % chosen_pair.second % *(s.begin()) % _forest_height % makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false));
-#           endif
-#endif
         }
         else {
             // No gene tree coalescence before the end of the species tree epoch
@@ -977,22 +541,383 @@ namespace proj {
             
             // Apply functor reassign to each node in _lineages
             for_each(_lineages.begin(), _lineages.end(), reassign);
-            
-#if defined(DEBUGGING)
-            debugShow(format("    hit speciation event at height %.5f\n    %s") % _forest_height % makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false));
+        }
+        return make_pair(coalescence_occurred, log_sum_weights);
 #endif
+    }
+    
+    inline void GeneForest::simulateData(Data::SharedPtr data, unsigned starting_site, unsigned nsites) {
+        
+#if !defined(USE_JUKE_CANTOR_MODEL)
+#   error Must define USE_JUKE_CANTOR_MODEL as that is the only model currently implemented
+#endif
+
+        // Create vector of states for each node in the tree
+        unsigned nnodes = (unsigned)_nodes.size();
+        vector< vector<unsigned> > sequences(nnodes);
+        for (unsigned i = 0; i < nnodes; i++) {
+            sequences[i].resize(nsites, 4);
+        }
+        
+        // Walk through tree in preorder sequence, simulating all sites as we go
+        //    DNA   state      state
+        //         (binary)  (decimal)
+        //    A      0001        1
+        //    C      0010        2
+        //    G      0100        4
+        //    T      1000        8
+        //    ?      1111       15
+        //    R      0101        5
+        //    Y      1010       10
+        
+        // Simulate starting sequence at the root node
+        Node * nd = *(_lineages.begin());
+        unsigned ndnum = nd->_number;
+        assert(ndnum < nnodes);
+        for (unsigned i = 0; i < nsites; i++) {
+            sequences[ndnum][i] = rng.randint(0,3);
+        }
+        
+        nd = findNextPreorder(nd);
+        while (nd) {
+            ndnum = nd->_number;
+            assert(ndnum < nnodes);
+
+            // Get reference to parent sequence
+            assert(nd->_parent);
+            unsigned parnum = nd->_parent->_number;
+            assert(parnum < nnodes);
+            
+            // Evolve nd's sequence given parent's sequence and edge length
+            for (unsigned i = 0; i < nsites; i++) {
+                unsigned from_state = sequences[parnum][i];
+                double cum_prob = 0.0;
+                double u = rng.uniform();
+                for (unsigned to_state = 0; to_state < 4; to_state++) {
+                    cum_prob += calcTransitionProbability(from_state, to_state, nd->_edge_length);
+                    if (u < cum_prob) {
+                        sequences[ndnum][i] = to_state;
+                        break;
+                    }
+                }
+                assert(sequences[ndnum][i] < 4);
+            }
+            
+            // Move to next node in preorder sequence
+            nd = findNextPreorder(nd);
         }
 
-        //if (particle == 0) {
-        //    cerr << "\n~~> step = " << step << ", particle = " << particle << endl;
-        //    Forest::_debug_coal_like = true;
-        //    debugShowEpochs(_epochs);
-        //    Forest::_debug_coal_like = false;
-        //}
+        assert(data);
+        Data::data_matrix_t & dm = data->getDataMatrixNonConst();
+        
+        // Copy sequences to data object
+        for (unsigned t = 0; t < SMCGlobal::_ntaxa; t++) {
+            // Allocate row t of _data's _data_matrix data member
+            dm[t].resize(starting_site + nsites);
+            
+            // Get reference to nd's sequence
+            unsigned ndnum = _nodes[t]._number;
+            
+            // Translate to state codes and copy
+            for (unsigned i = 0; i < nsites; i++) {
+                dm[t][starting_site + i] = (Data::state_t)1 << sequences[ndnum][i];
+            }
+        }
+    }
+    
+    // This is an override of the abstract base class function
+    inline void GeneForest::createTrivialForest(bool compute_partials) {
+        assert(SMCGlobal::_ntaxa > 0);
+        assert(SMCGlobal::_ntaxa == SMCGlobal::_taxon_names.size());
+        clear();
+        _nodes.resize(2*SMCGlobal::_ntaxa - 1);
+        for (unsigned i = 0; i < SMCGlobal::_ntaxa; i++) {
+            string taxon_name = SMCGlobal::_taxon_names[i];
+            _nodes[i]._number = i;
+            _nodes[i]._name = taxon_name;
+            _nodes[i].setEdgeLength(0.0);
+            _nodes[i]._height = 0.0;
+            try {
+                Node::setSpeciesBit(_nodes[i]._species, SMCGlobal::_taxon_to_species.at(taxon_name), /*init_to_zero_first*/true);
+            } catch(out_of_range) {
+                throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % taxon_name));
+            }
+            if (compute_partials) {
+                assert(_data);
+                assert(_leaf_partials[_gene_index].size() > i);
+                _nodes[i]._partial = _leaf_partials[_gene_index][i];
+            }
+            _lineages.push_back(&_nodes[i]);
+        }
+        _forest_height = 0.0;
+        _next_node_index = SMCGlobal::_ntaxa;
+        _next_node_number = SMCGlobal::_ntaxa;
+        _prev_log_likelihood = 0.0;
+    }
+    
+    inline void GeneForest::debugComputeLeafPartials(unsigned gene, int number, PartialStore::partial_t partial) {
+        assert(_data);
 
-        return make_pair(coalescence_occurred, log_sum_weights);
+        unsigned npatterns = _data->getNumPatternsInSubset(gene);
+        Data::begin_end_pair_t be = _data->getSubsetBeginEnd(gene);
+        unsigned first_pattern = be.first;
+
+        // Set each partial according to the observed data for this leaf
+        auto data_matrix=_data->getDataMatrix();
+        for (unsigned p = 0; p < npatterns; p++) {
+            unsigned pp = first_pattern + p;
+            for (unsigned s = 0; s < SMCGlobal::_nstates; s++) {
+                Data::state_t state = (Data::state_t)1 << s;
+                Data::state_t d = data_matrix[number][pp];
+                double result = state & d;
+                partial->_v[p*SMCGlobal::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
+            }
+            // Ensure that the _nstates partials add up to at least 1
+            assert(accumulate(partial->_v.begin() + p*SMCGlobal::_nstates, partial->_v.begin() + p*SMCGlobal::_nstates + SMCGlobal::_nstates, 0.0) >= 1.0);
+        }
+    }
+    
+    inline double GeneForest::calcTransitionProbability(unsigned from, unsigned to, double edge_length){
+        double transition_prob = 0.0;
+#if defined(USE_JUKE_CANTOR_MODEL)
+        if (from == to) {
+            transition_prob = 0.25 + 0.75*exp(-4.0*edge_length/3.0);
+        }
+        
+        else {
+            transition_prob = 0.25 - 0.25*exp(-4.0*edge_length/3.0);
+        }
+#else   // HKY with hard-coded empirical frequencies specific to *beast tutorial example!
+        double pi[] = {0.25, 0.25, 0.25, 0.25};
+#       error need to create _index if this code is used
+        assert(_index >= 0 && _index <= 3);
+        if (_index == 1) {
+            pi[0] = 0.40783;
+            pi[1] = 0.20913;
+            pi[2] = 0.19049;
+            pi[3] = 0.19255;
+        }
+        else if (_index == 2) {
+            pi[0] = 0.24551;
+            pi[1] = 0.21386;
+            pi[2] = 0.23698;
+            pi[3] = 0.30364;
+        }
+        else if (_index == 3) {
+            pi[0] = 0.20185;
+            pi[1] = 0.21339;
+            pi[2] = 0.21208;
+            pi[3] = 0.37268;
+        }
+        double Pi[] = {pi[0] + pi[2], pi[1] + pi[3], pi[0] + pi[2], pi[1] + pi[3]};
+        bool is_transition = (from == 0 && to == 2) || (from == 1 && to == 3) || (from == 2 && to == 0) || (from == 3 && to == 1);
+        bool is_same = (from == 0 && to == 0) || (from == 1 && to == 1) | (from == 2 && to == 2) | (from == 3 && to == 3);
+        bool is_transversion = !(is_same || is_transition);
+
+        // JC expected number of substitutions per site
+        // v = betat*(AC + AG + AG + CA + CG + CT + GA + GC + GT + TA + TC + TG)
+        //   = betat*12*(1/16)
+        //   = (3/4)*betat
+        // betat = (4/3)*v
+
+        // HKY expected number of substitutions per site
+        //  v = betat*(AC + AT + CA + CG + GC + GT + TA + TG) + kappa*betat*(AG + CT + GA + TC)
+        //    = 2*betat*(AC + AT + CG + GT + kappa(AG + CT))
+        //    = 2*betat*((A + G)*(C + T) + kappa(AG + CT))
+        //  betat = v/[2*( (A + G)(C + T) + kappa*(AG + CT) )]
+        double kappa = 4.0349882; // (614.0*4.6444 + 601.0*4.0624 + 819.0*3.558)/(614.0 + 601.0 + 819.0);
+        //double kappa = 1.0;
+        double betat = 0.5*edge_length/((pi[0] + pi[2])*(pi[1] + pi[3]) + kappa*(pi[0]*pi[2] + pi[1]*pi[3]));
+        
+        if (is_transition) {
+            double pi_j = pi[to];
+            double Pi_j = Pi[to];
+            transition_prob = pi_j*(1.0 + (1.0 - Pi_j)*exp(-betat)/Pi_j - exp(-betat*(kappa*Pi_j + 1.0 - Pi_j))/Pi_j);
+        }
+        else if (is_transversion) {
+            double pi_j = pi[to];
+            transition_prob = pi_j*(1.0 - exp(-betat));
+        }
+        else {
+            double pi_j = pi[to];
+            double Pi_j = Pi[to];
+            transition_prob = pi_j*(1.0 + (1.0 - Pi_j)*exp(-betat)/Pi_j) + (Pi_j - pi_j)*exp(-betat*(kappa*Pi_j + 1.0 - Pi_j))/Pi_j;
+        }
+#endif
+        return transition_prob;
     }
 
+    inline double GeneForest::calcPartialArray(Node * new_nd) {
+        // Computes the partial array for new_nd and returns the difference in
+        // log likelihood due to the addition of new_nd
+        char base[] = {'A','C','G','T'};
+        
+        // Get pattern counts
+        auto counts = _data->getPatternCounts();
+
+        // Get the first and last pattern index for this gene's data
+        Data::begin_end_pair_t be = _data->getSubsetBeginEnd(_gene_index);
+        unsigned first_pattern = be.first;
+                
+        // Ensure tree is dichotomous
+        assert(new_nd->_left_child);
+        assert(new_nd->_left_child->_right_sib);
+        assert(!new_nd->_left_child->_right_sib->_right_sib);
+        
+        auto & parent_partial_array = new_nd->_partial->_v;
+        unsigned npatterns = _data->getNumPatternsInSubset(_gene_index);
+        for (Node * child = new_nd->_left_child; child; child = child->_right_sib) {
+            assert(child->_partial);
+            auto & child_partial_array = child->_partial->_v;
+
+            for (unsigned p = 0; p < npatterns; p++) {
+                //unsigned pp = first_pattern + p;
+
+                for (unsigned s = 0; s < SMCGlobal::_nstates; s++) {
+                    double sum_over_child_states = 0.0;
+                    for (unsigned s_child = 0; s_child < SMCGlobal::_nstates; s_child++) {
+                        double child_transition_prob = calcTransitionProbability(s, s_child, child->_edge_length);
+                        double child_partial = child_partial_array[p*SMCGlobal::_nstates + s_child];
+                                                
+                        sum_over_child_states += child_transition_prob * child_partial;
+                    }   // child state loop
+                    
+                    if (child == new_nd->_left_child)
+                        parent_partial_array[p*SMCGlobal::_nstates + s] = sum_over_child_states;
+                    else {
+                        parent_partial_array[p*SMCGlobal::_nstates + s] *= sum_over_child_states;
+                    }
+                }   // parent state loop
+            }   // pattern loop
+        }   // child loop
+
+        // Compute the ratio of after to before likelihoods
+        //TODO: make more efficient
+        double prev_loglike = 0.0;
+        double curr_loglike = 0.0;
+        auto & newnd_partial_array = new_nd->_partial->_v;
+        auto & lchild_partial_array = new_nd->_left_child->_partial->_v;
+        auto & rchild_partial_array = new_nd->_left_child->_right_sib->_partial->_v;
+        for (unsigned p = 0; p < npatterns; p++) {
+            unsigned pp = first_pattern + p;
+            //unsigned count = counts[pp];
+            double left_sitelike = 0.0;
+            double right_sitelike = 0.0;
+            double newnd_sitelike = 0.0;
+            for (unsigned s = 0; s < SMCGlobal::_nstates; s++) {
+                left_sitelike += 0.25*lchild_partial_array[p*SMCGlobal::_nstates + s];
+                right_sitelike += 0.25*rchild_partial_array[p*SMCGlobal::_nstates + s];
+                newnd_sitelike += 0.25*newnd_partial_array[p*SMCGlobal::_nstates + s];
+            }
+            prev_loglike += log(left_sitelike)*counts[pp];
+            prev_loglike += log(right_sitelike)*counts[pp];
+            curr_loglike += log(newnd_sitelike)*counts[pp];
+        }
+        
+        return curr_loglike - prev_loglike;
+    }
+    
+    inline double GeneForest::calcLogLikelihood() const {
+        // Computes the log of the Felsenstein likelihood. Note that this function just
+        // carries out the final summation. It assumes that all nodes (leaf nodes included)
+        // have partial likelihood arrays already computed.
+        if (!_data)
+            return 0.0;
+            
+        // Compute log likelihood of every lineage
+        double total_log_likelihood = 0.0;
+        
+        // Get the number of patterns
+        unsigned npatterns = _data->getNumPatternsInSubset(_gene_index);
+        
+        // Get the first and last pattern index for this gene's data
+        Data::begin_end_pair_t be = _data->getSubsetBeginEnd(_gene_index);
+        unsigned first_pattern = be.first;
+        
+        // Get the name of the gene (data subset)
+        string gene_name = _data->getSubsetName(_gene_index);
+
+        // Get pattern counts
+        auto counts = _data->getPatternCounts();
+        
+        // Sum log likelihood across all lineages. If forest is a tree, there will
+        // be just one lineage, which represents the root of the gene tree.
+        unsigned tmp = 0;
+        for (auto nd : _lineages) {
+        
+            double log_like = 0.0;
+            for (unsigned p = 0; p < npatterns; p++) {
+                unsigned pp = first_pattern + p;
+                double site_like = 0.0;
+                for (unsigned s = 0; s < SMCGlobal::_nstates; s++) {
+                    double child_partial = nd->_partial->_v[p*SMCGlobal::_nstates+s];
+                    site_like += 0.25*child_partial;
+                }
+                
+                log_like += log(site_like)*counts[pp];
+            }
+            total_log_likelihood += log_like;
+            tmp++;
+        }
+
+        return total_log_likelihood;
+    }
+
+    inline void GeneForest::buildLineagesWithinSpeciesMap() {
+        // Assumes every node in _lineages is correctly assigned to a species
+        
+        _lineages_within_species.clear();
+        for (auto nd : _lineages) {
+            // Add nd to the vector of nodes belonging to this species
+            SMCGlobal::species_t spp = nd->getSpecies();
+            _lineages_within_species[spp].push_back(nd);
+        }
+    }
+    
+    inline void GeneForest::simulateGeneTree(unsigned gene) {
+        createTrivialForest(false);
+        setGeneIndex(gene);
+        
+        unsigned nsteps = SMCGlobal::_ntaxa - 1;
+        for (unsigned step = 0; step < nsteps; ++step) {
+            //output(format("  step %d of %d") % step % nsteps, 2);
+            bool coalescent_event = false;
+            while (!coalescent_event) {
+                auto result = advanceGeneForest(step, 0, true);
+                coalescent_event = result.first;
+            }
+        }
+    }
+    
+    inline double GeneForest::computeCoalRatesForSpecies(vector<SMCGlobal::species_t> & species, vector<double> & rates) {
+        unsigned i = 0;
+        for (auto & x : _lineages_within_species) {
+            // Key is the species s (a set containing one or more integer values)
+            SMCGlobal::species_t s = x.first;
+            assert(species.size() > i);
+            species[i] = s;
+            
+            // Value is vector of node pointers belonging to species s
+            unsigned n = (unsigned)x.second.size();
+            assert(n > 0);
+            
+            // Rate of coalescence in species s is n choose 2 divided by theta/2
+            // or, equivalently, n*(n-1)/theta
+            double coal_rate = float(n)*(n-1)/SMCGlobal::_theta;
+            rates[i] = coal_rate;
+            
+            ++i;
+        }
+
+        // The total coalescence rate is the sum of individual species-specific rates
+        double total_rate = accumulate(rates.begin(), rates.end(), 0.0);
+        return total_rate;
+    }
+    
+    inline void GeneForest::setPriorPost(bool use_prior_post) {
+        _prior_post = use_prior_post;
+    }
+    
     inline void GeneForest::operator=(const GeneForest & other) {
         Forest::operator=(other);
         _data = other._data;
@@ -1010,8 +935,14 @@ namespace proj {
                 // Sanity check: make sure _partials are both of the correct length
                 assert(other._nodes[i]._partial->_v.size() == ps.getNElements(_gene_index));
                 
-                _nodes[i]._partial.reset(); // should call stowPartial?
+#if defined(LOW_MEM)
+                // Copy array, not just the shared pointer
+                copy(other._nodes[i]._partial->_v.begin(), other._nodes[i]._partial->_v.end(), _nodes[i]._partial->_v.begin());
+#else
+                // Just copy the shared pointer
+                _nodes[i]._partial.reset();
                 _nodes[i]._partial = other._nodes[i]._partial;
+#endif
             }
             else if (this_partial_exists && !other_partial_exists) {
                 // Sanity check: make sure this _partial is of the correct length
@@ -1025,7 +956,14 @@ namespace proj {
                 assert(other._nodes[i]._partial->_v.size() == ps.getNElements(_gene_index));
                 
                 // OK to copy
+#if defined(LOW_MEM)
+                // Copy array, not just the shared pointer
+                _nodes[i]._partial = ps.getPartial(_gene_index);
+                copy(other._nodes[i]._partial->_v.begin(), other._nodes[i]._partial->_v.end(), _nodes[i]._partial->_v.begin());
+#else
+                // Just copy the shared pointer
                 _nodes[i]._partial = other._nodes[i]._partial;
+#endif
             }
         }
         
@@ -1035,20 +973,19 @@ namespace proj {
     }
     
     inline void GeneForest::releaseLeafPartials(unsigned gene) {
-        assert(_leaf_partials.size() == Forest::_ngenes);
+        assert(_leaf_partials.size() == SMCGlobal::_ngenes);
         _leaf_partials[gene].clear();
     }
     
-#if 1
     inline void GeneForest::computeLeafPartials(unsigned gene, Data::SharedPtr data) {
         assert(data);
-        assert(_leaf_partials.size() == 0 || _leaf_partials.size() == Forest::_ngenes);
-        assert(Forest::_ngenes > 0);
-        assert(Forest::_ntaxa > 0);
-        assert(Forest::_nstates == 4);
+        assert(_leaf_partials.size() == 0 || _leaf_partials.size() == SMCGlobal::_ngenes);
+        assert(SMCGlobal::_ngenes > 0);
+        assert(SMCGlobal::_ntaxa > 0);
+        assert(SMCGlobal::_nstates == 4);
         
         // Allocate a vector of leaf partials for each gene
-        _leaf_partials.resize(Forest::_ngenes);
+        _leaf_partials.resize(SMCGlobal::_ngenes);
                 
         // Get reference to raw data matrix, which is a vector of vector<state_t>
         auto data_matrix = data->getDataMatrix();
@@ -1060,87 +997,29 @@ namespace proj {
         Data::begin_end_pair_t be = data->getSubsetBeginEnd(gene);
         unsigned first_pattern = be.first;
         
-        _leaf_partials[gene].resize(Forest::_ntaxa);
+        _leaf_partials[gene].resize(SMCGlobal::_ntaxa);
 
-        for (unsigned t = 0; t < Forest::_ntaxa; ++t) {
+        for (unsigned t = 0; t < SMCGlobal::_ntaxa; ++t) {
             PartialStore::partial_t partial_ptr = ps.getPartial(gene);
             vector<double> & leaf_partial = partial_ptr->_v;
             
             // Set each partial according to the observed data for leaf t
             for (unsigned p = 0; p < npatterns; p++) {
                 unsigned pp = first_pattern + p;
-                for (unsigned s = 0; s < Forest::_nstates; s++) {
+                for (unsigned s = 0; s < SMCGlobal::_nstates; s++) {
                     Data::state_t state = (Data::state_t)1 << s;
                     Data::state_t d = data_matrix[t][pp];
                     double result = state & d;
-                    leaf_partial[p*Forest::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
+                    leaf_partial[p*SMCGlobal::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
                 }
                 
                 // Ensure that the _nstates partials add up to at least 1
-                assert(accumulate(partial_ptr->_v.begin() + p*Forest::_nstates, partial_ptr->_v.begin() + p*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
+                assert(accumulate(partial_ptr->_v.begin() + p*SMCGlobal::_nstates, partial_ptr->_v.begin() + p*SMCGlobal::_nstates + SMCGlobal::_nstates, 0.0) >= 1.0);
             }
 
             _leaf_partials[gene][t] = partial_ptr;
         }
     }
-#else
-    inline void GeneForest::computeLeafPartials(Data::SharedPtr data) {
-        assert(data);
-        assert(_leaf_partials.size() == 0);
-        assert(Forest::_ngenes > 0);
-        assert(Forest::_ntaxa > 0);
-        assert(Forest::_nstates == 4);
-        
-        // Allocate a vector of leaf partials for each gene
-        _leaf_partials.resize(Forest::_ngenes);
-                
-        // Get reference to raw data matrix, which is a vector of vector<state_t>
-        auto data_matrix = data->getDataMatrix();
-
-        // Create vector of leaf partials
-#if defined(USING_MPI)
-        for (unsigned g = ::my_first_gene; g < ::my_last_gene; ++g) {
-#else
-        for (unsigned g = 0; g < Forest::_ngenes; ++g) {
-#endif
-            // Get number of patterns and first pattern index for gene g
-            unsigned npatterns = data->getNumPatternsInSubset(g);
-            Data::begin_end_pair_t be = data->getSubsetBeginEnd(g);
-            unsigned first_pattern = be.first;
-            
-            // Allocate a partial array for each taxon for gene g
-            // _leaf_partials is vector< vector<partial_t> >
-            // _leaf_partials[g] is vector<partial_t>
-            // _leaf_partials[g][t] is partial_t (i.e. shared pointer to partial array)
-
-            // //temporary!
-            //cerr << str(format("allocating leaf partials for gene %g (rank %d, first = %d, last = %d\n") % g % ::my_rank % ::my_first_gene % ::my_last_gene);
-            
-            _leaf_partials[g].resize(Forest::_ntaxa);
-
-            for (unsigned t = 0; t < Forest::_ntaxa; ++t) {
-                PartialStore::partial_t partial_ptr = ps.getPartial(g);
-                vector<double> & leaf_partial = partial_ptr->_v;
-                
-                // Set each partial according to the observed data for leaf t
-                for (unsigned p = 0; p < npatterns; p++) {
-                    unsigned pp = first_pattern + p;
-                    for (unsigned s = 0; s < Forest::_nstates; s++) {
-                        Data::state_t state = (Data::state_t)1 << s;
-                        Data::state_t d = data_matrix[t][pp];
-                        double result = state & d;
-                        leaf_partial[p*Forest::_nstates + s] = (result == 0.0 ? 0.0 : 1.0);
-                    }
-                    
-                    // Ensure that the _nstates partials add up to at least 1
-                    assert(accumulate(partial_ptr->_v.begin() + p*Forest::_nstates, partial_ptr->_v.begin() + p*Forest::_nstates + Forest::_nstates, 0.0) >= 1.0);
-                }
-
-                _leaf_partials[g][t] = partial_ptr;
-            }
-        }
-    }
-#endif
 
     inline void GeneForest::computeAllPartials() {
         // Assumes _leaf_partials have been computed but that every node in the tree

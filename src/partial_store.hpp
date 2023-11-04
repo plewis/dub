@@ -5,17 +5,17 @@ namespace proj {
     struct Partial {
         Partial(unsigned g, unsigned n);
         ~Partial();
-        vector<double> _v;
-        unsigned _g;
+        unsigned        _g; // the gene
+        vector<double>  _v; // the partial array: length = _nstates*<no. patterns>
         
 #if defined(LOG_MEMORY)
-        static vector<unsigned> _nconstructed;
-        static vector<unsigned> _ndestroyed;
-        static vector<unsigned> _max_in_use;
-        static vector<unsigned long> _bytes_per_partial;
-        static unsigned _total_max_in_use;
-        static unsigned _total_max_bytes;
-        static unsigned _nstates;
+        static vector<unsigned> _nconstructed;  // no. partials allocated for each gene
+        static vector<unsigned> _ndestroyed;    // no. partials destroyed for each gene
+        static vector<unsigned> _max_in_use;    // maximum no. partials in use at any one time for each gene
+        static vector<unsigned long> _bytes_per_partial;    // no. bytes required to store partial array for each gene
+        static unsigned _total_max_in_use;      // total max. in use over all genes
+        static unsigned _total_max_bytes;       // total max. bytes over all genes
+        static unsigned _nstates;               // no. of states (4 for DNA)
 #endif
     };
 
@@ -61,11 +61,14 @@ namespace proj {
             
             void            setNGenes(unsigned ngenes);
             partial_t       getPartial(unsigned gene);
+            void            putPartial(unsigned gene, partial_t partial);
             void            setNElements(unsigned nelements, unsigned gene);
             unsigned        getNElements(unsigned gene) const {return _nelements[gene];}
             
 #if defined(LOG_MEMORY)
             unsigned        getInUse();
+            unsigned        getNumberConstructed();
+            unsigned        getNumberDestroyed();
             void            memoryReport(ofstream & memf) const;
 #endif
             
@@ -84,6 +87,14 @@ namespace proj {
     }
     
 #if defined(LOG_MEMORY)
+    inline unsigned PartialStore::getNumberConstructed() {
+        return (unsigned)accumulate(Partial::_nconstructed.begin(), Partial::_nconstructed.end(), 0);
+    }
+
+    inline unsigned PartialStore::getNumberDestroyed() {
+        return (unsigned)accumulate(Partial::_ndestroyed.begin(), Partial::_ndestroyed.end(), 0);
+    }
+
     inline unsigned PartialStore::getInUse() {
         unsigned total_in_use = 0;
         unsigned ngenes = (unsigned)Partial::_nconstructed.size();
@@ -102,6 +113,7 @@ namespace proj {
         
         // Resize both containers
         _nelements.resize(ngenes);
+        _storage.resize(ngenes);
         
 #if defined(LOG_MEMORY)
         Partial::_nconstructed.clear();
@@ -124,10 +136,32 @@ namespace proj {
     }
 
     inline PartialStore::partial_t PartialStore::getPartial(unsigned gene) {
+        // Check to make sure supplied value of gene is valid
         assert(_nelements.size() > gene);
         assert(_nelements[gene] > 0);
-        partial_t ptr = partial_t(new Partial(gene, _nelements[gene]));
-        return ptr;
+        
+        partial_t partial;
+        if (_storage[gene].empty()) {
+            // No stored partials for this gene, so allocate one
+            partial = partial_t(new Partial(gene, _nelements[gene]));
+        }
+        else {
+            size_t n = _storage[gene].size();
+            partial = _storage[gene].at(n-1);
+            _storage[gene].pop_back();
+        }
+        return partial;
+    }
+    
+    inline void PartialStore::putPartial(unsigned gene, partial_t partial) {
+        // Check to make sure supplied value of gene is valid
+        assert(_nelements.size() > gene);
+        assert(_nelements[gene] > 0);
+
+        // Store the partial for later
+        assert(partial->_v.size() == _nelements[gene]);
+        partial->_v.assign(_nelements[gene], 0.0);
+        _storage[gene].push_back(partial);
     }
     
 #if defined(LOG_MEMORY)

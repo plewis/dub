@@ -5,12 +5,9 @@ namespace proj {
     class TreeManip;
     class Likelihood;
     class Updater;
-    class Epoch;
-    class CoalescentEpoch;
-    class SpeciationEpoch;
     class Forest;
-    class SpeciesForest;
     class GeneForest;
+    class SpeciesForest;
     class Particle;
 
     class Node {
@@ -18,12 +15,9 @@ namespace proj {
         friend class TreeManip;
         friend class Likelihood;
         friend class Updater;
-        friend class Epoch;
-        friend class CoalescentEpoch;
-        friend class SpeciationEpoch;
         friend class Forest;
-        friend class SpeciesForest;
         friend class GeneForest;
+        friend class SpeciesForest;
         friend class Particle;
 
         public:
@@ -31,11 +25,6 @@ namespace proj {
                                         ~Node();
 
                     typedef vector<Node *>  ptr_vect_t;
-#if defined(SPECIES_IS_BITSET)
-                    typedef unsigned long   species_t;
-#else
-                    typedef set<unsigned>   species_t;
-#endif
         
                     Node *              getParent()                 {return _parent;}
                     const Node *        getParent() const           {return _parent;}
@@ -78,13 +67,11 @@ namespace proj {
                     double              getEdgeLength() const       {return _edge_length;}
                     void                setEdgeLength(double v);
                     
-                    const species_t &   getSpecies() const {return _species;}
-                    species_t &         getSpecies() {return _species;}
-                    void                setSpecies(const species_t & other);
-                    void                setSpeciesToUnion(const species_t & left, const species_t & right);
-#if !defined(SPECIES_IS_BITSET)
+                    const SMCGlobal::species_t &   getSpecies() const {return _species;}
+                    SMCGlobal::species_t &         getSpecies() {return _species;}
+                    void                setSpecies(const SMCGlobal::species_t & other);
+                    void                setSpeciesToUnion(const SMCGlobal::species_t & left, const SMCGlobal::species_t & right);
                     void                setSpeciesFromUnsigned(unsigned spp);
-#endif
         
                     double              getHeight() const       {return _height;}
                     void                setHeight(double v);
@@ -95,14 +82,11 @@ namespace proj {
                     
                     static string       taxonNameToSpeciesName(string taxon_name);
 
-#if defined(SPECIES_IS_BITSET)
-                    static string       speciesStringRepresentation(species_t species);
-                    static void         setSpeciesMask(species_t & mask, unsigned nspecies);
-                    static void         setSpeciesBits(species_t & to_species, const species_t & from_species, bool init_to_zero_first);
-                    static void         unsetSpeciesBits(species_t & to_species, const species_t & from_species);
-                    static void         setSpeciesBit(species_t & to_species, unsigned i, bool init_to_zero_first);
-                    static void         unsetSpeciesBit(species_t & to_species, unsigned i);
-#endif
+                    static void         setSpeciesMask(SMCGlobal::species_t & mask, unsigned nspecies);
+                    static void         setSpeciesBits(SMCGlobal::species_t & to_species, const SMCGlobal::species_t & from_species, bool init_to_zero_first);
+                    static void         unsetSpeciesBits(SMCGlobal::species_t & to_species, const SMCGlobal::species_t & from_species);
+                    static void         setSpeciesBit(SMCGlobal::species_t & to_species, unsigned i, bool init_to_zero_first);
+                    static void         unsetSpeciesBit(SMCGlobal::species_t & to_species, unsigned i);
                                         
             static const double _smallest_edge_length;
 
@@ -126,70 +110,46 @@ namespace proj {
             int             _number;
             string          _name;
             double          _edge_length;
-            double          _height;         // distance from node to any leaf
-            species_t       _species;    // set of species (indices) compatible with this node
+            double          _height;        // distance from node to any leaf
+            SMCGlobal::species_t       _species;       // bitset of species (indices) compatible with this node
             Split           _split;
             int             _flags;
             
             PartialStore::partial_t _partial;
     };
-    
-#if defined(SPECIES_IS_BITSET)
-    inline string Node::speciesStringRepresentation(species_t species) {
-        species_t species_copy = species;
-        unsigned bits_avail = (unsigned)sizeof(species_t);
-        string s;
-        for (unsigned i = 0; i < bits_avail; ++i) {
-            species_t bitmask = ((species_t)1 << i);
-            bool bit_is_set = ((species_copy & bitmask) > (species_t)0);
-            if (bit_is_set) {
-                // Add species i to the string
-                s += to_string(i);
-                
-                // Zero that bit so we know when we are done
-                species_copy &= ~bitmask;
-            }
-            if (!species_copy) {
-                // If species_copy is zero, there are no more bits set
-                break;
-            }
-        }
-        return s;
-    }
-    
-    inline void Node::setSpeciesMask(species_t & mask, unsigned nspecies) {
-        mask = (species_t)0;
+        
+    inline void Node::setSpeciesMask(SMCGlobal::species_t & mask, unsigned nspecies) {
+        mask = (SMCGlobal::species_t)0;
         for (unsigned i = 0; i < nspecies; ++i) {
-            mask |= ((species_t)1 << i);
+            mask |= ((SMCGlobal::species_t)1 << i);
         }
     }
     
-    inline void Node::setSpeciesBits(species_t & to_species, const species_t & from_species, bool init_to_zero_first) {
+    inline void Node::setSpeciesBits(SMCGlobal::species_t & to_species, const SMCGlobal::species_t & from_species, bool init_to_zero_first) {
         if (init_to_zero_first)
-            to_species = (species_t)0;
+            to_species = (SMCGlobal::species_t)0;
 
         // Copy bits in from_species to to_species
         to_species |= from_species;
     }
     
-    inline void Node::unsetSpeciesBits(species_t & to_species, const species_t & from_species) {
+    inline void Node::unsetSpeciesBits(SMCGlobal::species_t & to_species, const SMCGlobal::species_t & from_species) {
         // Zero from_species' bits in to_species
         to_species &= ~from_species;
     }
     
-    inline void Node::setSpeciesBit(species_t & to_species, unsigned i, bool init_to_zero_first) {
+    inline void Node::setSpeciesBit(SMCGlobal::species_t & to_species, unsigned i, bool init_to_zero_first) {
         if (init_to_zero_first)
-            to_species = (species_t)0;
+            to_species = (SMCGlobal::species_t)0;
             
         // Set ith bit in to_species
-        to_species |= ((species_t)1 << i);
+        to_species |= ((SMCGlobal::species_t)1 << i);
     }
     
-    inline void Node::unsetSpeciesBit(species_t & to_species, unsigned i) {
+    inline void Node::unsetSpeciesBit(SMCGlobal::species_t & to_species, unsigned i) {
         // Unset ith bit in to_species
-        to_species &= ~((species_t)1 << i);
+        to_species &= ~((SMCGlobal::species_t)1 << i);
     }
-#endif
     
     inline Node::Node() {
         clear();
@@ -208,11 +168,7 @@ namespace proj {
         _name = "";
         _edge_length = _smallest_edge_length;
         _height = 0.0;
-#if defined(SPECIES_IS_BITSET)
-        _species = (species_t)0;
-#else
-        _species.clear();
-#endif
+        _species = (SMCGlobal::species_t)0;
         _partial = nullptr;
     }   
 
@@ -232,37 +188,20 @@ namespace proj {
         return n_children;
     }
     
-    inline void Node::setSpecies(const species_t & other) {
+    inline void Node::setSpecies(const SMCGlobal::species_t & other) {
         _species = other;
     }
     
-    inline void Node::setSpeciesToUnion(const species_t & left, const species_t & right) {
+    inline void Node::setSpeciesToUnion(const SMCGlobal::species_t & left, const SMCGlobal::species_t & right) {
         _species = left;
-#if defined(SPECIES_IS_BITSET)
         Node::setSpeciesBits(_species, right, /*init_to_zero_first*/false);
-#else
-        _species.insert(right.begin(), right.end());
-#endif
         
         // Internal nodes can have species that are unions and hence have size > 1, but
         // leaf nodes should be assigned to just a single species. This function should only
         // be called for internal nodes.
         assert(_left_child);
     }
-    
-#if defined(SPECIES_IS_BITSET)
-    // setSpeciesFromUnsigned not defined
-#else
-    inline void Node::setSpeciesFromUnsigned(unsigned spp) {
-        _species = {spp};
         
-        // Internal nodes can have species that are unions and hence have size > 1, but
-        // leaf nodes should be assigned to just a single species. This function should only
-        // be called for leaf nodes.
-        assert(!_left_child);
-    }
-#endif
-    
     inline string Node::taxonNameToSpeciesName(string tname) {
         vector<string> before_after;
         split(before_after, tname, boost::is_any_of("^"));

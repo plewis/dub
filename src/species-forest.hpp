@@ -13,7 +13,8 @@ namespace proj {
             SpeciesForest();
              ~SpeciesForest();
             
-            void simulateSpeciesTree(epoch_list_t & epochs);
+            void speciationEvent(SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc);
+            //void simulateSpeciesTree();
 
             // Overrides of base class functions
             void clear();
@@ -21,21 +22,18 @@ namespace proj {
             // Overrides of abstract base class functions
             void    createTrivialForest(bool compute_partials = false);
             bool    isSpeciesForest() const {return true;}
-            
-#if defined(SAVE_PARAMS_FOR_LORAD)
-            double saveParamsForLoRaD(vector<string> & params, vector<string> & splits);
-#endif
 
+#if defined(NEWWAY)
+            double drawIncrement();
+#else
+            double calcRate(vector<SMCGlobal::rate_tuple_t> & rates);
+#endif
             double calcLogSpeciesTreeDensity(double lambda) const;
 
             void operator=(const SpeciesForest & other);
 
         protected:
             
-            epoch_list_t & digest();
-            epoch_list_t::iterator findEpochGreaterThan(epoch_list_t & epochs, double h);
-            epoch_list_t::iterator reconcileEpochsStartingAt(epoch_list_t & epochs, epoch_list_t::iterator start_iter, Node::species_t species1, Node::species_t species2, Node::species_t new_species);
-            void insertSpeciationEpochAt(epoch_list_t & epochs, double h, Node::species_t species1, Node::species_t species2, Node::species_t new_species);
             double advanceSpeciesForest(unsigned particle, unsigned step);
             
             // NOTE: any variables added must be copied in operator=
@@ -52,27 +50,49 @@ namespace proj {
         Forest::clear();
     }
 
+#if defined(NEWWAY)
+    inline double SpeciesForest::drawIncrement() {
+        unsigned n = (unsigned)_lineages.size();
+        double incr = SMCGlobal::_infinity;
+        if (n > 1) {
+            double r = SMCGlobal::_lambda*n;
+            incr = -log(1.0 - rng.uniform())/r;
+        }
+        return incr;
+    }
+#else
+    inline double SpeciesForest::calcRate(vector<SMCGlobal::rate_tuple_t> & rates) {
+        unsigned n = (unsigned)_lineages.size();
+        double r = 0.0;
+        if (n > 1) {
+            r = SMCGlobal::_lambda*n;
+        
+            // rates entry stores: (1) rate; (2) gene index (0 because species tree); and
+            // (3) species (ignored for species tree, so just entering 0)
+            rates.push_back(make_tuple(r, 0, (SMCGlobal::species_t)0));
+        }
+        return r;
+    }
+#endif
+
     // This is an override of an abstract base class function
     inline void SpeciesForest::createTrivialForest(bool compute_partials) {
+        assert(!compute_partials); // catch non-sensical true value
         clear();
-        Forest::_nodes.resize(2*Forest::_nspecies - 1);
-        for (unsigned i = 0; i < Forest::_nspecies; i++) {
+        Forest::_nodes.resize(2*SMCGlobal::_nspecies - 1);
+        for (unsigned i = 0; i < SMCGlobal::_nspecies; i++) {
             _nodes[i]._number = (int)i;
-            _nodes[i]._name = Forest::_species_names[i];
+            _nodes[i]._name = SMCGlobal::_species_names[i];
             _nodes[i]._edge_length = 0.0;
             _nodes[i]._height = 0.0;
-#if defined(SPECIES_IS_BITSET)
             Node::setSpeciesBit(_nodes[i]._species, i, /*init_to_zero_first*/true);
-#else
-            _nodes[i]._species = {i};
-#endif
             _lineages.push_back(&_nodes[i]);
         }
         _forest_height = 0.0;
-        _next_node_index = Forest::_nspecies;
-        _next_node_number = Forest::_nspecies;
+        _next_node_index = SMCGlobal::_nspecies;
+        _next_node_number = SMCGlobal::_nspecies;
         _prev_log_likelihood = 0.0;
-        _prev_log_coalescent_likelihood = 0.0;
+        //_prev_log_coalescent_likelihood = 0.0;
         _log_species_tree_prior = 0.0;
     }
     
@@ -89,13 +109,13 @@ namespace proj {
         }
         
         // Number of internal nodes should be _nspecies - 1
-        assert(internal_heights.size() == Forest::_nspecies - 1);
+        assert(internal_heights.size() == SMCGlobal::_nspecies - 1);
         
         // Sort heights
         sort(internal_heights.begin(), internal_heights.end());
         
         double log_prob_density = 0.0;
-        unsigned n = Forest::_nspecies;
+        unsigned n = SMCGlobal::_nspecies;
         double h0 = 0.0;
         for (auto it = internal_heights.begin(); it != internal_heights.end(); ++it) {
             double h = *it;
@@ -110,120 +130,7 @@ namespace proj {
         
         return log_prob_density;
     }
-    
-    inline epoch_list_t & SpeciesForest::digest() {
-        // Populate _epochs based on species tree
-        _epochs.clear();
         
-        // Assumes _species_forest is a complete tree
-        assert(_lineages.size() == 1);
-        refreshAllPreorders();
-        
-        // Record speciation events in the species forest using a post-order
-        // traversal, calculating heights of nodes along the way
-        Node::ptr_vect_t & preorder = _preorders[0];
-        for (Node * nd : boost::adaptors::reverse(preorder)) {
-            Node * lchild = nd->getLeftChild();
-            if (lchild) {
-                // nd is an internal
-                Node * rchild = lchild->getRightSib();
-                assert(!rchild->getRightSib());
-
-                // Gather info needed to compute height of nd
-                double height_left  = lchild->getHeight();
-                double brlen_left   = lchild->getEdgeLength();
-                double height_right = rchild->getHeight();
-                double brlen_right  = rchild->getEdgeLength();
-
-                // Height calculated through left and right children
-                // should be identical if this is an ultrametric time tree
-                double hleft        = height_left + brlen_left;
-                double hright       = height_right + brlen_right;
-                assert(fabs(hleft - hright) < Forest::_small_enough);
-                
-                // Set height of this internal node so that later nodes can use it
-                double h = 0.5*(hleft + hright);
-                nd->setHeight(h);
-                
-                // Create entry in _epochs for this speciation event
-                //unsigned lnum = lchild->getNumber();
-                //unsigned rnum = rchild->getNumber();
-                //unsigned ndnum = nd->getNumber();
-                nd->setSpeciesToUnion(lchild->getSpecies(), rchild->getSpecies());
-
-                Epoch sepoch(Epoch::speciation_epoch, h);
-                sepoch._left_species  = lchild->getSpecies();
-                sepoch._right_species = rchild->getSpecies();
-                sepoch._anc_species   = nd->getSpecies();
-                //sepoch._left_species = lnum;
-                //sepoch._right_species = rnum;
-                //sepoch._anc_species = ndnum;
-                pushBackEpoch(_epochs, sepoch);
-                //_epochs.push_back(new SpeciationEpoch(h, lnum, rnum, ndnum));
-            }
-            else {
-                // nd is a leaf
-                nd->setHeight(0.0);
-#if defined(SPECIES_IS_BITSET)
-                Node::setSpeciesBit(nd->_species, (unsigned)nd->_number, /*init_to_zero_first*/true);
-#else
-                nd->setSpeciesFromUnsigned((unsigned)nd->_number);
-#endif
-            }
-        }
-
-        // Sort epochs by height
-        _epochs.sort(epochLess);
-        
-        return _epochs;
-    }
-    
-#if defined(SAVE_PARAMS_FOR_LORAD)
-    inline double SpeciesForest::saveParamsForLoRaD(vector<string> & params, vector<string> & splits) {
-        // Appends to params and splits; clear these before calling if desired
-        
-        // Should only be called for complete species trees
-        assert(_lineages.size() == 1);
-                
-        // Ensure each node has correct _height
-        refreshAllHeightsAndPreorders();
-        
-        // Save all internal node heights
-        unsigned n = 0;
-        vector< pair<double, string> > height_split_pairs;
-        for (auto nd : boost::adaptors::reverse(_preorders[0])) {
-            if (nd->_left_child) {
-                // internal
-                string split_repr = nd->_split.createPatternRepresentation();
-                height_split_pairs.push_back(make_pair(nd->_height, split_repr));
-            }
-            else {
-                n++;
-            }
-        }
-        assert(n == Forest::_nspecies);
-        
-        // Sort heights from smallest to largest
-        sort(height_split_pairs.begin(), height_split_pairs.end());
-        
-        // Compute increments between coalescent events and store in params
-        double h0 = 0.0;
-        for (auto h : height_split_pairs) {
-            double incr = h.first - h0;
-            assert(incr > 0.0);
-
-            string incr_str = str(format("%.9f") % incr);
-            params.push_back(incr_str);
-
-            splits.push_back(h.second);
-            h0 = h.first;
-            n--;
-        }
-        
-        return _log_species_tree_prior;
-    }
-#endif
-    
     //inline void SpeciesForest::createFromTree(Tree::SharedPtr t) {
     //    // Assumes leaf numbers in t are indices into the GeneForest::_species_names vector
     //    createTrivialForest();
@@ -249,144 +156,64 @@ namespace proj {
     //    }
     //}
     
-    inline void SpeciesForest::simulateSpeciesTree(epoch_list_t & epochs) {
-        createTrivialForest();
-        unsigned nsteps = Forest::_nspecies - 1;
-        for (unsigned i = 0; i < nsteps; ++i) {
-            unsigned nlineages = (unsigned)_lineages.size();
-            assert(nlineages > 1);
-            
-            // Choose waiting time until the next speciation event
-            double u = rng.uniform();
-            double r = Forest::_lambda*nlineages;
-            double t = -log(1.0 - u)/r;
-                
-            // Increment height of forest
-            _forest_height += t;
-
-            // Update edge lengths
-            for (auto nd : _lineages)
-                nd->_edge_length += t;
-
-            // Choose two lineages to join
-            auto chosen_pair = rng.nchoose2(nlineages);
-            
-            Node * first_node  = _lineages[chosen_pair.first];
-            Node * second_node = _lineages[chosen_pair.second];
-            Node * anc_node    = joinLineagePair(first_node, second_node);
-            anc_node->setSpeciesToUnion(first_node->getSpecies(), second_node->getSpecies());
-            
-            // Update lineage vector
-            removeTwoAddOne(_lineages, first_node, second_node, anc_node);
-            
-            Epoch epoch(Epoch::speciation_epoch, _forest_height);
-            epoch._left_species  = first_node->getSpecies();
-            epoch._right_species = second_node->getSpecies();
-            epoch._anc_species   = anc_node->getSpecies();
-            pushBackEpoch(epochs, epoch);
-        }
+    inline void SpeciesForest::speciationEvent(SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc) {
+        unsigned nlineages = (unsigned)_lineages.size();
         
-        heightsInternalsPreorders();
+        // Choose two lineages to join
+        assert(nlineages > 1);
+        auto chosen_pair = rng.nchoose2(nlineages);
+        Node * first_node  = _lineages[chosen_pair.first];
+        Node * second_node = _lineages[chosen_pair.second];
+        
+        // Create ancestral node
+        Node * anc_node = joinLineagePair(first_node, second_node);
+        anc_node->setSpeciesToUnion(first_node->getSpecies(), second_node->getSpecies());
+        
+        // Update lineage vector
+        removeTwoAddOne(_lineages, first_node, second_node, anc_node);
+        
+        // Return species joined in supplied reference variables
+        left  = first_node->getSpecies();
+        right = second_node->getSpecies();
+        anc   = anc_node->getSpecies();
     }
     
-    inline epoch_list_t::iterator SpeciesForest::findEpochGreaterThan(epoch_list_t & epochs, double h) {
-        // Find iterator pointing to first epoch with height > h
-        auto it = epochs.begin();
-        for (; it != epochs.end(); ++it) {
-            if (it->_height < h)
-                continue;
-            else
-                break;
-        }
-        return it;
-    }
-    
-    inline epoch_list_t::iterator SpeciesForest::reconcileEpochsStartingAt(epoch_list_t & epochs, epoch_list_t::iterator start_iter, Node::species_t species1, Node::species_t species2, Node::species_t new_species) {
-        auto it = start_iter;
-        
-        // Fix the subsequent coalescent epoch elements, replacing species1 and species2
-        // everywhere with new_species until encountering either the end or the next speciation epoch
-        for (; it != epochs.end(); ++it) {
-            if (it->isSpeciationEpoch())
-                continue;
-                         
-            // Let ss be an alias for the epoch's species
-            Node::species_t & ss = it->_species;
-
-            // Remove all elements of species1 from the set if found
-#if defined(SPECIES_IS_BITSET)
-            Node::species_t origss = ss;
-            Node::unsetSpeciesBits(ss, species1);
-            bool found1 = (origss != ss);
-            
-            origss = ss;
-            Node::unsetSpeciesBits(ss, species2);
-            bool found2 = (origss != ss);
-
-            // If either species1 or species2 was found in species (and removed), need
-            // to add new_species to the set
-            if (found1 || found2) {
-                Node::setSpeciesBits(ss, new_species, /*init_to_zero_first*/false);
-            }
-#else
-            unsigned n1 = 0;
-            for (auto it1 = species1.begin(); it1 != species1.end(); ++it1) {
-                auto tmp = ss.find(*it1);
-                if (tmp != ss.end()) {
-                    ss.erase(tmp);
-                    n1++;
-                }
-            }
-                
-            // Check to make sure that if one element of species1 was found then they all were found
-            assert(n1 == 0 || n1 == species1.size());
-
-            // Remove all elements of species2 from the set if found
-            unsigned n2 = 0;
-            for (auto it2 = species2.begin(); it2 != species2.end(); ++it2) {
-                auto tmp = ss.find(*it2);
-                if (tmp != ss.end()) {
-                    ss.erase(tmp);
-                    n2++;
-                }
-            }
-                
-            // Check to make sure that if one element of species2 was found then they all were found
-            assert(n2 == 0 || n2 == species2.size());
-
-            // If either species1 or species2 was found in species (and removed), need
-            // to add new_species to the set
-            if (n1 > 0 || n2 > 0) {
-                ss.insert(new_species.begin(), new_species.end());
-            }
-#endif
-            
-            it->_lineage_counts[new_species] += it->_lineage_counts[species1];
-            it->_lineage_counts[new_species] += it->_lineage_counts[species2];
-            it->_lineage_counts[species1] = 0;
-            it->_lineage_counts[species2] = 0;
-        }
-        
-        return it;
-    }
-    
-    inline void SpeciesForest::insertSpeciationEpochAt(epoch_list_t & epochs, double h, Node::species_t species1, Node::species_t species2, Node::species_t new_species) {
-        // Find iterator pointing to first epoch with height > h
-        auto it = findEpochGreaterThan(epochs, h);
-        
-        // Insert SpeciationEpoch just before it
-        Epoch spp_epoch(Epoch::speciation_epoch, h);
-        spp_epoch._left_species  = species1;
-        spp_epoch._right_species = species2;
-        spp_epoch._anc_species   = new_species;
-        it = epochs.insert(it, spp_epoch);
-        
-        it = reconcileEpochsStartingAt(epochs, ++it, species1, species2, new_species);
-        assert(it == epochs.end());
-        debugShowEpochs(epochs);
-    }
+//    inline void SpeciesForest::simulateSpeciesTree() {
+//        createTrivialForest();
+//        unsigned nsteps = SMCGlobal::_nspecies - 1;
+//        for (unsigned i = 0; i < nsteps; ++i) {
+//            unsigned nlineages = (unsigned)_lineages.size();
+//            assert(nlineages > 1);
+//
+//            // Choose waiting time until the next speciation event
+//            double u = rng.uniform();
+//            double r = SMCGlobal::_lambda*nlineages;
+//            double t = -log(1.0 - u)/r;
+//
+//            // Increment height of forest
+//            _forest_height += t;
+//
+//            // Update edge lengths
+//            for (auto nd : _lineages)
+//                nd->_edge_length += t;
+//
+//            // Choose two lineages to join
+//            auto chosen_pair = rng.nchoose2(nlineages);
+//
+//            Node * first_node  = _lineages[chosen_pair.first];
+//            Node * second_node = _lineages[chosen_pair.second];
+//            Node * anc_node    = joinLineagePair(first_node, second_node);
+//            anc_node->setSpeciesToUnion(first_node->getSpecies(), second_node->getSpecies());
+//
+//            // Update lineage vector
+//            removeTwoAddOne(_lineages, first_node, second_node, anc_node);
+//        }
+//
+//        heightsInternalsPreorders();
+//    }
     
     inline double SpeciesForest::advanceSpeciesForest(unsigned particle, unsigned step) {
+#if 0
         // Advances species forest by one join given the current gene trees.
         // Also adds to _log_species_tree_prior.
         //
@@ -546,10 +373,9 @@ namespace proj {
             
             // Insert a speciation epoch and revise subsequent coalescent epochs to replace the two
             // old species with the new species
-            Node::species_t oldspp1 = first_node->getSpecies();
-            Node::species_t oldspp2 = second_node->getSpecies();
-            Node::species_t newspp  = anc_node->getSpecies();
-            insertSpeciationEpochAt(_epochs, _forest_height, oldspp1, oldspp2, newspp);
+            //SMCGlobal::species_t oldspp1 = first_node->getSpecies();
+            //SMCGlobal::species_t oldspp2 = second_node->getSpecies();
+            //SMCGlobal::species_t newspp  = anc_node->getSpecies();
 
             // Update lineage vector
             removeTwoAddOne(_lineages, first_node, second_node, anc_node);
@@ -557,7 +383,7 @@ namespace proj {
         }
 
         // Create a set of all species that currently (looking backward in time) exist
-        set<Node::species_t> current_species;
+        set<SMCGlobal::species_t> current_species;
         for (auto lit = _lineages.begin(); lit != _lineages.end(); lit++) {
             Node * nd = *lit;
             current_species.insert(nd->_species);
@@ -567,18 +393,19 @@ namespace proj {
         // Find next coalescent event (over all gene trees) involving more than one species
         // That sets an upper bound on the time of the next speciation event, regardless of
         // which two species ultimately end up being joined.
-        double maxT = calcMaxT(_epochs, _forest_height, current_species);
-        double max_waiting_time = maxT - _forest_height;
+        //double maxT = calcMaxT(_epochs, _forest_height, current_species);
+        //double max_waiting_time = maxT - _forest_height;
             
         // Choose waiting time until the next speciation event (conditional on maxT)
         double u = rng.uniform();
-        double r = Forest::_lambda*nlineages;
-        double t = -log(1.0 - u*(1.0 - exp(-r*max_waiting_time)))/r;
+        double r = SMCGlobal::_lambda*nlineages;
+        //double t = -log(1.0 - u*(1.0 - exp(-r*max_waiting_time)))/r;
+        double t = -log(1.0 - u)/r;
         
         // Update log of the species tree prior (prior is Exponential(r) but
         // conditioned on t < max_waiting_time)
         _log_species_tree_prior += log(r) - r*t;
-        _log_species_tree_prior -= log(1.0 - exp(-r*max_waiting_time));
+        //_log_species_tree_prior -= log(1.0 - exp(-r*max_waiting_time));
             
         // Increment height of forest
         advanceAllLineagesBy(t);
@@ -592,10 +419,9 @@ namespace proj {
             
             // Insert a speciation epoch and revise subsequent coalescent epochs to replace the two
             // old species with the new species
-            Node::species_t oldspp1 = first_node->getSpecies();
-            Node::species_t oldspp2 = second_node->getSpecies();
-            Node::species_t newspp  = anc_node->getSpecies();
-            insertSpeciationEpochAt(_epochs, _forest_height, oldspp1, oldspp2, newspp);
+            //SMCGlobal::species_t oldspp1 = first_node->getSpecies();
+            //SMCGlobal::species_t oldspp2 = second_node->getSpecies();
+            //SMCGlobal::species_t newspp  = anc_node->getSpecies();
 
             // Update lineage vector
             removeTwoAddOne(_lineages, first_node, second_node, anc_node);
@@ -603,18 +429,19 @@ namespace proj {
         }
                 
         // Compute coalescent likelihood
-        double log_coalescent_likelihood = 0.0;
-        for (unsigned g = 0; g < Forest::_ngenes; g++) {
-            log_coalescent_likelihood += calcLogCoalescentLikelihood(_epochs, g);
-        }
+        //double log_coalescent_likelihood = 0.0;
+        //for (unsigned g = 0; g < Forest::_ngenes; g++) {
+        //    log_coalescent_likelihood += calcLogCoalescentLikelihood(_epochs, g);
+        //}
         
-        log_weight = log_coalescent_likelihood - _prev_log_coalescent_likelihood;
-        _prev_log_coalescent_likelihood = log_coalescent_likelihood;
+        //log_weight = log_coalescent_likelihood - _prev_log_coalescent_likelihood;
+        //_prev_log_coalescent_likelihood = log_coalescent_likelihood;
 
-        debugShowEpochs(_epochs);
-        debugShow(format("Species forest in particle %d after step %d (height = %.5f)\n    %s") % particle % step % _forest_height % makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false));
+        //output(format("Species forest in particle %d after step %d (height = %.5f)\n    %s") % particle % step % _forest_height % makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false), 2);
         
         return log_weight;
+#endif
+        return 0.0;
     }
     
     inline void SpeciesForest::operator=(const SpeciesForest & other) {

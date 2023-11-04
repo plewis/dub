@@ -1,37 +1,20 @@
 // Currently this is the only model implemented - do not uncomment!
 #define USE_JUKE_CANTOR_MODEL
-//#define DEBUGGING
-//#define DEBUG_COAL_LIKE
-//#define DEBUG_PARTIAL_STORE
 
-// Use for saving continous parameters to a file for input into LoRaD software
-// Note: this has very limited value. Can use it to check SMC marginal likelihoods
-// only for the case where every gene tree has the same topology (and relative
-// coalescence times!) and, even then, one can only compute p(D | S, theta, lambda),
-// not p(D)
-//#define SAVE_PARAMS_FOR_LORAD
+// Uncomment to produce memory report for partials and data
+#define LOG_MEMORY
 
-// If defined, species are represented as bits set in an unsigned long
-// If not defined, species are std::set
-// Leaf nodes in gene trees are always assigned to one species, so
-// their set would have one element or the unsigned long would have one bit set
-// Ancestral species are unions of their descendant species.
-// NOTE: This setting yields branch lengths that are an order of magnitude too small
-// on a simulated data set; not sure why at this point
-//#define SPECIES_IS_BITSET
+// Uncomment to sacrifice speed for lower memory requirements
+//TODO: actually much slower and uses much more memory if LOW_MEM is defined!
+//  need to limit how many partials are stored for each gene?
+//  On test/simulated allocated 4362935 partials under LOW_MEM vs 88968 otherwise
+//  partials allocated lomem/himem: 4362935/88968 = 49.0
+//  real: 24.711/9.489 = 2.6
+//  user:18.585/8.574  = 2.2
+//  sys:6.039/0.827    = 7.3
+//#define LOW_MEM
 
-//#define LOG_MEMORY
+// Uncomment to use signposts in Instruments
 //#define USING_SIGNPOSTS
-//#define USING_MPI
-//#define ENABLE_PAUSE
-#define PLOT_MULTIPLE_TRY_UPDATES
 
-#if defined(USING_MPI)
-#   include <mpi.h>
-#endif
-
-#if defined(ENABLE_PAUSE)
-#   define DEBUG_PAUSE(s) cout << "paused: " << s << endl; cin >> dummy_char; cout << endl;
-#else
-#   define DEBUG_PAUSE(s)
-#endif
+#define NEWWAY
