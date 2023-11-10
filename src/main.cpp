@@ -68,15 +68,33 @@ using boost::format;
 
 using namespace proj;
 
-void output(format & fmt, unsigned level) {
-    if (SMCGlobal::_verbosity > 0 && level <= SMCGlobal::_verbosity)
-        cout << str(fmt);
-}
+#if defined(USING_MPI)
+    int my_rank = 0;
+    int ntasks = 0;
 
-void output(string msg, unsigned level) {
-    if (SMCGlobal::_verbosity > 0 && level <= SMCGlobal::_verbosity)
-        cout << msg;
-}
+    unsigned my_first_particle = 0;
+    unsigned my_last_particle = 0;
+
+    void output(format & fmt, unsigned level) {
+        if (my_rank == 0 && SMCGlobal::_verbosity > 0 && level <= SMCGlobal::_verbosity)
+            cout << str(fmt);
+    }
+
+    void output(string msg, unsigned level) {
+        if (my_rank == 0 && SMCGlobal::_verbosity > 0 && level <= SMCGlobal::_verbosity)
+            cout << msg;
+    }
+#else
+    void output(format & fmt, unsigned level) {
+        if (SMCGlobal::_verbosity > 0 && level <= SMCGlobal::_verbosity)
+            cout << str(fmt);
+    }
+
+    void output(string msg, unsigned level) {
+        if (SMCGlobal::_verbosity > 0 && level <= SMCGlobal::_verbosity)
+            cout << msg;
+    }
+#endif
 
 #if defined(LOG_MEMORY)
     char dummy_char;
@@ -92,9 +110,16 @@ vector<unsigned>                    Partial::_nconstructed;
 vector<unsigned>                    Partial::_ndestroyed;
 vector<unsigned>                    Partial::_max_in_use;
 vector<unsigned long>               Partial::_bytes_per_partial;
-unsigned                            Partial::_total_max_in_use  = 0;
-unsigned                            Partial::_total_max_bytes   = 0;
+unsigned long                       Partial::_total_max_in_use  = 0;
+unsigned long                       Partial::_total_max_bytes   = 0;
 unsigned                            Partial::_nstates           = 4;
+#endif
+
+unsigned                            SMCGlobal::_nthreads            = 1;
+#if defined(USING_MULTITHREADING)
+mutex                               SMCGlobal::_mutex;
+vector<unsigned>                    SMCGlobal::_thread_first_particle;
+vector<unsigned>                    SMCGlobal::_thread_last_particle;
 #endif
 
 unsigned                            SMCGlobal::_verbosity = 0;
@@ -114,6 +139,7 @@ map<unsigned,unsigned>              SMCGlobal::_nexus_taxon_map;
 unsigned                            SMCGlobal::_ngenes             = 0;
 vector<string>                      SMCGlobal::_gene_names;
 vector<unsigned>                    SMCGlobal::_nsites_per_gene;
+map<unsigned, double>               SMCGlobal::_relrate_for_gene;
 
 double                              SMCGlobal::_theta              = 0.05;
 double                              SMCGlobal::_lambda             = 1.0;
@@ -132,7 +158,7 @@ double                              SMCGlobal::_negative_infinity = -numeric_lim
 
 vector<double>                      SMCGlobal::_cumprobs;
 
-//bool                                Forest::_prior_prior        = true;
+bool                                SMCGlobal::_prior_prior        = true;
 
 PartialStore::leaf_partials_t       GeneForest::_leaf_partials;
 

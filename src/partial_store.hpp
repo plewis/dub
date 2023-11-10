@@ -13,8 +13,8 @@ namespace proj {
         static vector<unsigned> _ndestroyed;    // no. partials destroyed for each gene
         static vector<unsigned> _max_in_use;    // maximum no. partials in use at any one time for each gene
         static vector<unsigned long> _bytes_per_partial;    // no. bytes required to store partial array for each gene
-        static unsigned _total_max_in_use;      // total max. in use over all genes
-        static unsigned _total_max_bytes;       // total max. bytes over all genes
+        static unsigned long _total_max_in_use;      // total max. in use over all genes
+        static unsigned long _total_max_bytes;       // total max. bytes over all genes
         static unsigned _nstates;               // no. of states (4 for DNA)
 #endif
     };

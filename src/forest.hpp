@@ -33,7 +33,7 @@ namespace proj {
                                         bool coalunits = false) const;
             void            buildFromNewick(const string newick);
             
-            void            advanceAllLineagesBy(double t);
+            unsigned        advanceAllLineagesBy(double t);
             void            heightsInternalsPreorders();
             
             virtual void    createTrivialForest(bool compute_partials) = 0;
@@ -824,18 +824,22 @@ namespace proj {
         nexus_reader.DeleteBlocksFromFactories();
     }
             
-    inline void Forest::advanceAllLineagesBy(double t) {
+    inline unsigned Forest::advanceAllLineagesBy(double t) {
         assert(t >= 0.0);
         assert(t != SMCGlobal::_infinity);
         
         // Add t to the edge length of all lineage root nodes
+        unsigned n = 0;
         for (auto nd : _lineages) {
             double elen = nd->getEdgeLength() + t;
             nd->setEdgeLength(elen);
+            ++n;
         }
         
         // Add to to the current forest height
         _forest_height += t;
+        
+        return n;
     }
     
     inline Node * Forest::joinLineagePair(Node * subtree1, Node * subtree2) {

@@ -17,4 +17,9 @@
 // Uncomment to use signposts in Instruments
 //#define USING_SIGNPOSTS
 
-#define NEWWAY
+// Uncomment to use Teh's prior-post method for coalescent events
+//#define PRIOR_POST
+
+//#define USING_MPI
+
+#define USING_MULTITHREADING

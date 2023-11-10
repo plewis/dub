@@ -6,10 +6,13 @@ namespace proj {
 
     struct SMCGlobal {
         typedef unsigned long                       species_t;
-#if defined(NEWWAY)
-        typedef tuple<double, unsigned, species_t>  incr_tuple_t;
-#else
-        typedef tuple<double, unsigned, species_t>  rate_tuple_t;
+        typedef tuple<unsigned, unsigned, species_t>  species_tuple_t;
+
+        static unsigned                 _nthreads;
+#if defined(USING_MULTITHREADING)
+        static mutex                    _mutex;
+        static vector<unsigned>         _thread_first_particle;
+        static vector<unsigned>         _thread_last_particle;
 #endif
         
         static unsigned                 _verbosity;
@@ -29,6 +32,7 @@ namespace proj {
         static unsigned                 _ngenes;
         static vector<string>           _gene_names;
         static vector<unsigned>         _nsites_per_gene;
+        static map<unsigned, double>    _relrate_for_gene;
         
         static double                   _theta;
         static double                   _lambda;
@@ -36,8 +40,10 @@ namespace proj {
         static double                   _theta_prior_mean;
         static double                   _lambda_prior_mean;
         
-        static bool                      _update_theta;
-        static bool                      _update_lambda;
+        static bool                     _update_theta;
+        static bool                     _update_lambda;
+        
+        static bool                     _prior_prior;
         
         static double                   _small_enough;
         static double                   _infinity;
@@ -50,7 +56,7 @@ namespace proj {
         static void     createDefaultGeneTreeNexusTaxonMap();
         static void     createDefaultSpeciesTreeNexusTaxonMap();
         static string   memoryAddressAsString(const void * ptr);
-        static unsigned multinomialDraw(const vector<double> & probs);
+        static unsigned multinomialDraw(Lot::SharedPtr lot, const vector<double> & probs);
         static string   speciesStringRepresentation(SMCGlobal::species_t species);
 
     };
@@ -106,13 +112,17 @@ namespace proj {
         return memory_address.str();
     }
     
-    inline unsigned SMCGlobal::multinomialDraw(const vector<double> & probs) {
+    inline unsigned SMCGlobal::multinomialDraw(Lot::SharedPtr lot, const vector<double> & probs) {
+#if defined(USING_MULTITHREADING)
+        lock_guard<mutex> guard(SMCGlobal::_mutex);
+#endif
+        
         // Compute cumulative probababilities
         _cumprobs.resize(probs.size());
         partial_sum(probs.begin(), probs.end(), _cumprobs.begin());
 
         // Draw a Uniform(0,1) random deviate
-        double u = rng.uniform();
+        double u = lot->uniform();
 
         // Find first element in _cumprobs greater than u
         // e.g. probs = {0.2, 0.3, 0.4, 0.1}, u = 0.6, should return 2
@@ -129,8 +139,8 @@ namespace proj {
         //               begin()   it
         // returns 2 = 2 - 0
         auto it = find_if(_cumprobs.begin(), _cumprobs.end(), [u](double cumpr){return cumpr > u;});
-                
         assert(it != _cumprobs.end());
+
         return (unsigned)distance(_cumprobs.begin(), it);
     }
     

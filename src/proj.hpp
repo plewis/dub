@@ -23,6 +23,13 @@ extern os_log_t log_handle;
 extern os_signpost_id_t signpost_id;
 #endif
 
+#if defined(USING_MPI)
+extern int my_rank;
+extern int ntasks;
+extern unsigned my_first_particle;
+extern unsigned my_last_particle;
+#endif
+
 extern void output(string msg, unsigned level);
 extern void output(format & fmt, unsigned level);
 extern proj::PartialStore ps;
@@ -44,11 +51,12 @@ namespace proj {
             
         private:
                     
-#if defined(NEWWAY)
-            void debugShowIncrements(double speciation_incr, vector<SMCGlobal::incr_tuple_t> & increments, unsigned which_gene, SMCGlobal::species_t which_spp);
-#else
-            void debugShowRateTuplesAndProbs(vector<SMCGlobal::rate_tuple_t> & rates, vector<double> & probs, unsigned which);
-#endif
+            void updateCountMap(map<string, unsigned> & count_map, string & newick,    unsigned count);
+            unsigned countSpeciations(const vector<Particle> & particles);
+            void debugCheckCountMap(const map<string, unsigned> & count_map, unsigned target);
+            void parseRelRateDefinition(string & s);
+            
+            void debugShowSpecies(double speciation_incr, vector<SMCGlobal::species_tuple_t> & species_tuples, unsigned which_gene, SMCGlobal::species_t which_spp);
             void                       debugShowStringVector(string title, const vector<string> & svect) const;
             void                       debugShowStringUnsignedMap(string title, const map<string, unsigned> & sumap) const;
 
@@ -60,14 +68,18 @@ namespace proj {
             void                       outputTrees(SpeciesForest & sf, vector<GeneForest> & gfvect);
             void                       outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric, const vector<string> & newick_gene_trees_numeric);
             void                       outputAnnotatedNexusTreefile(string fn, const vector<tuple<unsigned, double, string, string, string> > & treeinfo) const;
-            void                       saveAllSpeciesTrees(string fn, const vector<Particle> particles, const map<unsigned, string> & count_map);
-            void                       saveAllGeneTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts);
+            void                       saveAllSpeciesTrees(string fn, const vector<Particle> particles, const map<string, unsigned> & count_map);
+            void                       saveAllGeneTrees(unsigned gene, string fn, const vector<Particle> particles);
             void                       saveUniqueSpeciesTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts);
 
-            double                     advanceParticle(unsigned step, unsigned pindex, Particle & particle, bool compute_partials);
-            double                     filterParticles(unsigned step, vector<Particle> & particles, vector<double> & log_weights, vector<unsigned> & counts, map<unsigned, string> & count_map);
+#if defined(USING_MULTITHREADING)
+            void                       advanceParticleRange(unsigned step, unsigned first, unsigned last);
+#endif
+//            double                     advanceParticle(unsigned step, unsigned pindex, Particle & particle, bool compute_partials);
+            double                     filterParticles(unsigned step, vector<Particle> & particles, vector<double> & log_weights, vector<unsigned> & counts, map<string, unsigned> & count_map);
 
             void                       readData();
+            void                       setRelativeRates();
             unsigned                   buildSpeciesMap();
             void                       outputGeneTreesToFile(string fn,
                                             const vector<string> & newicks) const;
@@ -90,6 +102,11 @@ namespace proj {
             bool                       _sort_forests;
             double                     _visualization_cutoff;
             
+            vector<Particle>            _particles;
+            vector<double>              _log_weights;
+            
+            map<string, double>         _relrate_map;
+            
             double                      _theta;
             double                      _lambda;
                         
@@ -103,6 +120,16 @@ namespace proj {
             //vect_particle_t             _species_particles;
             //Particle                    _template_particle;
             
+#if defined(USING_MULTITHREADING)
+            void threadSetSchedule();
+#endif
+
+#if defined(USING_MPI)
+            void mpiSetSchedule();
+            vector<unsigned>            _mpi_first_particle;
+            vector<unsigned>            _mpi_last_particle;
+#endif
+
             static string               _program_name;
             static unsigned             _major_version;
             static unsigned             _minor_version;
@@ -146,6 +173,7 @@ namespace proj {
 
     inline void Proj::processCommandLineOptions(int argc, const char * argv[]) {
         vector<string> partition_subsets;
+        vector<string> partition_relrates;
         variables_map vm;
         options_description desc("Allowed options");
         desc.add_options()
@@ -155,11 +183,14 @@ namespace proj {
         ("startmode", value(&_start_mode), "if 'simulate', simulate gene trees, species tree, and data; if 'smc', estimate from supplied datafile")
         ("niter", value(&_niter), "number of iterations, where one iteration involves SMC of gene trees give species tree combined with an SMC of species tree given gene trees")
         ("subset",  value(&partition_subsets), "a string defining a partition subset, e.g. 'first:1-1234\3' or 'default[codon:standard]:1-3702'")
+        ("relrate",  value(&partition_relrates), "a relative rate for a previously-defined subset; format first:3.1")
         ("ambigmissing",  value(&_ambig_missing)->default_value(true), "treat all ambiguities as missing data")
         ("verbosity",  value(&SMCGlobal::_verbosity)->default_value(0), "0, 1, or 2: higher number means more output")
         ("nspecies",  value(&_nsimspecies)->default_value(1), "number of species (only used if simulate specified)")
         ("ntaxaperspecies",  value(&_nsimtaxaperspecies), "number of taxa sampled per species (only used if simulate specified); should be _nimspecies of these entries, one for each species simulated")
         ("nparticles",  value(&_nparticles)->default_value(1000), "number of particles in a population")
+        ("nthreads",  value(&SMCGlobal::_nthreads)->default_value(3), "number of threads (each thread will handle nparticles/nthreads particle updates)")
+        ("priorprior", value(&SMCGlobal::_prior_prior)->default_value(true), "use prior-prior approach to choose coalescence joins")
         ("theta",  value(&_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
         ("lambda",  value(&_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
         ("thetapriormean",  value(&SMCGlobal::_theta_prior_mean)->default_value(0.05), "mean of exponential prior for theta")
@@ -206,6 +237,14 @@ namespace proj {
             }
         }
         
+        // If user specified --relrate on command line, break specified relrate
+        // definition into name and rate
+        if (vm.count("relrate") > 0) {
+            for (auto relrate_definition : partition_relrates) {
+                parseRelRateDefinition(relrate_definition);
+            }
+        }
+        
         if (vm.count("theta") > 0) {
             SMCGlobal::_theta = _theta;
         }
@@ -227,6 +266,38 @@ namespace proj {
                     throw XProj(format("Expecting either 1 or %d ntaxaperspecies entries, but found %d") % _nsimspecies % ntaxaperspecies);
             }
         }
+        
+#if defined(USING_MULTITHREADING)
+        // nothing to do
+#else
+        if (vm.count("nthreads") > 0) {
+            if (SMCGlobal::_nthreads != 1) {
+                output(format("\nWARNING: You specified %d threads but this non-multithreading version only allows 1 thread\nProceeding with a single thread.\n\n")  % SMCGlobal::_nthreads,1);
+                SMCGlobal::_nthreads = 1;
+            }
+        }
+#endif
+    }
+    
+    inline void Proj::parseRelRateDefinition(string & s) {
+        vector<string> v;
+        
+        // First separate part before colon (stored in v[0])
+        // from part after colon (stored in v[1])
+        split(v, s, boost::is_any_of(":"));
+        if (v.size() != 2)
+            throw XProj("Expecting exactly one colon in relrate definition");
+
+        string gene_name = v[0];
+        string relrate_string = v[1];
+        double relrate;
+        try {
+            relrate = stod(relrate_string);
+        }
+        catch (const std::invalid_argument& ia) {
+            throw XProj(format("Could not convert \"%s\" to a relative rate for gene \"%s\"") % relrate_string % gene_name);
+        }
+        _relrate_map[gene_name] = relrate;
     }
     
     inline void Proj::readData() {
@@ -256,9 +327,41 @@ namespace proj {
             output(format("    data type: %s\n") % dt.getDataTypeAsString(), 2);
             output(format("    sites:     %d\n") % _data->calcSeqLenInSubset(subset), 2);
             output(format("    patterns:  %d\n") % _data->getNumPatternsInSubset(subset), 2);
-            }
+        }
     }
     
+    inline void Proj::setRelativeRates() {
+        bool relrates_specified = !_relrate_map.empty();
+        if (relrates_specified) {
+            output("\nRelative rates specified for each gene:\n",2);
+            output(format("%12s %12s\n") % "gene" % "rate",2);
+            output(format("%12s %12s\n") % "-----------" % "-----------",2);
+            
+            SMCGlobal::_relrate_for_gene.clear();
+            unsigned total_nsites = _partition->getNumSites();
+            double mean_rate = 0.0;
+            for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
+                unsigned gnsites = _partition->numSitesInSubset(g);
+                string gname = _partition->getSubsetName(g);
+                double r = _relrate_map.at(gname);
+                SMCGlobal::_relrate_for_gene[g] = r;
+                output(format("%12s %12.5f\n") % gname % r,2);
+                mean_rate += r*gnsites/total_nsites;
+            }
+            output(format("%12s %12s\n") % "-----------" % "-----------",2);
+            output(format("%12s %12.5f\n") % "mean" % mean_rate,2);
+            if (fabs(mean_rate - 1.0) > 0.001) {
+                XProj("The mean rate is more than 0.001 away from 1.0");
+            }
+        }
+        else {
+            output("\nRelative rates not specified (assuming no rate heterogeneity across genes)",2);
+            for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
+                SMCGlobal::_relrate_for_gene[g] = 1.0;
+            }
+        }
+    }
+
     inline unsigned Proj::buildSpeciesMap() {
         // Populates Forest::_species_names and Forest::_taxon_to_species
         unsigned nspecies = 0;
@@ -372,57 +475,22 @@ namespace proj {
         streef.close();
     }
     
-#if defined(NEWWAY)
-    inline void Proj::debugShowIncrements(double speciation_incr, vector<SMCGlobal::incr_tuple_t> & increments, unsigned which_gene, SMCGlobal::species_t which_spp) {
-        output(format("\ndebugShowIncrTuples (speciation increment = %.5f):\n") % speciation_incr, 1);
+    inline void Proj::debugShowSpecies(double speciation_incr, vector<SMCGlobal::species_tuple_t> & species_tuples, unsigned which_gene, SMCGlobal::species_t which_spp) {
+        output(format("\ndebugShowSpecies (speciation increment = %.5f):\n") % speciation_incr, 1);
 
-        unsigned n = (unsigned)increments.size();
-        if (n == 0) {
-            output(format("%3s %12s %12s\n") % " " % "event" % "incr", 1);
-            output(format("%3s %12s %12.5f\n") % " " % "speciation" % speciation_incr, 1);
-        }
-        else {
-            output(format("%3s %12s %12s %12s %s\n") % " " % "event" % "incr" % "gene" % "species", 1);
-            
-            for (unsigned i = 0; i < n; i++) {
-                SMCGlobal::incr_tuple_t & incr_tuple = increments[i];
-                double             incr = get<0>(incr_tuple);
-                unsigned              g = get<1>(incr_tuple);
-                SMCGlobal::species_t  s = get<2>(incr_tuple);
-                string              ast = (which_gene == g && which_spp == s ? "*" : " ");
-                string               ss = SMCGlobal::speciesStringRepresentation(s);
-                assert(g > 0);
-                output(format("%3s %12s %12.5f %12d %s\n") % ast % "coalescence" % incr % g % ss, 1);
-            }
-        }
-    }
-#else
-    inline void Proj::debugShowRateTuplesAndProbs(vector<SMCGlobal::rate_tuple_t> & rates, vector<double> & probs, unsigned which) {
-        unsigned n = (unsigned)rates.size();
-        assert(n == probs.size());
+        unsigned ntuples = (unsigned)species_tuples.size();
+        output(format("%12s %12s %s\n")  % "nlineages" % "gene" % "species", 1);
         
-        output("\ndebugShowRateTuplesAndProbs:\n", 1);
-        output(format("%3s %12s %12s %12s %12s %12s %s\n") % " " % "event" % "rate" % "prob" % "cumprob" % "gene" % "species", 1);
-        double cump = 0.0;
-        for (unsigned i = 0; i < n; i++) {
-            SMCGlobal::rate_tuple_t & rate_tuple = rates[i];
-            string              ast = (which == i ? "*" : " ");
-            double                r = get<0>(rate_tuple);
-            unsigned              g = get<1>(rate_tuple);
-            SMCGlobal::species_t  s = get<2>(rate_tuple);
+        for (unsigned i = 0; i < ntuples; i++) {
+            SMCGlobal::species_tuple_t & species_tuple = species_tuples[i];
+            unsigned              n = get<0>(species_tuple);
+            unsigned              g = get<1>(species_tuple);
+            SMCGlobal::species_t  s = get<2>(species_tuple);
             string               ss = SMCGlobal::speciesStringRepresentation(s);
-            double                p = probs[i];
-            cump += p;
-            
-            if (g == 0) {
-                output(format("%3s %12s %12.5f %12.5f %12.5f\n") % ast % "speciation" % r % p % cump, 1);
-            }
-            else {
-                output(format("%3s %12s %12.5f %12.5f %12.5f%12d %s\n") % ast % "coalescence" % r % p % cump % g % ss, 1);
-            }
+            assert(g > 0);
+            output(format("%12d %12d %s\n")  % n % g % ss, 1);
         }
     }
-#endif
     
     inline void Proj::simulateTrees(Particle & particle) {
         unsigned nspecies = SMCGlobal::_nspecies;
@@ -442,7 +510,7 @@ namespace proj {
         
         // Add coalescent events and speciation events until all trees are built
         for (unsigned step = 0; step < nsteps; step++) {
-            advanceParticle(step, 0, particle, /*compute_partials*/false);
+            particle.advance(step, 0, /*calculate_partial*/false);
         }
         
         particle.refreshHeightsInternalsPreorders();
@@ -455,21 +523,29 @@ namespace proj {
         // Output tree file containing true species tree
         string newick_species_tree_alpha = sf.makeNewick(/*precision*/9, /*use names*/true, edgelens_in_coalescent_units);
         string newick_species_tree_numeric = sf.makeNewick(/*precision*/9, /*use names*/false, edgelens_in_coalescent_units);
-        outputNexusTreefile("true-species-tree.tre", {newick_species_tree_alpha});
-        output("  True species tree saved in file \"true-species-tree.tre\"\n", 2);
+        if (SMCGlobal::_nspecies > 1) {
+            outputNexusTreefile("true-species-tree.tre", {newick_species_tree_alpha});
+            output(format("  True species tree height = %.9f\n") % sf.getHeight(),2);
+            output("  True species tree saved in file \"true-species-tree.tre\"\n", 1);
+        }
+        else {
+            output("  True species tree not saved because it is just a single node!\n", 1);
+        }
 
         // Output tree file containing true gene trees
         vector<string> newick_gene_trees_alpha;
         vector<string> newick_gene_trees_numeric;
+        output("  True gene tree height (height/theta):\n",2);
         for (auto & gf : gfvect) {
             string newick_alpha = gf.makeNewick(/*precision*/9, /*use names*/true, edgelens_in_coalescent_units);
             newick_gene_trees_alpha.push_back(newick_alpha);
             
             string newick_numeric = gf.makeNewick(/*precision*/9, /*use names*/false, edgelens_in_coalescent_units);
             newick_gene_trees_numeric.push_back(newick_numeric);
+            output(format("  %12.9f (%.9f)\n") % gf.getHeight() % (gf.getHeight()/SMCGlobal::_theta), 2);
         }
         outputGeneTreesToFile("true-gene-trees.tre", newick_gene_trees_alpha);
-        output("  True gene trees saved in file \"true-gene-trees.tre\"\n", 2);
+        output("  True gene trees saved in file \"true-gene-trees.tre\"\n", 1);
 
         // Output gene trees and species trees for javascript viewer
         outputJavascriptTreefile("newicks.js", newick_species_tree_numeric, newick_gene_trees_numeric);
@@ -508,25 +584,54 @@ namespace proj {
     }
     
     inline void Proj::simulateData() {
+        SMCGlobal::_nspecies = _nsimspecies;
+        SMCGlobal::_ntaxa = (unsigned)accumulate(_nsimtaxaperspecies.begin(), _nsimtaxaperspecies.end(), 0);
+
         output("Simulating sequence data under multispecies coalescent model:\n", 2);
         output(format("  theta  = %.5f\n") % SMCGlobal::_theta, 2);
         output(format("  lambda = %.5f\n") % SMCGlobal::_lambda, 2);
-        output(format("  no. species = %d\n") % _nsimspecies, 2);
+        output(format("  Number of species = %d\n") % _nsimspecies, 2);
+        
+        // Expected height of species tree is (1/2 + 1/3 + ... + 1/nspecies)/lambda
+        // Approximation to (1/2 + 1/3 + ... + 1/nspecies) is
+        //   ln(nspecies) + 0.58 (Euler's constant)
+        //   see http://www.dimostriamogoldbach.it/en/inverses-integers-sum/
+        // 0.25 = Exact (nspecies = 5, lambda = 5)
+        // 0.44 = Approximate
+        double expected_species_tree_height = 0.0;
+        for (unsigned i = 2; i <= SMCGlobal::_nspecies; i++) {
+            expected_species_tree_height += 1.0/i;
+        }
+        expected_species_tree_height /= SMCGlobal::_lambda;
+        output(format("  Expected species tree height = %.5f\n") % expected_species_tree_height, 2);
+        
+        // Expected gene tree height without species tree constraints
+        // is theta/n(n-1) + theta/(n-1)(n-2) + ... + theta/(2)(1)
+        double expected_gene_tree_height = 0.0;
+        for (unsigned i = 2; i <= SMCGlobal::_ntaxa; i++) {
+            expected_gene_tree_height += 1.0/(i*(i-1));
+        }
+        expected_gene_tree_height *= SMCGlobal::_theta;
+        output(format("  Expected gene tree height (unconstrained) = %.5f\n") % expected_gene_tree_height, 2);
         
         // Interrogate _partition to determine number of genes, gene names, and
         // number of sites in each gene
         SMCGlobal::_ngenes = _partition->getNumSubsets();
         SMCGlobal::_nsites_per_gene.resize(SMCGlobal::_ngenes);
         SMCGlobal::_gene_names.resize(SMCGlobal::_ngenes);
+        unsigned total_nsites = 0;
         for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
-            SMCGlobal::_nsites_per_gene[g] = _partition->numSitesInSubset(g);
-            SMCGlobal::_gene_names[g] = _partition->getSubsetName(g);
+            unsigned gnsites = _partition->numSitesInSubset(g);
+            total_nsites += gnsites;
+            string gname = _partition->getSubsetName(g);
+            SMCGlobal::_nsites_per_gene[g] = gnsites;
+            SMCGlobal::_gene_names[g] = gname;
         }
-        
+
+        setRelativeRates();
+
         // Invent taxon/species names and numbers, and create
         // taxpartition vector used later in paup command file
-        SMCGlobal::_nspecies = _nsimspecies;
-        SMCGlobal::_ntaxa = (unsigned)accumulate(_nsimtaxaperspecies.begin(), _nsimtaxaperspecies.end(), 0);
         SMCGlobal::_species_names.resize(SMCGlobal::_nspecies);
         SMCGlobal::_taxon_names.resize(SMCGlobal::_ntaxa);
         unsigned k = 0;
@@ -594,192 +699,193 @@ namespace proj {
         ofstream paupf("svd-qage.nex");
         paupf << "#NEXUS\n\n";
         paupf << "begin paup;\n";
+        paupf << "  log start file=svdout.txt replace;\n";
         paupf << "  exe simulated.nex;\n";
         paupf << "  taxpartition species (vector) = " << join(taxpartition," ") << ";\n";
         paupf << "  svd taxpartition=species;\n";
         paupf << "  roottrees;\n";
-        paupf << "  qage taxpartition=species patprob=exactjc outUnits=coalescent treefile=svd.tre replace;\n";
+        paupf << "  qage taxpartition=species patprob=exactjc outUnits=substitutions treefile=svd.tre replace;\n";
+        paupf << "  log stop;\n";
         paupf << "  quit;\n";
         paupf << "end;\n";
         paupf.close();
      }
      
-#if defined(NEWWAY)
-    inline double Proj::advanceParticle(unsigned step, unsigned pindex, Particle & particle, bool compute_partials) {
-        double log_weight = 0.0;
-        
-        SpeciesForest & species_forest = particle.getSpeciesForest();
-        vector<GeneForest> & gene_forests = particle.getGeneForests();
-        
-        // Create increments vector. Each 3-tuple entry stores:
-        //  1. increment: a draw from Exponential(rate)
-        //  2. gene index (0 is species tree)
-        //  3. species within gene (ignored if species tree)
-        vector<SMCGlobal::incr_tuple_t> increments;
-        
-        // Draw increment for species tree and every species within every locus
-        // Ignore any coalescences that are deeper than the speciation event
-        // and, of those remaining, choose the coalescence with the smallest increment.
-        // If all coalescences are deeper than the speciation event, choose the
-        // speciation event.
-        // Note: speciation_increment will equal "infinity" if species tree is complete
-        double speciation_increment = species_forest.drawIncrement();
-        for (auto & gene_forest : gene_forests) {
-            // Draw increments for each species within gene_forest, saving
-            // only the smallest (assuming smallest < speciation_increment)
-            gene_forest.drawIncrement(increments, speciation_increment);
-        }
-
-        bool is_speciation = false;
-        unsigned which_gene = 0;
-        SMCGlobal::species_t which_spp = (SMCGlobal::species_t)0;
-        double dt = 0.0;
-        if (increments.empty()) {
-            is_speciation = true;
-            dt = speciation_increment;
-        }
-        else{
-            // Find smallest of all increments that made the cut
-            sort(increments.begin(), increments.end());
-            dt = get<0>(increments[0]);
-            which_gene = get<1>(increments[0]);
-            which_spp = get<2>(increments[0]);
-        }
-        
-        //debugShowIncrements(speciation_increment, increments, which_gene, which_spp);
-        
-        // Advance all forests
-        species_forest.advanceAllLineagesBy(dt);
-        for (auto & gene_forest : gene_forests) {
-            gene_forest.advanceAllLineagesBy(dt);
-        }
-
-        if (is_speciation) {
-            particle.setLastEvent(Particle::LAST_EVENT_SPECIATION);
-            
-            // Create speciation event
-            SMCGlobal::species_t left;
-            SMCGlobal::species_t right;
-            SMCGlobal::species_t anc;
-            species_forest.speciationEvent(left, right, anc);
-                        
-            // Advise all gene trees of the change in the species tree
-            for (auto & gene_forest : gene_forests) {
-                gene_forest.mergeSpecies(left, right, anc);
-            }
-        }
-        else {
-            particle.setLastEvent(Particle::LAST_EVENT_COALESCENCE);
-            
-            SMCGlobal::incr_tuple_t & entry = increments[0];
-            unsigned                   gene = get<1>(entry);
-            SMCGlobal::species_t    species = get<2>(entry);
-
-            GeneForest & gene_forest = gene_forests[gene - 1];
-            log_weight = gene_forest.coalescentEvent(species, compute_partials);
-            
-            // Only speciation events should have log_weight 0.0, unless we're
-            // simulating, in which case compute_partials will be false
-            assert(log_weight != 0.0 || !compute_partials);
-            
-            // If any log_weight is not a number, now's the time to find out about it
-            assert(!isnan(log_weight));
-        }
-    
-        if (is_speciation) {
-            particle.incrementSpeciations();
-        }
-        return log_weight;
-    }
-#else
-    inline double Proj::advanceParticle(unsigned step, unsigned pindex, Particle & particle, bool compute_partials) {
-        double log_weight = 0.0;
-        
-        SpeciesForest & species_forest = particle.getSpeciesForest();
-        vector<GeneForest> & gene_forests = particle.getGeneForests();
-        
-        // Create rates vector. Each 3-tuple entry stores:
-        //  1. rate
-        //  2. gene index (0 is species tree)
-        //  3. species within gene (ignored if species tree)
-        vector<SMCGlobal::rate_tuple_t> rates;
-        
-        double total_rate = species_forest.calcRate(rates);
-        for (auto & gene_forest : gene_forests) {
-            total_rate += gene_forest.calcRates(rates);
-        }
-        
-        // Draw an increment from Exponential(rate)
-        double u = rng.uniform();
-        double dt = -log(1.0 - u)/total_rate;
-        
-        // Advance all forests
-        species_forest.advanceAllLineagesBy(dt);
-        for (auto & gene_forest : gene_forests) {
-            gene_forest.advanceAllLineagesBy(dt);
-        }
-                    
-        // Copy rates to probs vector
-        vector<double> probs(rates.size());
-        transform(rates.begin(), rates.end(), probs.begin(), [total_rate](SMCGlobal::rate_tuple_t & r){return get<0>(r)/total_rate;});
-
-        // Decide what happened
-        unsigned which = SMCGlobal::multinomialDraw(probs);
-        
-        //debugShowRateTuplesAndProbs(rates, probs, which);
-        
-        // Take action
-        SMCGlobal::rate_tuple_t &     r = rates[which];
-        unsigned                   gene = get<1>(r);
-        SMCGlobal::species_t    species = get<2>(r);
-        
-        bool is_speciation = false;
-        
-        if (gene == 0) {
-            // Create speciation event
-            is_speciation = true;
-            SMCGlobal::species_t left;
-            SMCGlobal::species_t right;
-            SMCGlobal::species_t anc;
-            species_forest.speciationEvent(left, right, anc);
-                        
-            // Advise all gene trees of the change in the species tree
-            for (auto & gene_forest : gene_forests) {
-                gene_forest.mergeSpecies(left, right, anc);
-            }
-        }
-        else {
-            GeneForest & gene_forest = gene_forests[gene - 1];
-            
-            //temporary!
-            //double log_like_before = gene_forest.calcLogLikelihood();
-            
-            log_weight = gene_forest.coalescentEvent(species, compute_partials);
-
-            //temporary!
-            //double log_like_after = gene_forest.calcLogLikelihood();
-            //double log_weight_check = log_like_after - log_like_before;
-            //double abs_diff = fabs(log_weight - log_weight_check);
-            //if (abs_diff > 0.001) {
-            //    output(format("log_weight = %.5f\nlog_weight_check = %.5f\nabs_diff = %.5f") % //log_weight % log_weight_check % abs_diff,1);
-            //    cerr << endl;
-            //}
-            //if (log_weight < 0.0) {
-            //    output(format("log_weight = %.5f\nlog_like_before = %.5f\nlog_like_after = //%.5f") % log_weight % log_like_before % log_like_after,1);
-            //    cerr << endl;
-            //}
-            
-            assert(log_weight != 0.0);
-        }
-    
-        if (is_speciation) {
-            particle.incrementSpeciations();
-        }
-        return log_weight;
-    }
+#if 0
+//    inline double Proj::advanceParticle(unsigned step, unsigned pindex, Particle & particle, bool compute_partials) {
+//        double log_weight = 0.0;
+//
+//        // Get pointer to the pseudorandom number generator to use for this update
+//        Lot::SharedPtr lot = particle.getLot();
+//
+//        SpeciesForest & species_forest = particle.getSpeciesForest();
+//        vector<GeneForest> & gene_forests = particle.getGeneForests();
+//
+//        // Create species_tuples vector. Each 3-tuple entry stores:
+//        //  1. number of lineages
+//        //  2. gene index
+//        //  3. species within gene (ignored if species tree)
+//        vector<SMCGlobal::species_tuple_t> species_tuples;
+//
+//        // Draw a speciation increment Delta. Note: speciation_increment will
+//        // equal "infinity" if species tree is complete.
+//        auto incr_rate = species_forest.drawIncrement(lot);
+//        double Delta = incr_rate.first;
+//        double speciation_rate = incr_rate.second;
+//
+//        // Visit each species within each locus, storing the number of lineages in
+//        // species_tuples and computing the total coalescence rate (total_rate).
+//        // Next increment will be drawn from an Exponential distribution with rate
+//        // total_rate.
+//        double total_rate = 0.0;
+//        for (auto & gene_forest : gene_forests) {
+//            total_rate += gene_forest.calcTotalRate(species_tuples, Delta);
+//        }
+//
+//        // Draw a coalescence increment delta
+//        double delta = -log(1.0 - lot->uniform())/total_rate;
+//
+//        // If delta > Delta, then a speciation event happened; otherwise a coalescent event happened.
+//        bool is_speciation = (delta > Delta);
+//
+//        // Advance all forests
+//        double dt = is_speciation ? Delta : delta;
+//
+//        unsigned num_species_lineages = 1;
+//        if (speciation_rate > 0.0) {
+//            num_species_lineages = species_forest.advanceAllLineagesBy(dt);
+//            if (fabs(SMCGlobal::_lambda*num_species_lineages - speciation_rate) > 0.0001) {
+//                throw XProj(format("%d | %.5f | %.5f | %.5f | %.5f > 0.0001") % num_species_lineages % SMCGlobal::_lambda % (SMCGlobal::_lambda*num_species_lineages) % speciation_rate % fabs(SMCGlobal::_lambda*num_species_lineages - speciation_rate));
+//            }
+//        }
+//        for (auto & gene_forest : gene_forests) {
+//            gene_forest.advanceAllLineagesBy(dt);
+//        }
+//
+//        if (is_speciation) {
+//            particle.setLastEvent(Particle::LAST_EVENT_SPECIATION);
+//
+//            // Create speciation event
+//            SMCGlobal::species_t left;
+//            SMCGlobal::species_t right;
+//            SMCGlobal::species_t anc;
+//            species_forest.speciationEvent(lot, left, right, anc);
+//
+//            // Advise all gene trees of the change in the species tree
+//            for (auto & gene_forest : gene_forests) {
+//                gene_forest.mergeSpecies(left, right, anc);
+//            }
+//        }
+//        else {
+//            particle.setLastEvent(Particle::LAST_EVENT_COALESCENCE);
+//
+//            assert(SMCGlobal::_prior_prior);    // prior-post not yet ready
+//            if (SMCGlobal::_prior_prior) {
+//                // Choose which locus and species in which to have a coalescence
+//
+//                // Create vector of lineage counts
+//                vector<double> lineage_counts(species_tuples.size());
+//                transform(species_tuples.begin(), species_tuples.end(), lineage_counts.begin(), [](SMCGlobal::species_tuple_t & spp_tuple){
+//                    return get<0>(spp_tuple);
+//                });
+//
+//                // Determine sum of lineage_counts
+//                double total_num_lineages = accumulate(lineage_counts.begin(), lineage_counts.end(), 0.0);
+//
+//                // Normalize lineage_counts to create a discrete probability distribution
+//                vector<double> probs(lineage_counts.size());
+//                transform(lineage_counts.begin(), lineage_counts.end(), probs.begin(), [total_num_lineages](unsigned nlineages){return (double)nlineages/total_num_lineages;});
+//                assert(fabs(accumulate(probs.begin(), probs.end(), 0.0) - 1.0) < 0.0001);
+//
+//                // Choose gene and species
+//                unsigned which = SMCGlobal::multinomialDraw(lot, probs);
+//                //unsigned n                = get<0>(species_tuples[which]);
+//                unsigned g                = get<1>(species_tuples[which]);
+//                SMCGlobal::species_t spp  = get<2>(species_tuples[which]);
+//
+//                GeneForest & gene_forest = gene_forests[g];
+//
+//                log_weight = gene_forest.coalescentEvent(lot, spp, compute_partials);
+//
+//                // Adjust weight for fact that proposal differs from prior
+//                if (num_species_lineages > 1) {
+//                    log_weight -= speciation_rate*(delta - Delta);
+//                    log_weight -= log(speciation_rate);
+//                }
+//                assert(!isnan(log_weight));
+//                assert(!isinf(log_weight));
+//            }
+//            else {
+//#if 0   // old prior post code
+////                // Store log weight for all possible coalescence events in all loci
+////                // at the current height
+////                vector<GeneForest::coal_tuple_t> coals;
+////                for (auto & gene_forest : gene_forests) {
+////                    gene_forest.possibleCoalescentEvents(coals);
+////                }
+////
+////                // Compute log(sum of weights)
+////                vector<double> log_weights(coals.size());
+////                transform(coals.begin(), coals.end(), log_weights.begin(), [](GeneForest::coal_tuple_t & coal_tuple){
+////                    return get<0>(coal_tuple);
+////                });
+////
+////                // Compute sum of weights on log scale
+////                double log_sum_weights = SMCGlobal::calcLogSum(log_weights);
+////
+////                // Normalize log weights to create a discrete probability distribution
+////                vector<double> probs(log_weights.size());
+////                transform(log_weights.begin(), log_weights.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
+////                assert(fabs(accumulate(probs.begin(), probs.end(), 0.0) - 1.0) < 0.0001);
+////
+////                // Choose one pair to join
+////                unsigned which = SMCGlobal::multinomialDraw(probs);
+////                unsigned g                = get<1>(coals[which]);
+////                SMCGlobal::species_t spp  = get<2>(coals[which]);
+////                unsigned i                = get<3>(coals[which]);
+////                unsigned j                = get<4>(coals[which]);
+////
+////                // Carry out the chosen join
+////                GeneForest & gf = gene_forests[g];
+////                gf.coalescePair(spp, i, j);
+////
+////                // Log sum of weights is the log weight
+////                log_weight = log_sum_weights;
+//#endif
+//            }
+//
+//            // Only speciation events should have log_weight 0.0, unless we're
+//            // simulating, in which case compute_partials will be false
+//            assert(log_weight != 0.0 || !compute_partials);
+//
+//            // If any log_weight is not a number, now's the time to find out about it
+//            assert(!isnan(log_weight));
+//        }
+//
+//        if (is_speciation) {
+//            particle.incrementSpeciations();
+//        }
+//        return log_weight;
+//    }
 #endif
 
-    inline double Proj::filterParticles(unsigned step, vector<Particle> & particles, vector<double> & log_weights, vector<unsigned> & counts, map<unsigned, string> & count_map) {
+    inline void Proj::updateCountMap(map<string, unsigned> & count_map, string & newick, unsigned count) {
+        // If newick is not already in count_map, insert it and set value to count.
+        // If it does exist, increase its current value by count.
+        // (see item 24, p. 110, in Meyers' Efficient STL for more info on the technique used here)
+        auto lowb = count_map.lower_bound(newick);
+        if (lowb != count_map.end() && !(count_map.key_comp()(newick, lowb->first))) {
+            // this pattern has already been seen
+            lowb->second += count;
+        }
+        else
+            {
+            // this pattern has not yet been seen
+            count_map.insert(lowb, map<string, unsigned>::value_type(newick, count));
+        }
+    }
+
+    inline double Proj::filterParticles(unsigned step, vector<Particle> & particles, vector<double> & log_weights, vector<unsigned> & counts, map<string, unsigned> & count_map) {
         // Sanity checks
         assert(particles.size() == _nparticles);
         assert(log_weights.size() == _nparticles);
@@ -819,11 +925,16 @@ namespace proj {
         }
         
         // Build count_map
+        unsigned count_check = 0;
         for (unsigned i = 0; i < _nparticles; ++i) {
             if (counts[i] > 0) {
-                count_map[counts[i]] = particles[i].getSpeciesForest().makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false);
+                unsigned c = counts[i];
+                count_check += c;
+                string newick = particles[i].getSpeciesForest().makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false);
+                updateCountMap(count_map, newick, c);
             }
         }
+        assert(count_check == _nparticles);
         
         // The vector counts represents the results of multinomial sampling, and
         // will need to be intact after this function is called, so make a copy
@@ -883,37 +994,49 @@ namespace proj {
         streef.close();
     }
 
-    inline void Proj::saveAllGeneTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts) {
-        vector<tuple<unsigned, double, string, string, string> > treeinfo;
-        unsigned i = 0;
+    inline void Proj::saveAllGeneTrees(unsigned gene_index, string fn, const vector<Particle> particles) {
+    
+        // First pass builds map of newick (key) and count (value)
+        map<string, unsigned> count_map;
         for (auto & p : particles) {
-            unsigned c = counts[i];
-            double pct = 100.0*c/_nparticles;
+            assert(gene_index < p.getGeneForests().size());
+            const GeneForest & gf = p.getGeneForests()[gene_index];
+            string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false);
+            updateCountMap(count_map, newick, 1);
+        }
+        
+        // Now create treeinfo tuples
+        vector<tuple<unsigned, double, string, string, string> > treeinfo;
+        //unsigned i = 0;
+        for (auto & kv : count_map) {
+            double pct = 100.0*kv.second/_nparticles;
+            string note = str(format("freq = %d") % kv.second);
+            string treename = str(format("tree%d") % kv.second);
+            treeinfo.push_back(make_tuple(kv.second, pct, note, treename, kv.first));
 
-            // Compute log-likelihood and output tree description of all
-            // gene trees in this particle
-            const vector<GeneForest> & gene_forests = p.getGeneForests();
-            for (auto & gf : gene_forests) {
-                double log_likelihood = gf.calcLogLikelihood();
-                string note = str(format("freq = %d, lnL = %.5f") % c % log_likelihood);
-                string treename = str(format("tree%d") % i);
-                string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false);
-                treeinfo.push_back(make_tuple(c, pct, note, treename, newick));
-            }
-            ++i;
+            // Compute log-likelihood and store tree description of
+            // gene tree from locus gene_index in this particle
+            //assert(gene_index < p.getGeneForests().size());
+            //const GeneForest & gf = p.getGeneForests()[gene_index];
+            //double log_likelihood = gf.calcLogLikelihood();
+            //string note = str(format("lnL = %.5f") % log_likelihood);
+            //string treename = str(format("tree%d") % i);
+            //string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false);
+            //treeinfo.push_back(make_tuple(c, pct, note, treename, newick));
+            //++i;
         }
         outputAnnotatedNexusTreefile(fn, treeinfo);
     }
     
-    inline void Proj::saveAllSpeciesTrees(string fn, const vector<Particle> particles, const map<unsigned, string> & count_map) {
+    inline void Proj::saveAllSpeciesTrees(string fn, const vector<Particle> particles, const map<string, unsigned> & count_map) {
         vector<tuple<unsigned, double, string, string, string> > treeinfo;
         unsigned i = 0;
-        for (auto & count_newick : count_map) {
-            unsigned c = count_newick.first;
+        for (auto & kv : count_map) {
+            unsigned c = kv.second;
             double pct = 100.0*c/_nparticles;
             string note = str(format("freq = %d") % c);
-            string treename = str(format("tree%d-freq%d") % i % c);
-            string newick = count_newick.second;
+            string treename = str(format("'tree%d-freq%d'") % i % c);
+            string newick = kv.first;
             treeinfo.push_back(make_tuple(c, pct, note, treename, newick));
             ++i;
         }
@@ -940,6 +1063,35 @@ namespace proj {
         outputAnnotatedNexusTreefile(fn, treeinfo);
     }
     
+    inline unsigned Proj::countSpeciations(const vector<Particle> & particles) {
+        unsigned nspeciations = 0;
+        for_each(particles.begin(), particles.end(), [&nspeciations](const Particle & p){
+            nspeciations += (p.getSpeciations() ? 1 : 0);
+        });
+        return nspeciations;
+    }
+    
+    inline void Proj::debugCheckCountMap(const map<string, unsigned> & count_map, unsigned target) {
+        unsigned total_count = 0;
+        for (auto & kv : count_map) {
+            total_count += kv.second;
+        }
+        assert(total_count == target);
+    }
+    
+#if defined(USING_MULTITHREADING)
+    inline void Proj::advanceParticleRange(unsigned step, unsigned first, unsigned last) {
+        for (unsigned k = first; k < last; ++k) {
+            Particle & p = _particles[k];
+            p.advance(step, k, /*calculate_partial*/true);
+            while (p.lastEventSpeciation()) {
+                p.advance(step, k, /*calculate_partial*/true);
+            }
+        }
+    }
+#endif
+    
+#if defined(USING_MPI)
     inline void Proj::run() {
     
         output("Starting...\n", 2);
@@ -949,7 +1101,7 @@ namespace proj {
             rng.setSeed(_rnseed);
             
             if (_start_mode == "simulate") {
-                simulateData();
+                throw XProj("Cannot simulate with MPI version");
             }
             else {
                 if (_start_mode != "smc")
@@ -960,6 +1112,9 @@ namespace proj {
                 
                 SMCGlobal::_ngenes = _data->getNumSubsets();
                 assert(SMCGlobal::_ngenes > 0);
+
+                // Set relative rates if specified
+                setRelativeRates();
 
                 SMCGlobal::_ntaxa = _data->getNumTaxa();
                 _data->copyTaxonNames(SMCGlobal::_taxon_names);
@@ -973,13 +1128,13 @@ namespace proj {
                     GeneForest::computeLeafPartials(g, _data);
                 }
                 
-                // Create counts vector when filtering
+                // Create counts vector used in filtering
                 vector<unsigned> counts(_nparticles);
                 
                 // Create count map that keeps track of unique trees during filtering
                 // Key is number of times the particle appeared in the sample
                 // Value is the newick description of the species tree.
-                map<unsigned, string> count_map;
+                map<string, unsigned> count_map;
                 
                 // Create log_weights vector that stores log weight of each particle
                 vector<double> log_weights(_nparticles);
@@ -1008,18 +1163,19 @@ namespace proj {
                     stopwatch.start();
                     
                     log_weights.assign(_nparticles, 0.0);
+                    
+                    // Clear the number of speciations stored by each particle
                     for_each(particles.begin(), particles.end(), [](Particle & p){p.clearSpeciations();});
                     
                     // Advance each particle by one coalescent event
-                    unsigned i = 0;
-                    for (auto & p : particles) {
-                        double logw = advanceParticle(step, i, p, /*compute_partials*/true);
-                        log_weights[i] = logw;
+                    for (unsigned k = ::my_first_particle; k < ::my_last_particle; ++k) {
+                        Particle & p = particles[k];
+                        double logw = advanceParticle(step, k, p, /*compute_partials*/true);
+                        log_weights[k] = logw;
                         while (p.lastEventSpeciation()) {
-                            logw = advanceParticle(step, i, p, /*compute_partials*/true);
-                            log_weights[i] = logw;
+                            logw = advanceParticle(step, k, p, /*compute_partials*/true);
+                            log_weights[k] = logw;
                         }
-                        i++;
                     }
                     
                     double minlogw = *min_element(log_weights.begin(), log_weights.end());
@@ -1028,18 +1184,11 @@ namespace proj {
                     // Filter particles using normalized weights and multinomial sampling
                     double ess = _nparticles;
 
-                    unsigned nspeciations_before = 0;
-                    for_each(particles.begin(), particles.end(), [&nspeciations_before](Particle & p){
-                            nspeciations_before += (p.getSpeciations() ? 1 : 0);
-                    });
-                    
-                    unsigned nspeciations_after = 0;
+                    unsigned nspeciations_before = countSpeciations(particles);
                     ess = filterParticles(step, particles, log_weights, counts, count_map);
-
-                    for_each(particles.begin(), particles.end(), [&nspeciations_after](Particle & p){
-                            nspeciations_after += (p.getSpeciations() ? 1 : 0);
-                    });
+                    unsigned nspeciations_after = countSpeciations(particles);
                     
+                    debugCheckCountMap(count_map, _nparticles);
                     double secs = stopwatch.stop();
                     
                     // Calculate waiting time until done
@@ -1059,8 +1208,10 @@ namespace proj {
                 output("\nSpecies trees saved to file \"final-species-trees.tre\"\n", 1);
                 saveAllSpeciesTrees("final-species-trees.tre", particles, count_map);
                 
-                //output("\nGene trees saved to file \"final-gene-trees.tre\"\n", 1);
-                //saveAllGeneTrees("final-gene-trees.tre", particles, counts);
+                for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
+                    output(format("Gene trees for locus %d saved to file \"final-gene%d-trees.tre\"\n") % (g+1) % (g+1), 1);
+                    saveAllGeneTrees(g, str(format("final-gene%d-trees.tre") % (g+1)), particles);
+                }
             }
         }
         catch (XProj & x) {
@@ -1069,6 +1220,181 @@ namespace proj {
         
         output("\nFinished!\n", 2);
     }
+#else // *not* USING_MPI
+    inline void Proj::run() {
+    
+        output("Starting...\n", 2);
+        output(format("Current working directory: %s\n") % current_path(), 2);
+        
+        try {
+            rng.setSeed(_rnseed);
+            
+            if (_start_mode == "simulate") {
+                simulateData();
+            }
+            else {
+                if (_start_mode != "smc")
+                    throw XProj("startmode must be either \"simulate\" or \"smc\"");
+
+#if defined(USING_MULTITHREADING)
+                threadSetSchedule();
+#endif
+                    
+                readData();
+                debugShowStringVector("Gene names", SMCGlobal::_gene_names);
+                
+                SMCGlobal::_ngenes = _data->getNumSubsets();
+                assert(SMCGlobal::_ngenes > 0);
+
+                // Set relative rates if specified
+                setRelativeRates();
+
+                SMCGlobal::_ntaxa = _data->getNumTaxa();
+                _data->copyTaxonNames(SMCGlobal::_taxon_names);
+                
+                SMCGlobal::_nspecies = buildSpeciesMap();
+                Node::setSpeciesMask(SMCGlobal::_species_mask, SMCGlobal::_nspecies);
+                debugShowStringVector("Species names", SMCGlobal::_species_names);
+
+                // Compute leaf partials
+                for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
+                    GeneForest::computeLeafPartials(g, _data);
+                }
+                
+                // Create counts vector used in filtering
+                vector<unsigned> counts(_nparticles);
+                
+                // Create count map that keeps track of unique trees during filtering
+                // Key is number of times the particle appeared in the sample
+                // Value is the newick description of the species tree.
+                map<string, unsigned> count_map;
+                
+                // Create log_weights vector that stores log weight of each particle
+                _log_weights.resize(_nparticles);
+                
+                // Create particles vector
+                _particles.resize(_nparticles);
+                
+                // Initialize particles
+                for (auto & p : _particles) {
+                    p.setData(_data);
+                    p.resetSpeciesForest();
+                    p.resetGeneForests(/*compute_partials*/true);
+                }
+                
+                // Determine total number of steps required to build all
+                // gene trees and the species tree
+                unsigned nsteps = SMCGlobal::_ngenes*(SMCGlobal::_ntaxa - 1);
+                //nsteps += (SMCGlobal::_nspecies - 1);
+                
+                output(format("\nSMC will require %d steps.\n") % nsteps, 2);
+
+                output(format("\n%12s %12d %12d %12s %12s %12s %12s %12s %12s\n") % "Step" % "before" % "after" % "ESS" % "minlogwt" % "maxlogwt" % "partials" % "secs" % "wait", 2);
+                
+                double cum_secs = 0.0;
+                for (unsigned step = 0; step < nsteps; ++step) {
+                    stopwatch.start();
+                    
+                    _log_weights.assign(_nparticles, 0.0);
+                    
+                    // Clear the number of speciations stored by each particle
+                    for_each(_particles.begin(), _particles.end(), [](Particle & p){p.clearSpeciations();});
+                    
+                    // Assign each particle a random number seed to use for its update
+                    // Multi- and single-threading versions should thus give the same
+                    // results, and, in multithreaded version, threads all use
+                    // different Lot objects so no mutex needed.
+                    unsigned psuffix = 1;
+                    for (auto & p : _particles) {
+                        p.setSeed(rng.randint(1,9999) + psuffix);
+                        psuffix += 2;    // pure superstition (I always use odd seeds)
+                    }
+                    
+                    // Advance each particle by one coalescent event
+#if defined(USING_MULTITHREADING)
+                    // Advance each particle by one coalescent event
+                    vector<thread> threads;
+                    for (unsigned i = 0; i < SMCGlobal::_nthreads; i++) {
+                        threads.push_back(thread(&Proj::advanceParticleRange,
+                            this,
+                            step,
+                            SMCGlobal::_thread_first_particle[i],
+                            SMCGlobal::_thread_last_particle[i]));
+                    }
+                    
+                    // The join function causes this loop to pause until the ith thread finishes
+                    for (unsigned i = 0; i < threads.size(); i++) {
+                        threads[i].join();
+                    }
+
+                    // Copy log weights
+                    _log_weights.resize(_nparticles);
+                    unsigned pindex = 0;
+                    for (auto & p : _particles) {
+                        _log_weights[pindex] = p.getLogWeight();
+                        ++pindex;
+                    }
+#else
+                    unsigned i = 0;
+                    for (auto & p : _particles) {
+                        p.advance(step, i, partial);
+                        while (p.lastEventSpeciation()) {
+                            p.advance(step, i, partial);
+                        }
+                        i++;
+                    }
+#endif
+                    
+                    double minlogw = *min_element(_log_weights.begin(), _log_weights.end());
+                    double maxlogw = *max_element(_log_weights.begin(), _log_weights.end());
+
+                    // Filter particles using normalized weights and multinomial sampling
+                    double ess = _nparticles;
+
+                    unsigned nspeciations_before = countSpeciations(_particles);
+                    ess = filterParticles(step, _particles, _log_weights, counts, count_map);
+                    unsigned nspeciations_after = countSpeciations(_particles);
+                    
+                    debugCheckCountMap(count_map, _nparticles);
+                    double secs = stopwatch.stop();
+                    
+                    // Calculate waiting time until done
+                    cum_secs += secs;
+                    double avg_per_step = cum_secs/(step + 1);
+                    unsigned steps_to_go = nsteps - (step + 1);
+                    double wait = avg_per_step*steps_to_go;
+                    
+                    unsigned npartials = 0;
+#if defined(LOG_MEMORY)
+                    npartials = ps.getNumberConstructed();
+#endif
+                    
+                    output(format("%12d %12d %12d %12.3f %12.3f %12.3f %12.3f %12.3f %12.3f\n") % (step+1) % nspeciations_before % nspeciations_after % ess % minlogw % maxlogw % npartials % secs % wait, 2);
+                    
+                    //temporary!
+                    if (nspeciations_after == _nparticles) {
+                        output(format("%s\n") % _particles[0].getSpeciesForest().makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false),3);
+                    }
+                }
+                
+                output("\nSpecies trees saved to file \"final-species-trees.tre\"\n", 1);
+                saveAllSpeciesTrees("final-species-trees.tre", _particles, count_map);
+                
+#if 0
+                for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
+                    output(format("Gene trees for locus %d saved to file \"final-gene%d-trees.tre\"\n") % (g+1) % (g+1), 1);
+                    saveAllGeneTrees(g, str(format("final-gene%d-trees.tre") % (g+1)), _particles);
+                }
+#endif
+            }
+        }
+        catch (XProj & x) {
+            output(format("Proj encountered a problem:\n  %s\n") % x.what(), 2);
+        }
+        
+        output("\nFinished!\n", 2);
+    }
+#endif // USING_MPI
     
     void Proj::memoryReport(ofstream & memf) const {
         memf << "\nProj memory report:\n\n";
@@ -1082,4 +1408,82 @@ namespace proj {
         _data->memoryReport(memf);
     }
     
+#if defined(USING_MULTITHREADING)
+    inline void Proj::threadSetSchedule() {
+        // Determine which particles will be handled by which thread: e.g.
+        // 1000 = number of particles
+        //  3   = number of threads
+        //  333 = 1000 / 3
+        //  1   = 1000 % 3
+        //  thread 0 gets 333, thread 1 gets 334, thread 2 gets 333
+        vector<unsigned> particles_per_thread(SMCGlobal::_nthreads, (unsigned)(_nparticles / SMCGlobal::_nthreads));
+
+        unsigned remainder = _nparticles % SMCGlobal::_nthreads;
+
+        // Each thread > 0 gets an extra job if there is any remainder
+        for (unsigned thread = 1; thread < SMCGlobal::_nthreads; ++thread) {
+            if (remainder > 0) {
+                particles_per_thread[thread] += 1;
+                --remainder;
+            }
+        }
+
+        SMCGlobal::_thread_first_particle.resize(SMCGlobal::_nthreads);
+        SMCGlobal::_thread_last_particle.resize(SMCGlobal::_nthreads);
+        unsigned cum = 0;
+        output("\nParticle schedule:\n", 1);
+        output(format("%12s %25s %25s\n") % "thread" % "first particle" % "last particle", 1);
+        for (unsigned thread = 0; thread < SMCGlobal::_nthreads; ++thread) {
+            SMCGlobal::_thread_first_particle[thread] = cum;
+            SMCGlobal::_thread_last_particle[thread]  = cum + particles_per_thread[thread];
+            cum += particles_per_thread[thread];
+            
+            output(format("%12d %25d %25d\n") % thread % (SMCGlobal::_thread_first_particle[thread] + 1) % SMCGlobal::_thread_last_particle[thread], 1);
+        }
+    }
+#endif
+
+#if defined(USING_MPI)
+    inline void Proj::mpiSetSchedule() {
+        // Determine which particles will be handled by this processor: e.g.
+        // 1000 = number of particles
+        //  3   = number of processors
+        //  333 = 1000 / 3
+        //  1   = 1000 % 3
+        //  rank 0 gets 333, rank 1 gets 334, rank 2 gets 333
+        vector<unsigned> particles_per_task(ntasks, (unsigned)(_nparticles / ntasks));
+
+        unsigned remainder = _nparticles % ntasks;
+
+        // Each rank > 0 gets an extra job if there is any remainder
+        for (unsigned rank = 1; rank < ntasks; ++rank) {
+            if (remainder > 0) {
+                particles_per_task[rank] += 1;
+                --remainder;
+            }
+        }
+
+        _mpi_first_particle.resize(ntasks);
+        _mpi_last_particle.resize(ntasks);
+        unsigned cum = 0;
+        output("\nParticle schedule:\n", 1);
+        output(format("%12s %25s %25s\n") % "rank" % "first particle" % "last particle", 1);
+        for (unsigned rank = 0; rank < ntasks; ++rank) {
+            _mpi_first_particle[rank] = cum;
+            _mpi_last_particle[rank]  = cum + particles_per_task[rank];
+            cum += particles_per_task[rank];
+            
+            output(format("%12d %25d %25d\n") % rank % (_mpi_first_particle[rank] + 1) % _mpi_last_particle[rank], 1);
+        }
+        ::my_first_particle = _mpi_first_particle[::my_rank];
+        ::my_last_particle  = _mpi_last_particle[::my_rank];
+
+        // //temporary!
+        // cerr << "~~> Proj::mpiSetSchedule\n";
+        // cerr << str(format("~~> my_rank           = %d\n") % ::my_rank );
+        // cerr << str(format("~~> my_first_particle = %d\n") % ::my_first_particle );
+        // cerr << str(format("~~> my_last_particle  = %d\n") % ::my_last_particle );
+    }
+#endif
+
 }
