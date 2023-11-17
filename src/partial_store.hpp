@@ -67,6 +67,7 @@ namespace proj {
             
 #if defined(LOG_MEMORY)
             unsigned        getInUse();
+            unsigned        getStored();
             unsigned        getNumberConstructed();
             unsigned        getNumberDestroyed();
             void            memoryReport(ofstream & memf) const;
@@ -95,6 +96,15 @@ namespace proj {
         return (unsigned)accumulate(Partial::_ndestroyed.begin(), Partial::_ndestroyed.end(), 0);
     }
 
+    inline unsigned PartialStore::getStored() {
+        unsigned total_stored = 0;
+        unsigned ngenes = (unsigned)_storage.size();
+        for (unsigned g = 0; g < ngenes; ++g) {
+            total_stored += (unsigned)_storage[g].size();
+        }
+        return total_stored;
+    }
+    
     inline unsigned PartialStore::getInUse() {
         unsigned total_in_use = 0;
         unsigned ngenes = (unsigned)Partial::_nconstructed.size();

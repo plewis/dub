@@ -68,6 +68,10 @@ using boost::format;
 
 using namespace proj;
 
+#if defined(USING_MPI) && defined(USING_MULTITHREADING)
+#error USING_MPI and USING_MULTITHREADING are mutually exclusive: undefine one or the other to compile
+#endif
+
 #if defined(USING_MPI)
     int my_rank = 0;
     int ntasks = 0;
@@ -118,8 +122,9 @@ unsigned                            Partial::_nstates           = 4;
 unsigned                            SMCGlobal::_nthreads            = 1;
 #if defined(USING_MULTITHREADING)
 mutex                               SMCGlobal::_mutex;
-vector<unsigned>                    SMCGlobal::_thread_first_particle;
-vector<unsigned>                    SMCGlobal::_thread_last_particle;
+mutex                               SMCGlobal::_debug_mutex;
+//vector<unsigned>                    SMCGlobal::_thread_first_gene;
+//vector<unsigned>                    SMCGlobal::_thread_last_gene;
 #endif
 
 unsigned                            SMCGlobal::_verbosity = 0;
@@ -190,14 +195,22 @@ GeneticCode::genetic_code_definitions_t GeneticCode::_definitions = {
 };
 
 int main(int argc, const char * argv[]) {
+
+#if defined(USING_MPI)
+	MPI_Init(NULL, NULL);
+	MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &ntasks);
+#   if defined(LOG_MEMORY)
+        memfile.open(str(format("allocs-%d.txt") % my_rank));
+#   endif
+#elif defined(LOG_MEMORY)
+    memfile.open("allocs.txt");
+#endif
+
 #if defined(USING_SIGNPOSTS)
     log_handle  = os_log_create("edu.uconn.eeb.phylogeny", OS_LOG_CATEGORY_POINTS_OF_INTEREST);
     signpost_id = os_signpost_id_generate(log_handle);
     assert(signpost_id != OS_SIGNPOST_ID_INVALID);
-#endif
-
-#if defined(LOG_MEMORY)
-    memfile.open("allocs.txt");
 #endif
 
     Proj proj;

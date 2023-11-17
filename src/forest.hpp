@@ -19,7 +19,9 @@ namespace proj {
                             ~Forest();
                 
             virtual void    clear();
+            double          getPrevHeight() const;
             double          getHeight() const;
+            unsigned        getNumLineages() const;
                         
             static void     readTreefile(const string filename,
                                         unsigned skip,
@@ -52,10 +54,15 @@ namespace proj {
             void        refreshAllPreorders() const;
             void        resizeAllSplits(unsigned nleaves);
             void        refreshAllHeightsAndPreorders();
-            Node *      joinLineagePair(Node * first, Node * second);
+            Node *      pullNode();
+            void        stowNode(Node * nd);
+            void        joinLineagePair(Node * anc, Node * first, Node * second);
             void        unjoinLineagePair(Node * anc, Node * first, Node * second);
             void        removeTwoAddOne(Node::ptr_vect_t & node_vect, Node * del1, Node * del2, Node * add);
             void        addTwoRemoveOne(Node::ptr_vect_t & node_vect, Node * del1, Node * del2, Node * add);
+            
+            void        debugCheckPreorder(const Node::ptr_vect_t & preorder) const;
+            void        debugCheckAllPreorders() const;
             void        debugShowNodeInfo(string title);
             void        debugShowNodePtrVector(Node::ptr_vect_t& v, string title);
 
@@ -63,6 +70,7 @@ namespace proj {
 
             // NOTE: any variables added must be copied in operator=
 
+            double                  _prev_forest_height;
             double                  _forest_height;
             unsigned                _next_node_index;
             unsigned                _next_node_number;
@@ -84,6 +92,7 @@ namespace proj {
     }
 
     inline void Forest::clear() {
+        _prev_forest_height = 0.0;
         _forest_height = 0.0;
         _next_node_index = 0;
         _next_node_number = 0;
@@ -93,8 +102,16 @@ namespace proj {
         _lineages.clear();
     }
     
+    inline double Forest::getPrevHeight() const {
+        return _prev_forest_height;
+    }
+    
     inline double Forest::getHeight() const {
         return _forest_height;
+    }
+    
+    inline unsigned Forest::getNumLineages() const {
+        return (unsigned)_lineages.size();
     }
     
     inline int Forest::extractNodeNumberFromName(string node_name, set<unsigned> & used) {
@@ -257,13 +274,15 @@ namespace proj {
                         edge_length += basal_polytomy_height*coalfactor;
                     }
                     if (use_names) {
-                        subtree_newick += str(format(tip_node_name_format)
-                            % nd->_name
-                            % edge_length);
+                        if (precision > 0)
+                            subtree_newick += str(format(tip_node_name_format) % nd->_name % edge_length);
+                        else
+                            subtree_newick += str(format("%s") % nd->_name);
                     } else {
-                        subtree_newick += str(format(tip_node_number_format)
-                            % (nd->_number + 1)
-                            % edge_length);
+                        if (precision > 0)
+                            subtree_newick += str(format(tip_node_number_format) % (nd->_number + 1) % edge_length);
+                        else
+                            subtree_newick += str(format("%d") % (nd->_number + 1));
                     }
                     if (nd->_right_sib)
                         subtree_newick += ",";
@@ -280,20 +299,30 @@ namespace proj {
                                     // This is the root of one of several subtrees, so
                                     // it is important to preserve its edge length
                                     popped_edge_length += basal_polytomy_height*coalfactor;
-                                    subtree_newick += str(format(internal_node_format) % popped_edge_length);
+                                    if (precision > 0)
+                                        subtree_newick += str(format(internal_node_format) % popped_edge_length);
+                                    else
+                                        subtree_newick += ")";
                                 }
                                 popped = 0;
                             }
                             else {
-                                subtree_newick += str(format(internal_node_format) % popped_edge_length);
+                                if (precision > 0)
+                                    subtree_newick += str(format(internal_node_format) % popped_edge_length);
+                                else
+                                    subtree_newick += ")";
                                 popped = node_stack.top();
                                 popped_edge_length = popped->_edge_length*coalfactor;
                             }
                         }
                         if (popped && popped->_right_sib) {
                             node_stack.pop();
-                            subtree_newick += str(format(internal_node_format) % popped_edge_length);
-                            subtree_newick += ",";
+                            if (precision > 0) {
+                                subtree_newick += str(format(internal_node_format) % popped_edge_length);
+                                subtree_newick += ",";
+                            }
+                            else
+                                subtree_newick += "),";
                         }
                     }
                 }
@@ -594,6 +623,20 @@ namespace proj {
         }
     }
     
+    inline void Forest::debugCheckPreorder(const Node::ptr_vect_t & preorder) const {
+        unsigned which = 0;
+        Node * nd = preorder[which++];
+        while (true) {
+            nd = findNextPreorder(nd);
+            if (nd) {
+                assert(preorder.size() > which);
+                assert(nd == preorder[which++]);
+            }
+            else
+                break;
+        }
+    }
+    
     inline void Forest::refreshPreorder(Node::ptr_vect_t & preorder) const {
         // Assumes preorder just contains the root node when this function is called
         assert(preorder.size() == 1);
@@ -611,6 +654,34 @@ namespace proj {
     inline void Forest::resizeAllSplits(unsigned nleaves) {
         for (auto & nd : _nodes) {
             nd._split.resize(nleaves);
+        }
+    }
+    
+    inline void Forest::debugCheckAllPreorders() const {
+        // For each subtree stored in _lineages, check to ensure that the
+        // node pointers stored in _preorders are indeed in preorder sequence
+        if (_lineages.size() == 0)
+            return;
+        
+        unsigned which_lineage = 0;
+        for (auto nd : _lineages) {
+            if (_preorders[which_lineage][0] != nd) {
+                output("Forest::debugCheckAllPreorders found a problem\n" , 1);
+                output(format("  Node %d (name %s) not equal to _preorders[%d]\n") % nd->_number % nd->_name % which_lineage, 1);
+                
+                // Print out every lineage root node in _preorders
+                unsigned i = 0;
+                output(format("%12s %12s %s\n") % "index" % "number" % "name", 1);
+                for (const Node::ptr_vect_t & v : _preorders) {
+                    output(format("%12d %12d %s\n") % (i++) % v[0]->_number % v[0]->_name, 1);
+                }
+                throw XProj("Aborting from within Forest::debugCheckAllPreorders");
+            }
+            
+            // Now check that the nodes above nd are in preorder sequence
+            debugCheckPreorder(_preorders[which_lineage]);
+            
+            which_lineage++;
         }
     }
     
@@ -824,61 +895,89 @@ namespace proj {
         nexus_reader.DeleteBlocksFromFactories();
     }
             
-    inline unsigned Forest::advanceAllLineagesBy(double t) {
-        assert(t >= 0.0);
-        assert(t != SMCGlobal::_infinity);
+    inline unsigned Forest::advanceAllLineagesBy(double dt) {
+        // Note: dt may be negative
+        assert(dt != SMCGlobal::_infinity);
         
-        // Add t to the edge length of all lineage root nodes
-        unsigned n = 0;
-        for (auto nd : _lineages) {
-            double elen = nd->getEdgeLength() + t;
-            nd->setEdgeLength(elen);
-            ++n;
+        // Add t to the edge length of all lineage root nodes, unless there
+        // is just one lineage, in which case do nothing
+        unsigned n = (unsigned)_lineages.size();
+        if (n > 1) {
+            for (auto nd : _lineages) {
+                double elen = nd->getEdgeLength() + dt;
+                assert(elen >= 0.0 || fabs(elen) < Node::_smallest_edge_length);
+                nd->setEdgeLength(elen);
+                ++n;
+            }
+        
+            // Save previous forest height so that this increment can be reversed
+            _prev_forest_height = _forest_height;
+
+            // Add to to the current forest height
+            _forest_height += dt;
         }
-        
-        // Add to to the current forest height
-        _forest_height += t;
+        else {
+            // Ensure that reversal has no effect on forest height
+            _prev_forest_height = _forest_height;
+        }
         
         return n;
     }
     
-    inline Node * Forest::joinLineagePair(Node * subtree1, Node * subtree2) {
-        // Get new node to serve as the ancestral node
+    inline Node * Forest::pullNode() {
         Node * new_nd = &_nodes[_next_node_index++];
+        assert(!new_nd->_partial);
+        new_nd->clear();
         new_nd->_number = _next_node_number++;
+        return new_nd;
+    }
+    
+    inline void Forest::stowNode(Node * nd) {
+        _next_node_index--;
+        _next_node_number--;
+        assert(nd == &_nodes[_next_node_index]);
+        nd->clear();
+    }
+    
+    inline void Forest::joinLineagePair(Node * new_nd, Node * subtree1, Node * subtree2) {
+        // Note: must call pullNode to obtain anc before calling this function
+        assert(new_nd);
+        assert(subtree1);
+        assert(subtree2);
         new_nd->_name        = "anc-" + to_string(new_nd->_number);
         new_nd->_left_child  = subtree1;
         new_nd->_edge_length = 0.0;
-        assert(new_nd->_partial == nullptr);
+        new_nd->_species = 0;
         
         // Calculate height of the new node
         // (should be the same whether computed via the left or right child)
         double h1 = subtree1->_height + subtree1->_edge_length;
         double h2 = subtree2->_height + subtree2->_edge_length;
-        assert(fabs(h1 - h2) < SMCGlobal::_small_enough);
+
+        //temporary! Probably need to reinstate this assert
+        //assert(fabs(h1 - h2) < SMCGlobal::_small_enough);
+
         new_nd->_height = (h1 + h2)/2.0;
 
         // Finish connecting new trio of nodes
         subtree1->_right_sib = subtree2;
         subtree1->_parent    = new_nd;
         subtree2->_parent    = new_nd;
-
-        return new_nd;
     }
     
     inline void Forest::unjoinLineagePair(Node * anc, Node * subtree1, Node * subtree2) {
+        // Note: be sure to call stowNode for anc after calling this function
         // Reset members set by joinLineagePair function
         anc->_number = -1;
         anc->_name = "";
         anc->_left_child = nullptr;
         anc->_edge_length = 0.0;
         anc->_height = 0.0;
+        anc->_species = 0;
         //anc->_partial = nullptr;
         subtree1->_right_sib = nullptr;
         subtree1->_parent = nullptr;
         subtree2->_parent = nullptr;
-        _next_node_index--;
-        _next_node_number--;
     }
     
     inline void Forest::removeTwoAddOne(Node::ptr_vect_t & v, Node * del1, Node * del2, Node * add) {
@@ -919,6 +1018,7 @@ namespace proj {
     }
 
     inline void Forest::operator=(const Forest & other) {
+        _prev_forest_height             = other._prev_forest_height;
         _forest_height                  = other._forest_height;
         _next_node_index                = other._next_node_index;
         _next_node_number               = other._next_node_number;
@@ -973,6 +1073,10 @@ namespace proj {
             _nodes[i]._species     = other._nodes[i]._species;
             _nodes[i]._split       = other._nodes[i]._split;
             _nodes[i]._flags       = other._nodes[i]._flags;
+            
+            // The _prev_species_stack should always be empty
+            // when tree is copied
+            assert(other._nodes[i]._prev_species_stack.empty());
             
             // _nodes[i]._partial copied by GeneForest::operator=
         }

@@ -11,8 +11,9 @@ namespace proj {
         static unsigned                 _nthreads;
 #if defined(USING_MULTITHREADING)
         static mutex                    _mutex;
-        static vector<unsigned>         _thread_first_particle;
-        static vector<unsigned>         _thread_last_particle;
+        static mutex                    _debug_mutex;
+        //static vector<unsigned>         _thread_first_gene;
+        //static vector<unsigned>         _thread_last_gene;
 #endif
         
         static unsigned                 _verbosity;
@@ -56,6 +57,8 @@ namespace proj {
         static void     createDefaultGeneTreeNexusTaxonMap();
         static void     createDefaultSpeciesTreeNexusTaxonMap();
         static string   memoryAddressAsString(const void * ptr);
+        static void     normalizeRates(const vector<double> rates, vector<double> & probs);
+        static void     normalizeCounts(const vector<unsigned> counts, vector<double> & probs);
         static unsigned multinomialDraw(Lot::SharedPtr lot, const vector<double> & probs);
         static string   speciesStringRepresentation(SMCGlobal::species_t species);
 
@@ -112,10 +115,28 @@ namespace proj {
         return memory_address.str();
     }
     
+    inline void SMCGlobal::normalizeCounts(const vector<unsigned> counts, vector<double> & probs) {
+        // Determine sum of counts
+        double total_count = accumulate(counts.begin(), counts.end(), 0.0);
+        
+        // Normalize counts to create a discrete probability distribution
+        transform(counts.begin(), counts.end(), probs.begin(), [total_count](unsigned count){return (double)count/total_count;});
+        assert(fabs(accumulate(probs.begin(), probs.end(), 0.0) - 1.0) < 0.0001);
+    }
+    
+    inline void SMCGlobal::normalizeRates(const vector<double> rates, vector<double> & probs) {
+        // Determine sum of rates
+        double total_rate = accumulate(rates.begin(), rates.end(), 0.0);
+        
+        // Normalize rates to create a discrete probability distribution
+        transform(rates.begin(), rates.end(), probs.begin(), [total_rate](unsigned rate){return (double)rate/total_rate;});
+        assert(fabs(accumulate(probs.begin(), probs.end(), 0.0) - 1.0) < 0.0001);
+    }
+    
     inline unsigned SMCGlobal::multinomialDraw(Lot::SharedPtr lot, const vector<double> & probs) {
-#if defined(USING_MULTITHREADING)
-        lock_guard<mutex> guard(SMCGlobal::_mutex);
-#endif
+//#if defined(USING_MULTITHREADING)
+//        lock_guard<mutex> guard(SMCGlobal::_mutex);
+//#endif
         
         // Compute cumulative probababilities
         _cumprobs.resize(probs.size());

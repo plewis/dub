@@ -67,11 +67,14 @@ namespace proj {
                     double              getEdgeLength() const       {return _edge_length;}
                     void                setEdgeLength(double v);
                     
-                    const SMCGlobal::species_t &   getSpecies() const {return _species;}
-                    SMCGlobal::species_t &         getSpecies() {return _species;}
-                    void                setSpecies(const SMCGlobal::species_t & other);
-                    void                setSpeciesToUnion(const SMCGlobal::species_t & left, const SMCGlobal::species_t & right);
-                    void                setSpeciesFromUnsigned(unsigned spp);
+                    const SMCGlobal::species_t &    getSpecies() const {return _species;}
+                    SMCGlobal::species_t &          getSpecies() {return _species;}
+                    
+                    void                            setSpecies(const SMCGlobal::species_t other);
+                    void                            setSpeciesToUnion(const SMCGlobal::species_t left, const SMCGlobal::species_t right);
+                    void                            revertSpecies();
+                    void                            emptyPrevSpeciesStack();
+                    bool                            canRevertSpecies() const;
         
                     double              getHeight() const       {return _height;}
                     void                setHeight(double v);
@@ -111,13 +114,34 @@ namespace proj {
             string          _name;
             double          _edge_length;
             double          _height;        // distance from node to any leaf
-            SMCGlobal::species_t       _species;       // bitset of species (indices) compatible with this node
+            
+            stack<SMCGlobal::species_t> _prev_species_stack; // set when _species is reassigned
+            SMCGlobal::species_t        _species;      // bitset of species (indices) compatible with this node
             Split           _split;
             int             _flags;
             
             PartialStore::partial_t _partial;
     };
         
+    inline Node::Node() {
+        clear();
+    }
+
+    inline Node::~Node() {
+    }
+
+    inline void Node::clear() {
+        _flags = 0;
+        clearPointers();
+        _number = -1;
+        _name = "";
+        _edge_length = _smallest_edge_length;
+        _height = 0.0;
+        _prev_species_stack = {};
+        _species = (SMCGlobal::species_t)0;
+        _partial = nullptr;
+    }
+
     inline void Node::setSpeciesMask(SMCGlobal::species_t & mask, unsigned nspecies) {
         mask = (SMCGlobal::species_t)0;
         for (unsigned i = 0; i < nspecies; ++i) {
@@ -151,27 +175,6 @@ namespace proj {
         to_species &= ~((SMCGlobal::species_t)1 << i);
     }
     
-    inline Node::Node() {
-        clear();
-    }
-
-    inline Node::~Node() {
-    }
-
-    inline void Node::clear() { 
-        _flags = 0;
-        clearPointers();    
-        //_left_child = 0;
-        //_right_sib = 0;
-        //_parent = 0;      
-        _number = -1;
-        _name = "";
-        _edge_length = _smallest_edge_length;
-        _height = 0.0;
-        _species = (SMCGlobal::species_t)0;
-        _partial = nullptr;
-    }   
-
     inline void Node::setEdgeLength(double v) {
         _edge_length = (v < _smallest_edge_length ? _smallest_edge_length : v);
     }
@@ -188,11 +191,33 @@ namespace proj {
         return n_children;
     }
     
-    inline void Node::setSpecies(const SMCGlobal::species_t & other) {
-        _species = other;
+    inline void Node::setSpecies(const SMCGlobal::species_t spp) {
+        _prev_species_stack.push(_species);
+        _species = spp;
     }
     
-    inline void Node::setSpeciesToUnion(const SMCGlobal::species_t & left, const SMCGlobal::species_t & right) {
+    inline void Node::revertSpecies() {
+        while (!_prev_species_stack.empty()) {
+            _species = _prev_species_stack.top();
+            _prev_species_stack.pop();
+        }
+    }
+    
+    inline void Node::emptyPrevSpeciesStack() {
+        //temporary! Probably best to have this assert in place
+        //assert(!_prev_species_stack.empty());
+        while (!_prev_species_stack.empty()) {
+            _prev_species_stack.pop();
+        }
+    }
+    
+    inline bool Node::canRevertSpecies() const {
+        return (_prev_species_stack.empty() ? false : true);
+    }
+    
+    inline void Node::setSpeciesToUnion(const SMCGlobal::species_t left, const SMCGlobal::species_t right) {
+        assert(_prev_species_stack.empty());
+        _prev_species_stack.push(_species);
         _species = left;
         Node::setSpeciesBits(_species, right, /*init_to_zero_first*/false);
         

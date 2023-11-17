@@ -13,8 +13,12 @@ namespace proj {
             SpeciesForest();
              ~SpeciesForest();
             
-            void speciationEvent(Lot::SharedPtr lot, SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc);
+            void speciationEvent(Lot::SharedPtr lot, Node * anc_node, SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc);
+            //POLTMP unsigned getNumNewSpeciationEvents() const;
+            //POLTMP unsigned revertAllSpeciationEvents();
             //void simulateSpeciesTree();
+            
+            Node * findSpecies(SMCGlobal::species_t spp);
 
             // Overrides of base class functions
             void clear();
@@ -33,6 +37,7 @@ namespace proj {
             double advanceSpeciesForest(unsigned particle, unsigned step);
             
             // NOTE: any variables added must be copied in operator=
+            //POLTMP stack<tuple<Node *, Node *, Node *> > _node_stack;
     };
     
     inline SpeciesForest::SpeciesForest() {
@@ -44,6 +49,18 @@ namespace proj {
 
     inline void SpeciesForest::clear() {
         Forest::clear();
+    }
+    
+    inline Node * SpeciesForest::findSpecies(SMCGlobal::species_t spp) {
+        Node * the_node = nullptr;
+        for (auto nd : _lineages) {
+            if (nd->_species == spp) {
+                the_node = nd;
+                break;
+            }
+        }
+        assert(the_node);
+        return the_node;
     }
 
     inline pair<double,double> SpeciesForest::drawIncrement(Lot::SharedPtr lot) {
@@ -138,7 +155,33 @@ namespace proj {
     //    }
     //}
     
-    inline void SpeciesForest::speciationEvent(Lot::SharedPtr lot, SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc) {
+    //POLTMP inline unsigned SpeciesForest::getNumNewSpeciationEvents() const {
+    //POLTMP    return (unsigned)_node_stack.size();
+    //POLTMP}
+    
+    //POLTMP inline unsigned SpeciesForest::revertAllSpeciationEvents() {
+    //POLTMP     unsigned num_speciations = (unsigned)_node_stack.size();
+    //POLTMP     while (!_node_stack.empty()) {
+    //POLTMP         // Get lineages involved in previous join
+    //POLTMP         auto & node_tuple  = _node_stack.top();
+    //POLTMP         Node * first_node  = get<0>(node_tuple);
+    //POLTMP         Node * second_node = get<1>(node_tuple);
+    //POLTMP         Node * anc_node    = get<2>(node_tuple);
+    //POLTMP
+    //POLTMP         // Unjoin them
+    //POLTMP         unjoinLineagePair(anc_node, first_node, second_node);
+    //POLTMP
+    //POLTMP         // Update lineage vector
+    //POLTMP         addTwoRemoveOne(_lineages, first_node, second_node, anc_node);
+    //POLTMP
+    //POLTMP         anc_node = nullptr;
+    //POLTMP         _node_stack.pop();
+    //POLTMP     }
+    //POLTMP     return num_speciations;
+    //POLTMP }
+    
+    inline void SpeciesForest::speciationEvent(Lot::SharedPtr lot, Node * anc_node, SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc) {
+        //TODO: SpeciesForest::speciationEvent
         unsigned nlineages = (unsigned)_lineages.size();
         
         // Choose two lineages to join
@@ -147,17 +190,25 @@ namespace proj {
         Node * first_node  = _lineages[chosen_pair.first];
         Node * second_node = _lineages[chosen_pair.second];
         
+        // Get species for the two lineages to join
+        SMCGlobal::species_t spp1 = first_node->getSpecies();
+        SMCGlobal::species_t spp2 = second_node->getSpecies();
+
         // Create ancestral node
-        Node * anc_node = joinLineagePair(first_node, second_node);
-        anc_node->setSpeciesToUnion(first_node->getSpecies(), second_node->getSpecies());
+        joinLineagePair(anc_node, first_node, second_node);
+        anc_node->setSpeciesToUnion(spp1, spp2);
+
+        // Get species for the new ancestral node
+        SMCGlobal::species_t spp3 = anc_node->getSpecies();
         
         // Update lineage vector
         removeTwoAddOne(_lineages, first_node, second_node, anc_node);
-        
+        refreshAllPreorders();
+                
         // Return species joined in supplied reference variables
-        left  = first_node->getSpecies();
-        right = second_node->getSpecies();
-        anc   = anc_node->getSpecies();
+        left  = spp1;
+        right = spp2;
+        anc   = spp3;
     }
     
 //    inline void SpeciesForest::simulateSpeciesTree() {
@@ -429,7 +480,11 @@ namespace proj {
     inline void SpeciesForest::operator=(const SpeciesForest & other) {
         Forest::operator=(other);
         
-#if !defined(NDEBUG)
+        // No reversion is going to happen after copying, so we can just
+        // reset these pointers (which are set in speciationEvent).
+        //POLTMP _node_stack.empty();
+
+#if defined(DEBUGGING_SANITY_CHECK)
         // Sanity check: make sure that _partials do not exist for either this nor other
         for (unsigned i = 0; i < _nodes.size(); i++) {
             assert((_nodes[i]._partial == nullptr && other._nodes[i]._partial == nullptr));
