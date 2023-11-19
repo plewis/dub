@@ -14,7 +14,9 @@
 //#define PRIOR_POST
 
 //#define USING_MPI
-//#define USING_MULTITHREADING
+#define USING_MULTITHREADING
+
+//#define MINIMIZE_PARTIALS
 
 #if defined(USING_MPI)
 #   error MPI version not yet completed

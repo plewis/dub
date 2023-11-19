@@ -49,7 +49,7 @@ namespace proj {
 #if defined(USING_MPI)
             void                        particleLoopMPI(unsigned step, const vector<unsigned> & update_seeds);
 #elif defined(USING_MULTITHREADING)
-            void                        particleLoopMT(unsigned step, const vector<tuple<unsigned, unsigned, unsigned> > & thread_schedule, const vector<unsigned> & update_seeds);
+            void                        particleLoopMT(unsigned step, const vector<pair<unsigned, unsigned> > & thread_schedule, const vector<unsigned> & update_seeds);
 #else
             void                        particleLoopStd(unsigned step, const vector<unsigned> & update_seeds);
 #endif
@@ -82,9 +82,9 @@ namespace proj {
             void                        saveUniqueSpeciesTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts);
 
 #if defined(USING_MULTITHREADING)
-            void                        debugShowThreadSchedule(const vector<tuple<unsigned, unsigned, unsigned> > & thread_schedule) const;
-            void                        balanceThreads(vector<tuple<unsigned, unsigned, unsigned> > & thread_schedule);
-            void                        advanceParticleRange(unsigned step, unsigned first_particle, unsigned last_particle, unsigned first_index, const vector<unsigned> & update_seeds);
+            void                        debugShowThreadSchedule(const vector<pair<unsigned, unsigned> > & thread_schedule) const;
+            void                        balanceThreads(vector<pair<unsigned, unsigned> > & thread_schedule);
+            void                        advanceParticleRange(unsigned step, unsigned first_particle, unsigned last_particle, const vector<unsigned> & update_seeds);
 #endif
             double                      computeEffectiveSampleSize(const vector<double> & probs) const;
             void                        pruneParticles(list<Particle> & particle_list);
@@ -521,7 +521,7 @@ namespace proj {
         // Add coalescent events and speciation events until all trees are built
         Particle::CoalProposal proposal;
         for (unsigned step = 0; step < nsteps; step++) {
-            particle.advance(step, 0, proposal, /*calculate_partial*/false);
+            particle.advance(step, 0, proposal, /*calculate_partial*/false, /*make_permanent*/true);
         }
         
         particle.refreshHeightsInternalsPreorders();
@@ -805,11 +805,11 @@ namespace proj {
         //         counts = {0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 12}
         //                   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18  19
         //   last_nonzero =                                   ^                        ^
-        // Suppose _particles contains 2 particles:
+        // Suppose _particle_list contains 2 particles:
         //   Particle  Count
         //          0     12
         //          1      8
-        // After filtering, _particles will contain the following particle counts:
+        // After filtering, _particle_list will contain the following particle counts:
         //                    Copied   Using
         //   Particle  Count    from    seed
         //          0      1       0       3
@@ -844,7 +844,11 @@ namespace proj {
                 // struct with information about the coalescence event as well as any
                 // speciation events created beforehand.
                 Particle::CoalProposal coal_proposal;
-                plast.proposeCoalescence(rnseeds[k], step, k, coal_proposal, /*compute_partial*/false);
+#if defined(MINIMIZE_PARTIALS)
+                plast.proposeCoalescence(rnseeds[k], step, k, coal_proposal, /*compute_partial*/false, /*make_permanent*/true);
+#else
+                plast.proposeCoalescence(rnseeds[k], step, k, coal_proposal, /*compute_partial*/true, /*make_permanent*/true);
+#endif
                 
                 // Clear the _prev_species_stack for all species tree and gene tree nodes
                 // because this time proposal will not be reverted
@@ -852,6 +856,9 @@ namespace proj {
                 
                 // Set count for new particle
                 plast.setCount(counts[k]);
+
+                //temporary! Useful for debugging filtering
+                //output(format("~~~| Copying %d (%d) -> %d (%d)\n") % j % p.getCount() % (particle_list.size()-1) % plast.getCount(), 2);
             }
                             
             // Flag original particle for deletion
@@ -970,7 +977,7 @@ namespace proj {
     //}
     
 #if defined(USING_MULTITHREADING)
-    inline void Proj::advanceParticleRange(unsigned step, unsigned first_particle, unsigned last_particle, unsigned first_index, const vector<unsigned> & update_seeds) {
+    inline void Proj::advanceParticleRange(unsigned step, unsigned first_particle, unsigned last_particle, const vector<unsigned> & update_seeds) {
         // Uncomment line below to ensure each thread gets through this entire function
         // uninterrupted. This is good for debugging but of course non-sensical for a
         // multithreading application.
@@ -981,6 +988,9 @@ namespace proj {
         // Get iterator to start of range
         auto it_start = _particle_list.begin();
         advance(it_start, first_particle);
+        
+        int first_index = it_start->getBeginIndex();
+        assert(first_index >= 0 && first_index < _log_weights.size());
 
         // Get iterator to (one past) end of range
         auto it_end = _particle_list.begin();
@@ -994,15 +1004,17 @@ namespace proj {
             // Second element of pair is number of copies of particle
             unsigned n = p.getCount();
         
+#if defined(MINIMIZE_PARTIALS)
             // Recompute all partials
             p.computeAllPartials();
+#endif
         
             while (n > 0) {
                 proposal.clear();
                 
                 // Propose a coalescence event (which may involve also proposing
                 // one or more speciation events)
-                _log_weights[i] = p.proposeCoalescence(update_seeds[i], step, i, proposal, /*compute_partial*/true);
+                _log_weights[i] = p.proposeCoalescence(update_seeds[i], step, i, proposal, /*compute_partial*/true, /*make_permanent*/false);
                 
                 // Return particle to its original state
                 p.reverseProposal(proposal);
@@ -1011,7 +1023,9 @@ namespace proj {
                 i++;
             }
             
+#if defined(MINIMIZE_PARTIALS)
             p.stowAllPartials();
+#endif
         }
     }
 #endif
@@ -1085,16 +1099,15 @@ namespace proj {
         }
     }
 #elif defined(USING_MULTITHREADING)
-    inline void Proj::particleLoopMT(unsigned step, const vector<tuple<unsigned, unsigned, unsigned> > & thread_schedule, const vector<unsigned> & update_seeds) {
+    inline void Proj::particleLoopMT(unsigned step, const vector<pair<unsigned, unsigned> > & thread_schedule, const vector<unsigned> & update_seeds) {
         //TODO: multithreading particle loop
         vector<thread> threads;
         for (unsigned i = 0; i < SMCGlobal::_nthreads; i++) {
             threads.push_back(thread(&Proj::advanceParticleRange,
                 this,
                 step,
-                get<0>(thread_schedule[i]),
-                get<1>(thread_schedule[i]),
-                get<2>(thread_schedule[i]),
+                thread_schedule[i].first,
+                thread_schedule[i].second,
                 update_seeds)
             );
         }
@@ -1112,17 +1125,19 @@ namespace proj {
         for (auto & p : _particle_list) {
             // Second element of pair is number of copies of particle
             unsigned n = p.getCount();
-            
+
+#if defined(MINIMIZE_PARTIALS)
             // Recompute all partials
             p.computeAllPartials();
+#endif
             
             while (n > 0) {
                 proposal.clear();
                 
                 // Propose a coalescence event (which may involve also proposing
                 // one or more speciation events)
-                _log_weights[i] = p.proposeCoalescence(update_seeds[i], step, i, proposal, /*compute_partial*/true);
-                
+                _log_weights[i] = p.proposeCoalescence(update_seeds[i], step, i, proposal, /*compute_partial*/true, /*make_permanent*/false);
+
                 // Return particle to its original state
                 p.reverseProposal(proposal);
 
@@ -1130,36 +1145,44 @@ namespace proj {
                 i++;
             }
             
+#if defined(MINIMIZE_PARTIALS)
             p.stowAllPartials();
+#endif
         }
         assert(i == _nparticles);
     }
 #endif
 
 #if defined(USING_MULTITHREADING)
-    inline void Proj::debugShowThreadSchedule(const vector<tuple<unsigned, unsigned, unsigned> > & thread_schedule) const {
+    inline void Proj::debugShowThreadSchedule(const vector<pair<unsigned, unsigned> > & thread_schedule) const {
         unsigned i = 0;
         auto it = _particle_list.begin();
-        output(format("\n%12s %12s %12s %12s %12s\n") % "index" % "start" % "end" % "index" % "count", 2);
+        unsigned sum_pcount = 0;
+        output(format("\n%12s %12s %12s %12s %12s %12s\n") % "index" % "begin" % "end" % "begin-index" % "end-index" % "count", 2);
         for (auto & p : thread_schedule) {
-            unsigned first_particle  = get<0>(p);
-            unsigned second_particle = get<1>(p);
-            unsigned first_index     = get<2>(p);
-            unsigned n = second_particle - first_particle;
+            unsigned begin_particle  = p.first;
+            unsigned end_particle = p.second;
+            unsigned begin_index     = it->getBeginIndex();
+            unsigned n = end_particle - begin_particle;
             unsigned pcount = 0;
             for (unsigned j = 0; j < n; j++) {
                 pcount += it->getCount();
                 ++it;
             }
-            output(format("%12d %12d %12d %12d %12d\n") % (i++) % first_particle % second_particle % first_index % pcount, 2);
+            sum_pcount += pcount;
+            unsigned end_index = begin_index + pcount;
+            output(format("%12d %12d %12d %12d %12d %12d\n") % i % begin_particle % end_particle % begin_index % end_index % pcount, 2);
+            i++;
         }
-        output(format("Total number of particles: %d") % _particle_list.size(), 2);
+        assert(it == _particle_list.end());
+        output(format("Total actual particles:  %d\n") % _particle_list.size(), 2);
+        output(format("Total virtual particles: %d\n") % sum_pcount, 2);
         cerr << endl;
     }
 #endif
 
 #if defined(USING_MULTITHREADING)
-    inline void Proj::balanceThreads(vector<tuple<unsigned, unsigned, unsigned> > & thread_schedule) {
+    inline void Proj::balanceThreads(vector<pair<unsigned, unsigned> > & thread_schedule) {
         // Make copies of particles as necessary to achieve a more even distribution of work.
         //    6 nthreads
         //  100 total
@@ -1198,81 +1221,113 @@ namespace proj {
         //            5           17
         // ------------ ------------
         //        total          100
-        
-        unsigned total_xtra = 0;
-        unsigned threshold = (unsigned)(_nparticles/SMCGlobal::_nthreads);
-        for (auto it = _particle_list.begin(); it != _particle_list.end(); ++it) {
-            unsigned count = it->getCount();
-            if (count > threshold) {
-                unsigned d = count / threshold;
-                unsigned r = count % threshold;
-                bool augment = (r <= d ? true : false);
-                while (count > threshold) {
-                    // Make a copy of the current particle
-                    _particle_list.push_front(*it);
-                    
-                    // Adjust count
-                    count -= threshold;
-                    
-                    // Add xtra if appropriate
-                    unsigned x = 0;
-                    if (augment && r > 0) {
-                        x = 1;
-                        count -= 1;
-                        r--;
+        //TODO: Proj::balanceThreads
+        assert(SMCGlobal::_nthreads > 0);
+        if (SMCGlobal::_nthreads == 1) {
+            thread_schedule.clear();
+            thread_schedule.push_back(make_pair(0,(unsigned)_particle_list.size()));
+        }
+        else {
+            unsigned total_xtra = 0;
+            unsigned begin_index = 0;
+            unsigned threshold = (unsigned)floor(_nparticles/SMCGlobal::_nthreads);
+            
+            for (auto it = _particle_list.begin(); it != _particle_list.end(); ++it) {
+                unsigned count = it->getCount();
+                if (count > threshold) {
+                    unsigned d = count / threshold;
+                    unsigned r = count % threshold;
+                    bool augment = (r <= d ? true : false);
+                    unsigned remaining = count;
+                    while (remaining >= threshold) {
+                        remaining -= threshold;
+                        
+                        // Calculate xtra
+                        unsigned x = 0;
+                        if (augment && r > 0) {
+                            x = 1;
+                            remaining -= 1;
+                            r--;
+                        }
+                        total_xtra += x;
+                        
+                        unsigned new_begin_index = begin_index + threshold + x;
+                        
+                        // Make a copy of the current particle if count remaining >= threshold
+                        if (remaining >= threshold) {
+                            _particle_list.push_front(*it);
+                        
+                            // Adjust current particle counts
+                            it->setCount(remaining);
+                            it->setXtra(0);
+                            it->setBeginIndex(new_begin_index);
+
+                            // Set copied particle counts
+                            _particle_list.begin()->setCount(threshold);
+                            _particle_list.begin()->setXtra(x);
+                            _particle_list.begin()->setBeginIndex(begin_index);
+                        }
+                        else {
+                            // Adjust current particle counts
+                            it->setCount(count - x);
+                            it->setXtra(x);
+                            it->setBeginIndex(begin_index); // redundant
+                        }
+                        
+                        begin_index = new_begin_index;
+                        count = remaining;
                     }
-                    total_xtra += x;
-                    
-                    // Adjust current particle counts
-                    it->setCount(count);
+                }
+                else {
+                    // count not greater than threshold
+                    it->setCount(count);    // redundant
                     it->setXtra(0);
-
-                    // Set copied particle counts
-                    _particle_list.begin()->setCount(threshold);
-                    _particle_list.begin()->setXtra(x);
-
+                    it->setBeginIndex(begin_index);
+                    begin_index += count;
                 }
             }
+            
+            // Sort particles by increasing begin index
+            _particle_list.sort([](const Particle & first, const Particle & second){
+                return first.getBeginIndex() < second.getBeginIndex() ? true : false;
+            });
+            
+            unsigned reduced_total = _nparticles - total_xtra;
+            
+            // Create thread schedule
+            thread_schedule.clear();
+            unsigned current_thread = 0;
+            pair<unsigned, unsigned> begin_end = make_pair(0,0);
+            unsigned sum_counts = 0;
+            for (auto & p : _particle_list) {
+                // Move xtra into count on Particle itself
+                unsigned count = p.getCount();
+                unsigned xtra = p.getXtra();
+                p.setCount(count + xtra);
+                p.setXtra(0);
+                
+                // For purposes of determining thread index, however, ignore xtra
+                sum_counts += count;
+                
+                // Calculate thread index
+                unsigned thread_index = (unsigned)floor(1.0*SMCGlobal::_nthreads*(sum_counts - 1)/reduced_total);
+                
+                if (thread_index > current_thread) {
+                    // Adding a new thread to the schedule
+                    thread_schedule.push_back(begin_end);
+                    unsigned b = begin_end.second;
+                    unsigned e = b + 1;
+                    begin_end.first = b;
+                    begin_end.second = e;
+                    current_thread++;
+                }
+                else {
+                    begin_end.second += 1;
+                }
+            }
+            thread_schedule.push_back(begin_end);
         }
         
-        // Sort particles by descending count (ignore xtra until the very end,
-        // otherwise particles will not be assigned to threads correctly)
-        _particle_list.sort([](const Particle & first, const Particle & second){
-            return first.getCount() > second.getCount() ? true : false;
-        });
-        
-        unsigned reduced_total = _nparticles - total_xtra;
-        
-        // Create thread schedule
-        thread_schedule.clear();
-        unsigned current_thread = 0;
-        tuple<unsigned, unsigned, unsigned> begin_end_index = make_tuple(0,0,0);
-        unsigned sum_counts = 0;
-        unsigned pindex = 0;
-        for (auto & p : _particle_list) {
-            unsigned count = p.getCount();
-            unsigned xtra = p.getXtra();
-            p.setCount(count + xtra);
-            p.setXtra(0);
-            sum_counts += count;
-            unsigned thread_index = (unsigned)floor(1.0*SMCGlobal::_nthreads*(sum_counts - 1)/reduced_total);
-            if (thread_index > current_thread) {
-                thread_schedule.push_back(begin_end_index);
-                unsigned b = get<1>(begin_end_index);
-                unsigned e = b + 1;
-                unsigned i = pindex;
-                begin_end_index = make_tuple(b, e, i);
-                current_thread++;
-            }
-            else {
-                unsigned b = get<0>(begin_end_index);
-                unsigned e = get<1>(begin_end_index) + 1;
-                unsigned i = get<2>(begin_end_index);
-                begin_end_index = make_tuple(b, e, i);
-            }
-            pindex += p.getCount();
-        }
-        thread_schedule.push_back(begin_end_index);
         //debugShowThreadSchedule(thread_schedule);
     }
 #endif
@@ -1341,7 +1396,11 @@ namespace proj {
                 template_particle.setCount(_nparticles);
                 template_particle.setData(_data);
                 template_particle.resetSpeciesForest();
+#if defined(MINIMIZE_PARTIALS)
                 template_particle.resetGeneForests(/*compute_partials*/false);
+#else
+                template_particle.resetGeneForests(/*compute_partials*/true);
+#endif
                 
                 // Initialize particle map with one particle having count _nparticles
                 _particle_list.clear();
@@ -1360,9 +1419,9 @@ namespace proj {
                 for (unsigned step = 0; step < nsteps; ++step) {
                     //TODO: main step loop
                     stopwatch.start();
-
+                    
 #if defined(USING_MULTITHREADING)
-                    vector<tuple<unsigned, unsigned, unsigned> > thread_schedule;
+                    vector<pair<unsigned, unsigned> > thread_schedule;
                     balanceThreads(thread_schedule);
 #endif
 

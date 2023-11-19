@@ -160,7 +160,9 @@ namespace proj {
         //               begin()   it
         // returns 2 = 2 - 0
         auto it = find_if(_cumprobs.begin(), _cumprobs.end(), [u](double cumpr){return cumpr > u;});
-        assert(it != _cumprobs.end());
+        if (it == _cumprobs.end()) {
+            throw XProj(format("SMCGlobal::multinomialDraw failed: u = %.9f, *_cumprobs.rbegin()") % u % *(_cumprobs.rbegin()));
+        }
 
         return (unsigned)distance(_cumprobs.begin(), it);
     }

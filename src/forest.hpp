@@ -1091,8 +1091,7 @@ namespace proj {
         }
         assert(_lineages.size() == other._lineages.size());
         
-        // The _preorders vector is recreated as needed
-        _preorders.clear();
+        refreshAllPreorders();
     }
 
 }

@@ -40,7 +40,7 @@ namespace proj {
             typedef tuple<double, unsigned, SMCGlobal::species_t, unsigned, unsigned> coal_tuple_t;
 
             double calcTotalRate(vector<SMCGlobal::species_tuple_t> & species_tuples, double speciation_increment);
-            double coalescentEvent(Lot::SharedPtr lot, SMCGlobal::species_t spp, Node * anc, bool compute_partial);
+            double coalescentEvent(Lot::SharedPtr lot, SMCGlobal::species_t spp, Node * anc, bool compute_partial, bool make_permanent);
             void mergeSpecies(SMCGlobal::species_t left_species, SMCGlobal::species_t right_species, SMCGlobal::species_t anc_species);
             
             // Overrides of base class functions
@@ -90,14 +90,13 @@ namespace proj {
     }
     
     inline void GeneForest::clear() {
-        //_data.reset();
-        //_relrate = 1.0;
-        
-        // Return partials to PartialStore
+        // Reset partial pointers for all nodes to decrement
+        // their use counts. Note that any given partial may
+        // still being used in some other particle, so we
+        // do not want to stow the partial back to PartialStore
+        // as that would invalidate the partial everywhere.
         for (auto & nd : _nodes) {
-            if (nd._partial) {
-                nd._partial.reset();
-            }
+            nd._partial.reset();
         }
         
         Forest::clear();
@@ -106,8 +105,12 @@ namespace proj {
 
     inline void GeneForest::debugCheckPartials(bool verbose) const {
         double tmp = 0.0;
+        if (_preorders.size() == 0) {
+            throw XProj(format("GeneForest::debugCheckPartials: gene %d has no lineages!") % _gene_index);
+        }
         for (auto & preorder : _preorders) {
             for (auto nd : preorder) {
+                // Check whether _partial exists
                 if (!nd->_partial) {
                     throw XProj(format("GeneForest::debugCheckPartials: node %d from gene %d has no partial") % nd->_number % _gene_index);
                 }
@@ -121,10 +124,28 @@ namespace proj {
                     cerr << str(format("  nd->_partial->_v[2] = %.5f") % nd->_partial->_v[2]) << endl;
                     cerr << str(format("  nd->_partial->_v[3] = %.5f") % nd->_partial->_v[3]) << endl;
                 }
+                
+                // Check whether _partial has zeros for every pattern
                 vector<double> & v = nd->_partial->_v;
                 tmp = accumulate(v.begin(), v.end(), 0.0);
                 if (tmp == 0.0) {
                     throw XProj(format("GeneForest::debugCheckPartials: node %d from gene %d has empty partial") % nd->_number % _gene_index);
+                }
+                
+                // Check whether _partial has at least one pattern with all-zero partials
+                unsigned nstates = SMCGlobal::_nstates;
+                unsigned npatterns = (unsigned)nd->_partial->_v.size()/nstates;
+                for (unsigned pat = 0; pat < npatterns; pat++) {
+                    double sum_partials = 0.0;
+                    for (unsigned s = 0; s < nstates; s++) {
+                        double vpat = v[pat*nstates + s];
+                        assert(!isnan(vpat));
+                        assert(!isinf(vpat));
+                        sum_partials += vpat;
+                    }
+                    if (sum_partials  == 0.0) {
+                        throw XProj(format("GeneForest::debugCheckPartials: node %d from gene %d has partial with pattern %d all zeros") % nd->_number % _gene_index % pat);
+                    }
                 }
             }
         }
@@ -173,7 +194,7 @@ namespace proj {
         return total_rate;
     }
 
-    inline double GeneForest::coalescentEvent(Lot::SharedPtr lot, SMCGlobal::species_t spp, Node * anc_node, bool compute_partial) {
+    inline double GeneForest::coalescentEvent(Lot::SharedPtr lot, SMCGlobal::species_t spp, Node * anc_node, bool compute_partial, bool make_permanent) {
         double log_weight = 0.0;
         
         // Get vector of nodes in the specified species spp
@@ -207,7 +228,7 @@ namespace proj {
             assert(!isnan(log_weight));
             assert(!isinf(log_weight));
         }
-        else {
+        if (make_permanent) {
             // Empty anc_node's _prev_species_stack since this will be a permanent change
             anc_node->emptyPrevSpeciesStack();
         
@@ -215,6 +236,10 @@ namespace proj {
             removeTwoAddOne(_lineages_within_species.at(spp), first_node, second_node, anc_node);
             removeTwoAddOne(_lineages, first_node, second_node, anc_node);
             refreshAllPreorders();
+            
+#if defined(DEBUGGING_SANITY_CHECK)
+            debugCheckPartials();
+#endif
         }
         
         return log_weight;
@@ -340,6 +365,7 @@ namespace proj {
             }
             _lineages.push_back(&_nodes[i]);
         }
+        refreshAllPreorders();
         _forest_height = 0.0;
         _next_node_index = SMCGlobal::_ntaxa;
         _next_node_number = SMCGlobal::_ntaxa;

@@ -53,10 +53,10 @@ namespace proj {
             
             double calcTotalCoalRate(vector<SMCGlobal::species_tuple_t> & species_tuples, double speciation_increment);
             void advanceAllLineagesBy(double dt);
-            double proposeCoalescence(unsigned seed, unsigned step, unsigned pindex, CoalProposal & proposal, bool compute_partial);
+            double proposeCoalescence(unsigned seed, unsigned step, unsigned pindex, CoalProposal & proposal, bool compute_partial, bool make_permanent);
             void finalizeProposal(CoalProposal & proposal);
             void reverseProposal(CoalProposal & proposal);
-            void advance(unsigned step, unsigned pindex, CoalProposal & proposal, bool compute_partial);
+            void advance(unsigned step, unsigned pindex, CoalProposal & proposal, bool compute_partial, bool make_permanent);
             
             unsigned getCount() const {return _count;}
             void setCount(unsigned cnt) {_count = cnt;}
@@ -64,6 +64,9 @@ namespace proj {
 #if defined(USING_MULTITHREADING)
             unsigned getXtra() const {return _xtra;}
             void setXtra(unsigned x) {_xtra = x;}
+            
+            unsigned getBeginIndex() const {return _begin_index;}
+            void setBeginIndex(unsigned x) {_begin_index = x;}
 #endif
 
             double getLogWeight() const {return _log_weight;}
@@ -93,6 +96,7 @@ namespace proj {
             GeneForest       & getGeneForest(unsigned gene);
             const GeneForest & getGeneForest(unsigned gene) const;
             
+            unsigned debugCountNumCoalEvents() const;
             void debugCheckPartials() const;
             void debugShowAllGeneForests() const;
             void debugCheckAllPrevSpeciesStacksEmpty() const;
@@ -113,6 +117,7 @@ namespace proj {
             unsigned               _count;
 #if defined(USING_MULTITHREADING)
             unsigned               _xtra;
+            unsigned               _begin_index;
 #endif
             
             mutable double         _log_weight;
@@ -347,13 +352,13 @@ namespace proj {
 #endif
     }
     
-    inline double Particle::proposeCoalescence(unsigned seed, unsigned step, unsigned pindex, CoalProposal & proposal, bool compute_partial) {
+    inline double Particle::proposeCoalescence(unsigned seed, unsigned step, unsigned pindex, CoalProposal & proposal, bool compute_partial, bool make_permanent) {
         //TODO: Particle::proposeCoalescence
         setSeed(seed);
         
-        advance(step, pindex, proposal, compute_partial);
+        advance(step, pindex, proposal, compute_partial, make_permanent);
         while (lastEventSpeciation()) {
-            advance(step, pindex, proposal, compute_partial);
+            advance(step, pindex, proposal, compute_partial, make_permanent);
         }
         
         double log_weight = getLogWeight();
@@ -375,7 +380,7 @@ namespace proj {
         }
     }
 
-    inline void Particle::advance(unsigned step, unsigned pindex, CoalProposal & proposal, bool compute_partial) {
+    inline void Particle::advance(unsigned step, unsigned pindex, CoalProposal & proposal, bool compute_partial, bool make_permanent) {
         //TODO: Particle::advance
         // Create species_tuples vector. Each 3-tuple entry stores:
         //  1. number of lineages
@@ -477,11 +482,11 @@ namespace proj {
                 Node * anc = gene_forest.pullNode();
                 if (compute_partial)
                     anc->_partial = pullPartial(g);
-
+                    
                 // The coalescenceEvent function joins two nodes chosen randomly
                 // from species spp in gene g. Returns calculated log weight if
                 // compute_partial is true; otherwise returns 0.0 for log weight.
-                _log_weight = gene_forest.coalescentEvent(_lot, spp, anc, compute_partial);
+                _log_weight = gene_forest.coalescentEvent(_lot, spp, anc, compute_partial, make_permanent);
                 
                 // Save information about the coalescent event proposed
                 proposal._coal_gene = g;
@@ -545,6 +550,16 @@ namespace proj {
         return _gene_forests[gene];
     }
 
+    inline unsigned Particle::debugCountNumCoalEvents() const {
+        // Returns number of coalescent events over all gene trees
+        unsigned total = 0;
+        for (auto & gf : _gene_forests) {
+            unsigned n = gf.getNumLineages();
+            total += SMCGlobal::_ntaxa - n;
+        }
+        return total;
+    }
+            
     inline void Particle::debugCheckPartials() const {
         for (auto & gf : _gene_forests) {
             gf.debugCheckPartials();
@@ -577,6 +592,7 @@ namespace proj {
         _count = other._count;
 #if defined(USING_MULTITHREADING)
         _xtra = other._xtra;
+        _begin_index = other._begin_index;
 #endif
         
         // No need to copy _log_weight
