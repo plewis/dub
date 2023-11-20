@@ -82,13 +82,15 @@ namespace proj {
             void                        saveUniqueSpeciesTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts);
 
 #if defined(USING_MULTITHREADING)
-            void                        debugShowThreadSchedule(const vector<pair<unsigned, unsigned> > & thread_schedule) const;
+            void                        debugShowThreadSchedule(const vector<pair<unsigned, unsigned> > & thread_schedule, double percent_of_max_entropy) const;
+            void                        divideLargestParticle();
+            double                      buildThreadSchedule(vector<pair<unsigned, unsigned> > & thread_schedule);
             void                        balanceThreads(vector<pair<unsigned, unsigned> > & thread_schedule);
             void                        advanceParticleRange(unsigned step, unsigned first_particle, unsigned last_particle, const vector<unsigned> & update_seeds);
 #endif
             double                      computeEffectiveSampleSize(const vector<double> & probs) const;
             void                        pruneParticles(list<Particle> & particle_list);
-            void                        findNonZeroCountsInRange(stack<unsigned> & nonzeros, const vector<unsigned> & counts, unsigned begin_index, unsigned end_index) const;
+            void                        findNonZeroCountsInRange(vector<unsigned> & nonzeros, const vector<unsigned> & counts, unsigned begin_index, unsigned end_index) const;
             double                      filterParticles(unsigned step, list<Particle> & particle_list, vector<double> & log_weights, vector<unsigned> & counts, vector<unsigned> & rnseeds);
 
             void                        readData();
@@ -353,7 +355,12 @@ namespace proj {
             for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
                 unsigned gnsites = _partition->numSitesInSubset(g);
                 string gname = _partition->getSubsetName(g);
-                double r = _relrate_map.at(gname);
+                double r = 0.0;
+                try {
+                    r = _relrate_map.at(gname);
+                } catch(const out_of_range & oor) {
+                    throw XProj(format("Proj::setRelativeRates failed because key \"%s\" does not exist in _relrate_map") % gname);
+                }
                 SMCGlobal::_relrate_for_gene[g] = r;
                 output(format("%12s %12.5f\n") % gname % r,2);
                 mean_rate += r*gnsites/total_nsites;
@@ -400,7 +407,12 @@ namespace proj {
 
         output("\nMapping species names to species index\n", 2);
         for (auto & sname : SMCGlobal::_species_names) {
-            unsigned species_index = species_name_to_index.at(sname);
+            unsigned species_index = 0;
+            try {
+                species_index = species_name_to_index.at(sname);
+            } catch(const out_of_range & oor) {
+                throw XProj(format("Proj::buildSpeciesMap failed because key \"%s\" does not exist in species_name_to_index map") % sname);
+            }
             output(format("  %s --> %d\n") % sname % species_index, 2);
             SMCGlobal::_taxon_to_species[sname] = species_index;
         }
@@ -760,10 +772,11 @@ namespace proj {
         }
     }
 
-    inline void Proj::findNonZeroCountsInRange(stack<unsigned> & nonzeros, const vector<unsigned> & counts, unsigned begin_index, unsigned end_index) const {
+    inline void Proj::findNonZeroCountsInRange(vector<unsigned> & nonzeros, const vector<unsigned> & counts, unsigned begin_index, unsigned end_index) const {
+        nonzeros.clear();
         for (unsigned k = begin_index; k < end_index; k++) {
             if (counts[k] > 0) {
-                nonzeros.push(k);
+                nonzeros.push_back(k);
             }
         }
     }
@@ -804,12 +817,16 @@ namespace proj {
         //                   <----------- 1st particle -----------><-- 2nd particle --->
         //         counts = {0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 12}
         //                   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18  19
-        //   last_nonzero =                                   ^                        ^
-        // Suppose _particle_list contains 2 particles:
+        //                              nonzeros = [3,6,11]            nonzeros = [19]
+        //
+        // Here, _particle_list originally contains 2 particles:
+        //
         //   Particle  Count
         //          0     12
         //          1      8
+        //
         // After filtering, _particle_list will contain the following particle counts:
+        //
         //                    Copied   Using
         //   Particle  Count    from    seed
         //          0      1       0       3
@@ -827,18 +844,20 @@ namespace proj {
             unsigned n = p.getCount();
             
             // Find all non-zero counts associated with particle p
-            stack<unsigned> nonzeros;
+            vector<unsigned> nonzeros;
             findNonZeroCountsInRange(nonzeros, counts, i, i + n);
             
-            while (!nonzeros.empty()) {
+            //temporary!
+            //output(format("nonzeros for particle %d of %d: ") % (j+1) % num_parent_particles,2);
+            
+            for (auto k : nonzeros) {
                 // Make a copy of p
                 particle_list.push_back(p);
                 Particle & plast = *(particle_list.rbegin());
                                     
-                // Pop index of next nonzero from stack
-                unsigned k = nonzeros.top();
-                nonzeros.pop();
-                
+                //temporary!
+                //output(format(" %d (%d)") % k % counts[k],2);
+
                 // Advance to same coalescence event created when log weight was calculated
                 // but this time keep it by setting compute_partial to false. Fills coal_proposal
                 // struct with information about the coalescence event as well as any
@@ -861,6 +880,9 @@ namespace proj {
                 //output(format("~~~| Copying %d (%d) -> %d (%d)\n") % j % p.getCount() % (particle_list.size()-1) % plast.getCount(), 2);
             }
                             
+            //temporary!
+            //output("\n",2);
+            
             // Flag original particle for deletion
             p.setCount(0);
             
@@ -1012,6 +1034,10 @@ namespace proj {
             while (n > 0) {
                 proposal.clear();
                 
+#if defined(DEBUGGING_SANITY_CHECK)
+                p.debugStoreForests();
+#endif
+                
                 // Propose a coalescence event (which may involve also proposing
                 // one or more speciation events)
                 _log_weights[i] = p.proposeCoalescence(update_seeds[i], step, i, proposal, /*compute_partial*/true, /*make_permanent*/false);
@@ -1019,6 +1045,10 @@ namespace proj {
                 // Return particle to its original state
                 p.reverseProposal(proposal);
 
+#if defined(DEBUGGING_SANITY_CHECK)
+                p.debugCheckForests();
+#endif
+                
                 n--;
                 i++;
             }
@@ -1116,6 +1146,11 @@ namespace proj {
         for (unsigned i = 0; i < threads.size(); i++) {
             threads[i].join();
         }
+        
+        //temporary!
+        //for (unsigned i = 0; i < _nparticles; i++) {
+        //    output(format("%12d %12d %12.5f\n") % i % update_seeds[i] % _log_weights[i], 2);
+        //}
     }
 #else   // not USING_MPI or USING_MULTITHREADING
     inline void Proj::particleLoopStd(unsigned step, const vector<unsigned> & update_seeds) {
@@ -1137,6 +1172,9 @@ namespace proj {
                 // Propose a coalescence event (which may involve also proposing
                 // one or more speciation events)
                 _log_weights[i] = p.proposeCoalescence(update_seeds[i], step, i, proposal, /*compute_partial*/true, /*make_permanent*/false);
+                
+                //temporary!
+                //output(format("%12d %12d %12.5f\n") % i % update_seeds[i] % _log_weights[i], 2);
 
                 // Return particle to its original state
                 p.reverseProposal(proposal);
@@ -1154,7 +1192,7 @@ namespace proj {
 #endif
 
 #if defined(USING_MULTITHREADING)
-    inline void Proj::debugShowThreadSchedule(const vector<pair<unsigned, unsigned> > & thread_schedule) const {
+    inline void Proj::debugShowThreadSchedule(const vector<pair<unsigned, unsigned> > & thread_schedule, double percent_of_max_entropy) const {
         unsigned i = 0;
         auto it = _particle_list.begin();
         unsigned sum_pcount = 0;
@@ -1177,160 +1215,281 @@ namespace proj {
         assert(it == _particle_list.end());
         output(format("Total actual particles:  %d\n") % _particle_list.size(), 2);
         output(format("Total virtual particles: %d\n") % sum_pcount, 2);
+        output(format("Percentage of maximum entropy: %.1f\n") % percent_of_max_entropy, 2);
         cerr << endl;
     }
 #endif
 
 #if defined(USING_MULTITHREADING)
+    inline void Proj::divideLargestParticle() {
+        auto it = max_element(_particle_list.begin(), _particle_list.end(), [](const Particle & first, const Particle & second){return first.getCount() < second.getCount() ? true : false;});
+
+        unsigned begin_index = it->getBeginIndex();
+        unsigned count = it->getCount();
+        unsigned first_half = count/2;
+        unsigned second_half = count - first_half;
+
+        auto it0 = _particle_list.insert(it, *it);
+                
+        it0->setCount(first_half);
+        it0->setXtra(0);
+        it0->setBeginIndex(begin_index);
+        
+        it->setCount(second_half);
+        it->setXtra(0);
+        it->setBeginIndex(begin_index + first_half);
+    }
+#endif
+    
+#if defined(USING_MULTITHREADING)
+    inline double Proj::buildThreadSchedule(vector<pair<unsigned, unsigned> > & thread_schedule) {
+        // Calculate thread_schedule and its associated entropy and return the percentage
+        // entropy relative to the maximum possible entropy
+
+        // Create thread schedule using the prefix-sum algorithm
+        thread_schedule.clear();
+        unsigned current_thread = 0;
+        pair<unsigned, unsigned> begin_end = make_pair(0,0);
+        unsigned prefix_sum = 0;
+        
+        vector<unsigned> freqs(SMCGlobal::_nthreads, 0);
+        for (auto & p : _particle_list) {
+            // Add particle count to prefix sum
+            unsigned count = p.getCount();
+            p.setBeginIndex(prefix_sum);
+            prefix_sum += count;
+            
+            // Calculate thread index
+            unsigned thread_index = (unsigned)floor(1.0*SMCGlobal::_nthreads*(prefix_sum - 1)/_nparticles);
+            
+            if (thread_index > current_thread) {
+                // If about to add a thread with zero particles, bail out because
+                // this means some particle counts are still too large
+                if (begin_end.second - begin_end.first == 0) {
+                    thread_schedule.clear();
+                    return 0.0;
+                }
+                
+                // Add thread to the schedule
+                thread_schedule.push_back(begin_end);
+                current_thread++;
+                
+                // Start work on next thread
+                begin_end.first  = begin_end.second;
+                begin_end.second = begin_end.first + 1;
+            }
+            else {
+                begin_end.second += 1;
+            }
+            freqs[current_thread] += count;
+        }
+        thread_schedule.push_back(begin_end);
+
+        // Calculate entropy, max_entropy, and percentage
+        double max_entropy = log(SMCGlobal::_nthreads);
+        double entropy = 0.0;
+        assert(_nparticles == accumulate(freqs.begin(), freqs.end(), 0));
+        for_each(freqs.begin(), freqs.end(), [&entropy](unsigned f){entropy -= 1.0*f*log(f);});
+        entropy /= _nparticles;
+        entropy += log(_nparticles);
+        double percentage = 100.0*entropy/max_entropy;
+        
+        return percentage;
+    }
+#endif
+    
+#if defined(USING_MULTITHREADING)
     inline void Proj::balanceThreads(vector<pair<unsigned, unsigned> > & thread_schedule) {
         // Make copies of particles as necessary to achieve a more even distribution of work.
-        //    6 nthreads
-        //  100 total
-        // 16.0 threshold
+        // Example: 2 threads, 100 (virtual) particles, 4 (actual) particles
         //
         // Original particles:
-        //           id        count   cumulative
-        // ------------ ------------ ------------
-        //            a           67           67
-        //            b           21           88
-        //            c            7           95
-        //            d            3           98
-        //            e            2          100
+        //  index  count  cumulative   prefix-sum   calculation  thread     count
+        // ------ ------ ------------ ----------- ------------- ------- ---------
+        //      0     11          11           11 2*10/100=0.20       0
+        //      1     25          25           36 2*35/100=0.70       0  11+25=36
+        //      2     48          48           84 2*83/100=1.66       1
+        //      3     16          16          100 2*99/100=1.98       1  48+16=64
+        // ------ ------ ------------ ----------- ------------- ------- ---------
+        // entropy      = 0.653 = -(0.36*ln(0.36) + 0.64*ln(0.64))
+        // max(entropy) = 0.693 = log(2)
+        // percentage   = 94.2
         //
-        // Assigments:
-        //   id   count   extra   total   cumulative   calc   thread
-        // ---- ------- ------- ------- ------------ ------ --------
-        //    b      16       0      16           16   0.90        0
-        //    a      16       0      16           32   1.86        1
-        //    a      16       1      17           49   2.82        2
-        //    a      16       1      17           66   3.78        3
-        //    a      16       1      17           83   4.74        4
-        //    c       7       0       7           90   5.16        5
-        //    b       5       0       5           95   5.46        5
-        //    d       3       0       3           98   5.64        5
-        //    e       2       0       2          100   5.76        5
-        //
-        // Number of particles per thread:
-        //       Thread    Particles
-        // ------------ ------------
-        //            0           16
-        //            1           16
-        //            2           17
-        //            3           17
-        //            4           17
-        //            5           17
-        // ------------ ------------
-        //        total          100
-        //TODO: Proj::balanceThreads
+        // Continue dividing largest particle until % max entropy > target (e.g. 99.6)
+        //   99.971 = -100.0*(0.49*ln(0.49) + 0.51*ln(0.51))/ln(2)
+        //   99.885 = -100.0*(0.48*ln(0.48) + 0.52*ln(0.52))/ln(2)
+        //   99.740 = -100.0*(0.47*ln(0.47) + 0.53*ln(0.53))/ln(2) *
+        //   99.538 = -100.0*(0.46*ln(0.46) + 0.54*ln(0.54))/ln(2)
+        //   99.277 = -100.0*(0.45*ln(0.45) + 0.55*ln(0.55))/ln(2)
         assert(SMCGlobal::_nthreads > 0);
+        double pct = 0.0;
         if (SMCGlobal::_nthreads == 1) {
             thread_schedule.clear();
             thread_schedule.push_back(make_pair(0,(unsigned)_particle_list.size()));
         }
         else {
-            unsigned total_xtra = 0;
-            unsigned begin_index = 0;
-            unsigned threshold = (unsigned)floor(_nparticles/SMCGlobal::_nthreads);
-            
-            for (auto it = _particle_list.begin(); it != _particle_list.end(); ++it) {
-                unsigned count = it->getCount();
-                if (count > threshold) {
-                    unsigned d = count / threshold;
-                    unsigned r = count % threshold;
-                    bool augment = (r <= d ? true : false);
-                    unsigned remaining = count;
-                    while (remaining >= threshold) {
-                        remaining -= threshold;
-                        
-                        // Calculate xtra
-                        unsigned x = 0;
-                        if (augment && r > 0) {
-                            x = 1;
-                            remaining -= 1;
-                            r--;
-                        }
-                        total_xtra += x;
-                        
-                        unsigned new_begin_index = begin_index + threshold + x;
-                        
-                        // Make a copy of the current particle if count remaining >= threshold
-                        if (remaining >= threshold) {
-                            _particle_list.push_front(*it);
-                        
-                            // Adjust current particle counts
-                            it->setCount(remaining);
-                            it->setXtra(0);
-                            it->setBeginIndex(new_begin_index);
-
-                            // Set copied particle counts
-                            _particle_list.begin()->setCount(threshold);
-                            _particle_list.begin()->setXtra(x);
-                            _particle_list.begin()->setBeginIndex(begin_index);
-                        }
-                        else {
-                            // Adjust current particle counts
-                            it->setCount(count - x);
-                            it->setXtra(x);
-                            it->setBeginIndex(begin_index); // redundant
-                        }
-                        
-                        begin_index = new_begin_index;
-                        count = remaining;
-                    }
-                }
-                else {
-                    // count not greater than threshold
-                    it->setCount(count);    // redundant
-                    it->setXtra(0);
-                    it->setBeginIndex(begin_index);
-                    begin_index += count;
-                }
+            while (_particle_list.size() < SMCGlobal::_nthreads)
+                divideLargestParticle();
+            pct = buildThreadSchedule(thread_schedule);
+            while (pct < 99.7) {
+                divideLargestParticle();
+                pct = buildThreadSchedule(thread_schedule);
             }
-            
-            // Sort particles by increasing begin index
-            _particle_list.sort([](const Particle & first, const Particle & second){
-                return first.getBeginIndex() < second.getBeginIndex() ? true : false;
-            });
-            
-            unsigned reduced_total = _nparticles - total_xtra;
-            
-            // Create thread schedule
-            thread_schedule.clear();
-            unsigned current_thread = 0;
-            pair<unsigned, unsigned> begin_end = make_pair(0,0);
-            unsigned sum_counts = 0;
-            for (auto & p : _particle_list) {
-                // Move xtra into count on Particle itself
-                unsigned count = p.getCount();
-                unsigned xtra = p.getXtra();
-                p.setCount(count + xtra);
-                p.setXtra(0);
-                
-                // For purposes of determining thread index, however, ignore xtra
-                sum_counts += count;
-                
-                // Calculate thread index
-                unsigned thread_index = (unsigned)floor(1.0*SMCGlobal::_nthreads*(sum_counts - 1)/reduced_total);
-                
-                if (thread_index > current_thread) {
-                    // Adding a new thread to the schedule
-                    thread_schedule.push_back(begin_end);
-                    unsigned b = begin_end.second;
-                    unsigned e = b + 1;
-                    begin_end.first = b;
-                    begin_end.second = e;
-                    current_thread++;
-                }
-                else {
-                    begin_end.second += 1;
-                }
-            }
-            thread_schedule.push_back(begin_end);
         }
         
-        //debugShowThreadSchedule(thread_schedule);
+        //debugShowThreadSchedule(thread_schedule, pct);
+        //cerr << endl;
     }
 #endif
+
+//    inline void Proj::balanceThreads(vector<pair<unsigned, unsigned> > & thread_schedule) {
+//        // Make copies of particles as necessary to achieve a more even distribution of work.
+//        //    6 nthreads
+//        //  100 total
+//        // 16.0 threshold
+//        //
+//        // Original particles:
+//        //           id        count   cumulative
+//        // ------------ ------------ ------------
+//        //            a           67           67
+//        //            b           21           88
+//        //            c            7           95
+//        //            d            3           98
+//        //            e            2          100
+//        //
+//        // Assigments:
+//        //   id   count   extra   total   cumulative   calc   thread
+//        // ---- ------- ------- ------- ------------ ------ --------
+//        //    b      16       0      16           16   0.90        0
+//        //    a      16       0      16           32   1.86        1
+//        //    a      16       1      17           49   2.82        2
+//        //    a      16       1      17           66   3.78        3
+//        //    a      16       1      17           83   4.74        4
+//        //    c       7       0       7           90   5.16        5
+//        //    b       5       0       5           95   5.46        5
+//        //    d       3       0       3           98   5.64        5
+//        //    e       2       0       2          100   5.76        5
+//        //
+//        // Number of particles per thread:
+//        //       Thread    Particles
+//        // ------------ ------------
+//        //            0           16
+//        //            1           16
+//        //            2           17
+//        //            3           17
+//        //            4           17
+//        //            5           17
+//        // ------------ ------------
+//        //        total          100
+//        //TODO: Proj::balanceThreads
+//        assert(SMCGlobal::_nthreads > 0);
+//        if (SMCGlobal::_nthreads == 1) {
+//            thread_schedule.clear();
+//            thread_schedule.push_back(make_pair(0,(unsigned)_particle_list.size()));
+//        }
+//        else {
+//            unsigned total_xtra = 0;
+//            unsigned begin_index = 0;
+//            unsigned threshold = (unsigned)floor(_nparticles/SMCGlobal::_nthreads);
+//
+//            for (auto it = _particle_list.begin(); it != _particle_list.end(); ++it) {
+//                unsigned count = it->getCount();
+//                if (count > threshold) {
+//                    unsigned d = count / threshold;
+//                    unsigned r = count % threshold;
+//                    bool augment = (r <= d ? true : false);
+//                    unsigned remaining = count;
+//                    while (remaining >= threshold) {
+//                        remaining -= threshold;
+//
+//                        // Calculate xtra
+//                        unsigned x = 0;
+//                        if (augment && r > 0) {
+//                            x = 1;
+//                            remaining -= 1;
+//                            r--;
+//                        }
+//                        total_xtra += x;
+//
+//                        unsigned new_begin_index = begin_index + threshold + x;
+//
+//                        // Make a copy of the current particle if count remaining >= threshold
+//                        if (remaining >= threshold) {
+//                            _particle_list.push_front(*it);
+//
+//                            // Adjust current particle counts
+//                            it->setCount(remaining);
+//                            it->setXtra(0);
+//                            it->setBeginIndex(new_begin_index);
+//
+//                            // Set copied particle counts
+//                            _particle_list.begin()->setCount(threshold);
+//                            _particle_list.begin()->setXtra(x);
+//                            _particle_list.begin()->setBeginIndex(begin_index);
+//                        }
+//                        else {
+//                            // Adjust current particle counts
+//                            it->setCount(count - x);
+//                            it->setXtra(x);
+//                            it->setBeginIndex(begin_index); // redundant
+//                        }
+//
+//                        begin_index = new_begin_index;
+//                        count = remaining;
+//                    }
+//                }
+//                else {
+//                    // count not greater than threshold
+//                    it->setCount(count);    // redundant
+//                    it->setXtra(0);
+//                    it->setBeginIndex(begin_index);
+//                    begin_index += count;
+//                }
+//            }
+//
+//            // Sort particles by increasing begin index
+//            _particle_list.sort([](const Particle & first, const Particle & second){
+//                return first.getBeginIndex() < second.getBeginIndex() ? true : false;
+//            });
+//
+//            unsigned reduced_total = _nparticles - total_xtra;
+//
+//            // Create thread schedule
+//            thread_schedule.clear();
+//            unsigned current_thread = 0;
+//            pair<unsigned, unsigned> begin_end = make_pair(0,0);
+//            unsigned sum_counts = 0;
+//            for (auto & p : _particle_list) {
+//                // Move xtra into count on Particle itself
+//                unsigned count = p.getCount();
+//                unsigned xtra = p.getXtra();
+//                p.setCount(count + xtra);
+//                p.setXtra(0);
+//
+//                // For purposes of determining thread index, however, ignore xtra
+//                sum_counts += count;
+//
+//                // Calculate thread index
+//                unsigned thread_index = (unsigned)floor(1.0*SMCGlobal::_nthreads*(sum_counts - 1)/reduced_total);
+//
+//                if (thread_index > current_thread) {
+//                    // Adding a new thread to the schedule
+//                    thread_schedule.push_back(begin_end);
+//                    unsigned b = begin_end.second;
+//                    unsigned e = b + 1;
+//                    begin_end.first = b;
+//                    begin_end.second = e;
+//                    current_thread++;
+//                }
+//                else {
+//                    begin_end.second += 1;
+//                }
+//            }
+//            thread_schedule.push_back(begin_end);
+//        }
+//
+//        //debugShowThreadSchedule(thread_schedule);
+//    }
                     
     inline void Proj::run() {
     
@@ -1419,6 +1578,12 @@ namespace proj {
                 for (unsigned step = 0; step < nsteps; ++step) {
                     //TODO: main step loop
                     stopwatch.start();
+
+                    //temporary!
+                    //if (step == 350) {
+                    //    SMCGlobal::_debugging = true;
+                    //    cerr << endl;
+                    //}
                     
 #if defined(USING_MULTITHREADING)
                     vector<pair<unsigned, unsigned> > thread_schedule;

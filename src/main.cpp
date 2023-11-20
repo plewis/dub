@@ -119,7 +119,9 @@ unsigned long                       Partial::_total_max_bytes   = 0;
 unsigned                            Partial::_nstates           = 4;
 #endif
 
-unsigned                            SMCGlobal::_nthreads            = 1;
+bool                                SMCGlobal::_debugging       = false;
+
+unsigned                            SMCGlobal::_nthreads        = 1;
 #if defined(USING_MULTITHREADING)
 mutex                               SMCGlobal::_mutex;
 mutex                               SMCGlobal::_debug_mutex;
@@ -128,7 +130,6 @@ mutex                               SMCGlobal::_debug_mutex;
 #endif
 
 unsigned                            SMCGlobal::_verbosity = 0;
-bool                                SMCGlobal::_debugging = false;
 
 unsigned                            SMCGlobal::_nstates            = 4;
 
@@ -160,8 +161,6 @@ double                              SMCGlobal::_small_enough       = 0.00001;
 static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in order to use infinity()");
 double                              SMCGlobal::_infinity = numeric_limits<double>::infinity();
 double                              SMCGlobal::_negative_infinity = -numeric_limits<double>::infinity();
-
-vector<double>                      SMCGlobal::_cumprobs;
 
 bool                                SMCGlobal::_prior_prior        = true;
 

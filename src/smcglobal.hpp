@@ -7,17 +7,16 @@ namespace proj {
     struct SMCGlobal {
         typedef unsigned long                       species_t;
         typedef tuple<unsigned, unsigned, species_t>  species_tuple_t;
+        
+        static bool                     _debugging;
 
         static unsigned                 _nthreads;
 #if defined(USING_MULTITHREADING)
         static mutex                    _mutex;
         static mutex                    _debug_mutex;
-        //static vector<unsigned>         _thread_first_gene;
-        //static vector<unsigned>         _thread_last_gene;
 #endif
         
         static unsigned                 _verbosity;
-        static bool                     _debugging;
 
         static unsigned                 _nstates;
         
@@ -49,9 +48,7 @@ namespace proj {
         static double                   _small_enough;
         static double                   _infinity;
         static double                   _negative_infinity;
-                
-        static vector<double>           _cumprobs;  // workspace used by multinomialDraw
-        
+                        
         static double   calcLogSum(const vector<double> & log_values);
         static string   unsignedVectToString(const vector<unsigned> & v);
         static void     createDefaultGeneTreeNexusTaxonMap();
@@ -134,18 +131,15 @@ namespace proj {
     }
     
     inline unsigned SMCGlobal::multinomialDraw(Lot::SharedPtr lot, const vector<double> & probs) {
-//#if defined(USING_MULTITHREADING)
-//        lock_guard<mutex> guard(SMCGlobal::_mutex);
-//#endif
-        
         // Compute cumulative probababilities
-        _cumprobs.resize(probs.size());
-        partial_sum(probs.begin(), probs.end(), _cumprobs.begin());
+        vector<double> cumprobs(probs.size());
+        partial_sum(probs.begin(), probs.end(), cumprobs.begin());
+        assert(fabs(*(cumprobs.rbegin()) - 1.0) < 0.0001);
 
         // Draw a Uniform(0,1) random deviate
         double u = lot->uniform();
 
-        // Find first element in _cumprobs greater than u
+        // Find first element in cumprobs greater than u
         // e.g. probs = {0.2, 0.3, 0.4, 0.1}, u = 0.6, should return 2
         // because u falls in the third bin
         //
@@ -153,18 +147,22 @@ namespace proj {
         //   |---+---+---+---+---+---+---+---+---+---|
         //   |       |           |   |           |   |
         //   0      0.2         0.5  |          0.9  1 <-- cumulative probabilities
-        //                          0.6                <-- u
+        //                          0.6 <-- u
         //
-        // _cumprobs = {0.2, 0.5, 0.9, 1.0}, u = 0.6
+        // cumprobs = {0.2, 0.5, 0.9, 1.0}, u = 0.6
         //               |         |
         //               begin()   it
         // returns 2 = 2 - 0
-        auto it = find_if(_cumprobs.begin(), _cumprobs.end(), [u](double cumpr){return cumpr > u;});
-        if (it == _cumprobs.end()) {
-            throw XProj(format("SMCGlobal::multinomialDraw failed: u = %.9f, *_cumprobs.rbegin()") % u % *(_cumprobs.rbegin()));
+        auto it = find_if(cumprobs.begin(), cumprobs.end(), [u](double cumpr){return cumpr > u;});
+        if (it == cumprobs.end()) {
+            double last_cumprob = *(cumprobs.rbegin());
+            throw XProj(format("SMCGlobal::multinomialDraw failed: u = %.9f, last cumprob = %.9f") % u % last_cumprob);
         }
 
-        return (unsigned)distance(_cumprobs.begin(), it);
+        auto d = distance(cumprobs.begin(), it);
+        assert(d >= 0);
+        assert(d < probs.size());
+        return (unsigned)d;
     }
     
     inline string SMCGlobal::speciesStringRepresentation(SMCGlobal::species_t species) {

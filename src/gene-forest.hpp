@@ -39,6 +39,8 @@ namespace proj {
             
             typedef tuple<double, unsigned, SMCGlobal::species_t, unsigned, unsigned> coal_tuple_t;
 
+            string lineagesWithinSpeciesKeyError(SMCGlobal::species_t spp);
+
             double calcTotalRate(vector<SMCGlobal::species_tuple_t> & species_tuples, double speciation_increment);
             double coalescentEvent(Lot::SharedPtr lot, SMCGlobal::species_t spp, Node * anc, bool compute_partial, bool make_permanent);
             void mergeSpecies(SMCGlobal::species_t left_species, SMCGlobal::species_t right_species, SMCGlobal::species_t anc_species);
@@ -193,24 +195,47 @@ namespace proj {
         
         return total_rate;
     }
+    
+    inline string GeneForest::lineagesWithinSpeciesKeyError(SMCGlobal::species_t spp) {
+        string msg = str(format("GeneForest::coalescentEvent species %d not found in _lineages_within_species map for gene %d\n") % spp % _gene_index);
+        if (_lineages_within_species.size() == 0) {
+            msg += "There are actually no entries in _lineages_within_species!\n";
+        }
+        else {
+            msg += str(format("Here are the %d species that are keys in the map:\n") % _lineages_within_species.size());
+            for (auto kv : _lineages_within_species) {
+                msg += str(format("  species %d contains %d lineages\n") % kv.first % kv.second.size());
+            }
+        }
+        return msg;
+    }
 
     inline double GeneForest::coalescentEvent(Lot::SharedPtr lot, SMCGlobal::species_t spp, Node * anc_node, bool compute_partial, bool make_permanent) {
         double log_weight = 0.0;
         
         // Get vector of nodes in the specified species spp
-        auto & node_vect = _lineages_within_species.at(spp);
-        unsigned n = (unsigned)node_vect.size();
-        assert(n > 1);
-        
-        // Choose a random pair of lineages to join
-        pair<unsigned,unsigned> chosen_pair = lot->nchoose2(n);
-        unsigned i = chosen_pair.first;
-        unsigned j = chosen_pair.second;
-        
-        // Join the chosen pair of lineages
-        Node * first_node  = node_vect[i];
-        Node * second_node = node_vect[j];
-        joinLineagePair(anc_node, first_node, second_node);
+        unsigned i = 0;
+        unsigned j = 0;
+        Node * first_node = nullptr;
+        Node * second_node = nullptr;
+        try {
+            auto & node_vect = _lineages_within_species.at(spp);
+            unsigned n = (unsigned)node_vect.size();
+            assert(n > 1);
+            
+            // Choose a random pair of lineages to join
+            pair<unsigned,unsigned> chosen_pair = lot->nchoose2(n);
+            i = chosen_pair.first;
+            j = chosen_pair.second;
+            
+            // Join the chosen pair of lineages
+            first_node  = node_vect[i];
+            second_node = node_vect[j];
+            joinLineagePair(anc_node, first_node, second_node);
+        }
+        catch (const out_of_range & oor) {
+            throw XProj(lineagesWithinSpeciesKeyError(spp));
+        }
 
         anc_node->setSpecies(spp);
         
@@ -233,7 +258,11 @@ namespace proj {
             anc_node->emptyPrevSpeciesStack();
         
             // Update lineage vector since this will be a permanent change
-            removeTwoAddOne(_lineages_within_species.at(spp), first_node, second_node, anc_node);
+            try {
+                removeTwoAddOne(_lineages_within_species.at(spp), first_node, second_node, anc_node);
+            } catch(const out_of_range & oor) {
+                throw XProj(lineagesWithinSpeciesKeyError(spp));
+            }
             removeTwoAddOne(_lineages, first_node, second_node, anc_node);
             refreshAllPreorders();
             
@@ -355,7 +384,7 @@ namespace proj {
             _nodes[i]._height = 0.0;
             try {
                 Node::setSpeciesBit(_nodes[i]._species, SMCGlobal::_taxon_to_species.at(taxon_name), /*init_to_zero_first*/true);
-            } catch(out_of_range) {
+            } catch(const out_of_range & oor) {
                 throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % taxon_name));
             }
             if (compute_partials) {

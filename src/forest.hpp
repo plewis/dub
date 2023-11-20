@@ -60,6 +60,7 @@ namespace proj {
             void        unjoinLineagePair(Node * anc, Node * first, Node * second);
             void        removeTwoAddOne(Node::ptr_vect_t & node_vect, Node * del1, Node * del2, Node * add);
             void        addTwoRemoveOne(Node::ptr_vect_t & node_vect, Node * del1, Node * del2, Node * add);
+            void        addTwoRemoveOneAt(Node::ptr_vect_t & node_vect, unsigned pos1, Node * del1, unsigned pos2, Node * del2, Node * add);
             
             void        debugCheckPreorder(const Node::ptr_vect_t & preorder) const;
             void        debugCheckAllPreorders() const;
@@ -168,7 +169,7 @@ namespace proj {
     inline void Forest::setSpeciesFromNodeName(Node * nd) {
         try {
             Node::setSpeciesBit(nd->_species, SMCGlobal::_taxon_to_species.at(nd->_name), /*init_to_zero_first*/true);
-        } catch(out_of_range) {
+        } catch(const out_of_range & oor) {
             throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % nd->_name));
         }
     }
@@ -1004,6 +1005,34 @@ namespace proj {
         // Add node2
         v.push_back(add1);
         v.push_back(add2);
+    }
+    
+    inline void Forest::addTwoRemoveOneAt(Node::ptr_vect_t & v, unsigned pos1, Node * add1, unsigned pos2, Node * add2, Node * rem) {
+        // Get iterator to node to be deleted and remove from v
+        auto it = find(v.begin(), v.end(), rem);
+        assert(it != v.end());
+        v.erase(it);
+        
+        // Insert add1 and add2 into v so that they end up in
+        // positions pos1 and pos2, respectively
+        if (pos1 < pos2) {
+            it = v.begin();
+            advance(it, pos1);
+            v.insert(it, add1);
+            
+            it = v.begin();
+            advance(it, pos2);
+            v.insert(it, add2);
+        }
+        else {
+            it = v.begin();
+            advance(it, pos2);
+            v.insert(it, add2);
+            
+            it = v.begin();
+            advance(it, pos1);
+            v.insert(it, add1);
+        }
     }
     
     inline void Forest::debugShowNodePtrVector(Node::ptr_vect_t & v, string title) {

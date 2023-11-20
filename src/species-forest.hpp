@@ -13,7 +13,7 @@ namespace proj {
             SpeciesForest();
              ~SpeciesForest();
             
-            void speciationEvent(Lot::SharedPtr lot, Node * anc_node, SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc);
+            void speciationEvent(Lot::SharedPtr lot, Node * anc_node, unsigned & left_pos, unsigned & right_pos, SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc);
             //POLTMP unsigned getNumNewSpeciationEvents() const;
             //POLTMP unsigned revertAllSpeciationEvents();
             //void simulateSpeciesTree();
@@ -180,15 +180,17 @@ namespace proj {
     //POLTMP     return num_speciations;
     //POLTMP }
     
-    inline void SpeciesForest::speciationEvent(Lot::SharedPtr lot, Node * anc_node, SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc) {
+    inline void SpeciesForest::speciationEvent(Lot::SharedPtr lot, Node * anc_node, unsigned & left_pos, unsigned & right_pos, SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc) {
         //TODO: SpeciesForest::speciationEvent
         unsigned nlineages = (unsigned)_lineages.size();
         
         // Choose two lineages to join
         assert(nlineages > 1);
         auto chosen_pair = lot->nchoose2(nlineages);
-        Node * first_node  = _lineages[chosen_pair.first];
-        Node * second_node = _lineages[chosen_pair.second];
+        left_pos = chosen_pair.first;
+        right_pos = chosen_pair.second;
+        Node * first_node  = _lineages[left_pos];
+        Node * second_node = _lineages[right_pos];
         
         // Get species for the two lineages to join
         SMCGlobal::species_t spp1 = first_node->getSpecies();

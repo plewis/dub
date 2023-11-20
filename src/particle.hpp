@@ -13,7 +13,7 @@ namespace proj {
                 stack<double>               _dt;
                 
                 // Stack of ancstral species added in the course of the proposal
-                stack<SMCGlobal::species_t> _speciations;
+                stack<tuple<unsigned, unsigned, SMCGlobal::species_t> > _speciations;
                 
                 // The index of the gene in which the proposed coalescence occurred
                 int                         _coal_gene;
@@ -69,6 +69,11 @@ namespace proj {
             void setBeginIndex(unsigned x) {_begin_index = x;}
 #endif
 
+#if defined(DEBUGGING_SANITY_CHECK)
+            void debugStoreForests();
+            void debugCheckForests();
+#endif
+
             double getLogWeight() const {return _log_weight;}
             
             Lot::SharedPtr getLot() const {return _lot;}
@@ -119,7 +124,12 @@ namespace proj {
             unsigned               _xtra;
             unsigned               _begin_index;
 #endif
-            
+
+#if defined(DEBUGGING_SANITY_CHECK)
+            string                  _debug_sfbefore;
+            vector<string>          _debug_gfbefore;
+#endif
+
             mutable double         _log_weight;
             mutable Lot::SharedPtr _lot;
     };
@@ -286,8 +296,12 @@ namespace proj {
         
         // Now reverse all speciation events, if there were any
         while (!proposal._speciations.empty()) {
-            SMCGlobal::species_t spp = proposal._speciations.top();
+            auto spptuple = proposal._speciations.top();
             proposal._speciations.pop();
+            
+            unsigned left_pos        = get<0>(spptuple);
+            unsigned right_pos       = get<1>(spptuple);
+            SMCGlobal::species_t spp = get<2>(spptuple);
             
             // Identify the nodes involved in the speciation event
             anc = _species_forest.findSpecies(spp);
@@ -297,11 +311,13 @@ namespace proj {
             rchild = lchild->_right_sib;
             assert(rchild);
             
+            assert(fabs(anc->getEdgeLength()) < 0.00001);
+            
             // Reverse the speciation join
             _species_forest.unjoinLineagePair(anc, lchild, rchild);
 
             // Update lineage vector
-            _species_forest.addTwoRemoveOne(_species_forest._lineages, lchild, rchild, anc);
+            _species_forest.addTwoRemoveOneAt(_species_forest._lineages, left_pos, lchild, right_pos, rchild, anc);
             
             // Return anc to the pool of unused nodes
             _species_forest.stowNode(anc);
@@ -313,6 +329,11 @@ namespace proj {
             advanceAllLineagesBy(-dt);
         }
         
+        //temporary!
+        //if (SMCGlobal::_debugging) {
+        //    output(format("species forest after reverting proposal:\n  %s\n") % _species_forest.makeNewick(9, true, false),2);
+        //}
+
         if (num_speciations > 0) {
             // Revert all nodes in all gene trees for which _prev_species_stack is non-empty
             for (auto & gf : _gene_forests) {
@@ -404,6 +425,11 @@ namespace proj {
         // If delta > Delta, then a speciation event happened; otherwise a coalescent event happened.
         bool is_speciation = (delta > Delta);
                 
+        //temporary!
+        //if (SMCGlobal::_debugging && is_speciation) {
+        //    output(format("species forest before speciation:\n  %s\n") % _species_forest.makeNewick(9, true, false),2);
+        //}
+
         // Advance all forests by increment dt
         double dt = is_speciation ? Delta : delta;
         advanceAllLineagesBy(dt);
@@ -422,13 +448,21 @@ namespace proj {
 
             // Pull next available node
             Node * anc = _species_forest.pullNode();
-
+            
             // The speciationEvent function joins two nodes chosen randomly and stores
             // the species involved in variables left_spp, right_spp, and anc_spp
-            _species_forest.speciationEvent(_lot, anc, left_spp, right_spp, anc_spp);
+            unsigned left_pos, right_pos;
+            _species_forest.speciationEvent(_lot, anc, left_pos, right_pos, left_spp, right_spp, anc_spp);
+            
+            //temporary!
+            //if (SMCGlobal::_debugging) {
+            //    output(format("species forest after speciation:\n  %s\n") % _species_forest.makeNewick(9, true, false),2);
+            //}
             
             // Record the species added to the species tree
-            proposal._speciations.push(anc_spp);
+            // left_pos and right_pos are needed to ensure that things get
+            // put back exactly the way they were when speciations are reverted
+            proposal._speciations.push(make_tuple(left_pos, right_pos, anc_spp));
                         
             // Advise all gene trees of the change in the species tree
             // Nodes that are reassigned save their previous state to
@@ -456,8 +490,10 @@ namespace proj {
                     return n*(n - 1.0)/(SMCGlobal::_theta*total_rate);
                 });
                 
+#if defined(DEBUGGING_SANITY_CHECK)
                 double check = accumulate(probs.begin(), probs.end(), 0.0);
                 assert(fabs(check - 1.0) < 0.0001);
+#endif
                 
 #else
                 // This is clearly incorrect
@@ -473,6 +509,7 @@ namespace proj {
                 
                 // Choose gene and species
                 unsigned             which = SMCGlobal::multinomialDraw(_lot, probs);
+                assert(which < probs.size());
                 unsigned                 g = get<1>(species_tuples[which]);
                 SMCGlobal::species_t   spp = get<2>(species_tuples[which]);
 
@@ -516,6 +553,26 @@ namespace proj {
             incrementSpeciations();
         }
     }
+
+#if defined(DEBUGGING_SANITY_CHECK)
+    inline void Particle::debugStoreForests() {
+        _debug_sfbefore = _species_forest.makeNewick(6,true,false);
+        _debug_gfbefore.clear();
+        for (auto gf : _gene_forests) {
+            _debug_gfbefore.push_back(gf.makeNewick(6,true,false));
+        }
+    }
+    
+    inline void Particle::debugCheckForests() {
+        string sfafter = _species_forest.makeNewick(6,true,false);
+        assert(_debug_sfbefore == sfafter);
+        unsigned g = 0;
+        for (auto gf : _gene_forests) {
+            string gfafter = gf.makeNewick(6,true,false);
+            assert(gfafter == _debug_gfbefore[g++]);
+        }
+    }
+#endif
 
     inline void Particle::refreshHeightsInternalsPreorders() {
         _species_forest.heightsInternalsPreorders();
