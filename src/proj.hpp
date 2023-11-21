@@ -82,6 +82,7 @@ namespace proj {
             void                        saveUniqueSpeciesTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts);
 
 #if defined(USING_MULTITHREADING)
+            void                        debugCheckThreadSchedule(const vector<pair<unsigned, unsigned> > & thread_schedule) const;
             void                        debugShowThreadSchedule(const vector<pair<unsigned, unsigned> > & thread_schedule, double percent_of_max_entropy) const;
             void                        divideLargestParticle();
             double                      buildThreadSchedule(vector<pair<unsigned, unsigned> > & thread_schedule);
@@ -131,10 +132,6 @@ namespace proj {
             double                      _ntries_theta;
             double                      _ntries_lambda;
             
-//#if defined(USING_MULTITHREADING)
-//            void threadSetSchedule();
-//#endif
-
 #if defined(USING_MPI)
             void mpiSetSchedule();
             vector<unsigned>            _mpi_first_particle;
@@ -1132,9 +1129,6 @@ namespace proj {
     inline void Proj::particleLoopMT(unsigned step, const vector<pair<unsigned, unsigned> > & thread_schedule, const vector<unsigned> & update_seeds) {
         //TODO: multithreading particle loop
 
-        //temporary!
-        //SMCGlobal::_debugging = true;
-
         vector<thread> threads;
         for (unsigned i = 0; i < SMCGlobal::_nthreads; i++) {
             threads.push_back(thread(&Proj::advanceParticleRange,
@@ -1150,9 +1144,6 @@ namespace proj {
         for (unsigned i = 0; i < threads.size(); i++) {
             threads[i].join();
         }
-        
-        //temporary!
-        //SMCGlobal::_debugging = false;
         
         //temporary!
         //for (unsigned i = 0; i < _nparticles; i++) {
@@ -1199,6 +1190,17 @@ namespace proj {
 #endif
 
 #if defined(USING_MULTITHREADING)
+    inline void Proj::debugCheckThreadSchedule(const vector<pair<unsigned, unsigned> > & thread_schedule) const {
+    
+        //auto it = _particle_list.begin();
+        //for (auto & p : thread_schedule) {
+        //    unsigned begin_particle  = p.first;
+        //    unsigned end_particle = p.second;
+        //    unsigned begin_index = it->getBeginIndex();
+        //}
+        // begin again here
+    }
+    
     inline void Proj::debugShowThreadSchedule(const vector<pair<unsigned, unsigned> > & thread_schedule, double percent_of_max_entropy) const {
         unsigned i = 0;
         auto it = _particle_list.begin();
@@ -1258,25 +1260,24 @@ namespace proj {
         unsigned current_thread = 0;
         pair<unsigned, unsigned> begin_end = make_pair(0,0);
         unsigned prefix_sum = 0;
+        unsigned max_count = (unsigned)floor(1.0*_nparticles/SMCGlobal::_nthreads);
         
         vector<unsigned> freqs(SMCGlobal::_nthreads, 0);
         for (auto & p : _particle_list) {
             // Add particle count to prefix sum
             unsigned count = p.getCount();
+            if (count > max_count) {
+                thread_schedule.clear();
+                return 0.0;
+            }
+            
             p.setBeginIndex(prefix_sum);
             prefix_sum += count;
-            
+                
             // Calculate thread index
             unsigned thread_index = (unsigned)floor(1.0*SMCGlobal::_nthreads*(prefix_sum - 1)/_nparticles);
             
             if (thread_index > current_thread) {
-                // If about to add a thread with zero particles, bail out because
-                // this means some particle counts are still too large
-                if (begin_end.second - begin_end.first == 0) {
-                    thread_schedule.clear();
-                    return 0.0;
-                }
-                
                 // Add thread to the schedule
                 thread_schedule.push_back(begin_end);
                 current_thread++;
@@ -1300,6 +1301,7 @@ namespace proj {
         entropy /= _nparticles;
         entropy += log(_nparticles);
         double percentage = 100.0*entropy/max_entropy;
+        assert(!isnan(percentage));
         
         return percentage;
     }
@@ -1586,12 +1588,6 @@ namespace proj {
                     //TODO: main step loop
                     stopwatch.start();
 
-                    //temporary!
-                    //if (step == 350) {
-                    //    SMCGlobal::_debugging = true;
-                    //    cerr << endl;
-                    //}
-                    
 #if defined(USING_MULTITHREADING)
                     vector<pair<unsigned, unsigned> > thread_schedule;
                     balanceThreads(thread_schedule);
