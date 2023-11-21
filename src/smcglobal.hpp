@@ -13,6 +13,7 @@ namespace proj {
         static unsigned                 _nthreads;
 #if defined(USING_MULTITHREADING)
         static mutex                    _mutex;
+        static mutex                    _gene_forest_clear_mutex;
         static mutex                    _debug_mutex;
 #endif
         

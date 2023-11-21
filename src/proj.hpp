@@ -1131,6 +1131,10 @@ namespace proj {
 #elif defined(USING_MULTITHREADING)
     inline void Proj::particleLoopMT(unsigned step, const vector<pair<unsigned, unsigned> > & thread_schedule, const vector<unsigned> & update_seeds) {
         //TODO: multithreading particle loop
+
+        //temporary!
+        //SMCGlobal::_debugging = true;
+
         vector<thread> threads;
         for (unsigned i = 0; i < SMCGlobal::_nthreads; i++) {
             threads.push_back(thread(&Proj::advanceParticleRange,
@@ -1146,6 +1150,9 @@ namespace proj {
         for (unsigned i = 0; i < threads.size(); i++) {
             threads[i].join();
         }
+        
+        //temporary!
+        //SMCGlobal::_debugging = false;
         
         //temporary!
         //for (unsigned i = 0; i < _nparticles; i++) {

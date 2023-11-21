@@ -92,6 +92,10 @@ namespace proj {
     }
     
     inline void GeneForest::clear() {
+#if defined(USING_MULTITHREADING)
+        lock_guard<mutex> guard(SMCGlobal::_gene_forest_clear_mutex);
+#endif
+        
         // Reset partial pointers for all nodes to decrement
         // their use counts. Note that any given partial may
         // still being used in some other particle, so we
@@ -738,15 +742,22 @@ namespace proj {
         {
             lock_guard<mutex> guard(SMCGlobal::_mutex);
             ps.putPartial(_gene_index, nd->_partial);
+            
+            // Decrement shared pointer reference count
+            nd->_partial.reset();
         }
 #else
         ps.putPartial(_gene_index, nd->_partial);
-#endif
+
         // Decrement shared pointer reference count
         nd->_partial.reset();
+#endif
     }
 
     inline void GeneForest::stowAllPartials() {
+#if defined(USING_MULTITHREADING)
+        lock_guard<mutex> guard(SMCGlobal::_gene_forest_clear_mutex);
+#endif
         for (auto & nd : _nodes) {
             // Stow partials belonging to internal nodes
             // Partials for leaf nodes should be reset but not stowed

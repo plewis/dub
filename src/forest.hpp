@@ -393,8 +393,9 @@ namespace proj {
         
         try {
             // Root node is the first one in the _nodes array
-            Node * nd   = &_nodes[_next_node_index];
-            Node * root = &_nodes[_next_node_index++];
+            assert(_next_node_index == 0);
+            Node * nd   = pullNode(); //&_nodes[_next_node_index];
+            Node * root = nd; //&_nodes[_next_node_index++];
             
             // The _lineages vector will have just one entry because
             // this will be a complete tree
@@ -547,9 +548,7 @@ namespace proj {
                         }
 
                         // Create the sibling
-                        if (_next_node_index == _nodes.size())
-                            throw XProj(str(format("Too many nodes specified by tree description (exceeds the %d nodes allocated for %d leaves)") % _nodes.size() % nleaves));
-                        nd->_right_sib = &_nodes[_next_node_index++];
+                        nd->_right_sib = pullNode(); //&_nodes[_next_node_index++];
                         nd->_right_sib->_parent = nd->_parent;
                         nd = nd->_right_sib;
                         previous = Prev_Tok_Comma;
@@ -563,9 +562,7 @@ namespace proj {
 
                         // Create new node above and to the left of the current node
                         assert(!nd->_left_child);
-                        if (_next_node_index == _nodes.size())
-                            throw XProj(str(format("malformed tree description (more than %d nodes specified)") % _nodes.size()));
-                        nd->_left_child = &_nodes[_next_node_index++];
+                        nd->_left_child = pullNode(); //&_nodes[_next_node_index++];
                         nd->_left_child->_parent = nd;
                         nd = nd->_left_child;
                         previous = Prev_Tok_LParen;
@@ -926,6 +923,10 @@ namespace proj {
     }
     
     inline Node * Forest::pullNode() {
+        if (_next_node_index == _nodes.size()) {
+            unsigned nleaves = 2*(isSpeciesForest() ? SMCGlobal::_nspecies : SMCGlobal::_ntaxa) - 1;
+            throw XProj(str(format("Forest::pullNode tried to return a node beyond the end of the _nodes vector (_next_node_index = %d equals %d nodes allocated for %d leaves)") % _next_node_index % _nodes.size() % nleaves));
+        }
         Node * new_nd = &_nodes[_next_node_index++];
         assert(!new_nd->_partial);
         new_nd->clear();
@@ -936,6 +937,7 @@ namespace proj {
     inline void Forest::stowNode(Node * nd) {
         _next_node_index--;
         _next_node_number--;
+        //TODO: next line trips on HPC using dubmt
         assert(nd == &_nodes[_next_node_index]);
         nd->clear();
     }

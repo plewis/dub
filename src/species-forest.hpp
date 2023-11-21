@@ -87,6 +87,7 @@ namespace proj {
             Node::setSpeciesBit(_nodes[i]._species, i, /*init_to_zero_first*/true);
             _lineages.push_back(&_nodes[i]);
         }
+        refreshAllPreorders();
         _forest_height = 0.0;
         _next_node_index = SMCGlobal::_nspecies;
         _next_node_number = SMCGlobal::_nspecies;

@@ -237,12 +237,16 @@ namespace proj {
         {
             lock_guard<mutex> guard(SMCGlobal::_mutex);
             ps.putPartial(gene, nd->_partial);
+
+            // Decrement shared pointer reference count
+            nd->_partial.reset();
         }
 #else
         ps.putPartial(gene, nd->_partial);
-#endif
+        
         // Decrement shared pointer reference count
         nd->_partial.reset();
+#endif
     }
 
     inline void Particle::finalizeProposal(CoalProposal & proposal) {

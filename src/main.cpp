@@ -124,12 +124,13 @@ bool                                SMCGlobal::_debugging       = false;
 unsigned                            SMCGlobal::_nthreads        = 1;
 #if defined(USING_MULTITHREADING)
 mutex                               SMCGlobal::_mutex;
+mutex                               SMCGlobal::_gene_forest_clear_mutex;
 mutex                               SMCGlobal::_debug_mutex;
 //vector<unsigned>                    SMCGlobal::_thread_first_gene;
 //vector<unsigned>                    SMCGlobal::_thread_last_gene;
 #endif
 
-unsigned                            SMCGlobal::_verbosity = 0;
+unsigned                            SMCGlobal::_verbosity          = 3;
 
 unsigned                            SMCGlobal::_nstates            = 4;
 
