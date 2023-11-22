@@ -120,6 +120,8 @@ namespace proj {
             
             list<Particle>              _particle_list;
             vector<double>              _log_weights;
+
+            double                      _log_marg_like;
             
             map<string, double>         _relrate_map;
             
@@ -178,6 +180,7 @@ namespace proj {
         _ntries_lambda = 100;
         
         _nparticles = 1000;
+        _log_marg_like = 0.0;
     }
 
     inline void Proj::processCommandLineOptions(int argc, const char * argv[]) {
@@ -790,7 +793,7 @@ namespace proj {
         transform(log_weights.begin(), log_weights.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
         
         // Compute component of the log marginal likelihood
-        //log_marg_like += log_sum_weights - log(nparticles);
+        _log_marg_like += log_sum_weights - log(_nparticles);
         
         // Compute effective sample size
         double ess = computeEffectiveSampleSize(probs);
@@ -945,14 +948,28 @@ namespace proj {
     }
     
     inline void Proj::saveAllSpeciesTrees(string fn, const list<Particle> particle_list) {
-        vector<tuple<unsigned, double, string, string, string> > treeinfo;
-        unsigned i = 0;
+        map<string,unsigned> tree_map;
+        auto it = tree_map.begin();
         for (const Particle & p : particle_list) {
             unsigned c = p.getCount();
+            string newick = p.getSpeciesForest().makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
+            try {
+                unsigned curr = tree_map.at(newick);
+                tree_map[newick] += c;
+            }
+            catch(const out_of_range &) {
+                tree_map[newick] = c;
+            }
+        }
+        
+        vector<tuple<unsigned, double, string, string, string> > treeinfo;
+        unsigned i = 0;
+        for (auto it = tree_map.begin(); it != tree_map.end(); ++it) {
+            const string & newick = it->first;
+            unsigned c = it->second;
             double pct = 100.0*c/_nparticles;
             string note = str(format("freq = %d") % c);
             string treename = str(format("'tree%d-freq%d'") % i % c);
-            string newick = p.getSpeciesForest().makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
             treeinfo.push_back(make_tuple(c, pct, note, treename, newick));
             ++i;
         }
@@ -1583,6 +1600,7 @@ namespace proj {
                 //output(format("\n%12s %12s %12s %12s %12s %12s %12s %12s %12s\n") % "Step" % "before" % "after" % "ESS" % "minlogwt" % "maxlogwt" % "partials" % "secs" % "wait", 2);
                 output(format("\n%12s %12s %12s %12s %12s %12s %12s %12s\n") % "Step" % "ESS" % "minlogwt" % "maxlogwt" % "in-use" % "stored" % "secs" % "wait", 2);
                 
+                _log_marg_like = 0.0;
                 double cum_secs = 0.0;
                 for (unsigned step = 0; step < nsteps; ++step) {
                     //TODO: main step loop
@@ -1646,6 +1664,7 @@ namespace proj {
                     //}
                 }
                 
+                output(format("log(marginal likelihood) = %.6f\n") % _log_marg_like, 1);
                 output("\nSpecies trees saved to file \"final-species-trees.tre\"\n", 1);
                 saveAllSpeciesTrees("final-species-trees.tre", _particle_list);
                 
