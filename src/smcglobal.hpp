@@ -6,7 +6,6 @@ namespace proj {
 
     struct SMCGlobal {
         typedef unsigned long                       species_t;
-        typedef tuple<unsigned, unsigned, species_t>  species_tuple_t;
         
         static bool                     _debugging;
 
@@ -44,7 +43,7 @@ namespace proj {
         static bool                     _update_theta;
         static bool                     _update_lambda;
         
-        static bool                     _prior_prior;
+        static bool                     _prior_post;
         
         static double                   _small_enough;
         static double                   _infinity;

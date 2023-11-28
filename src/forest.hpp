@@ -15,31 +15,34 @@ namespace proj {
         
         public:
         
-                            Forest();
-                            ~Forest();
+                                Forest();
+                                ~Forest();
                 
-            virtual void    clear();
-            double          getPrevHeight() const;
-            double          getHeight() const;
-            unsigned        getNumLineages() const;
+            virtual void        clear();
+            double              getPrevHeight() const;
+            double              getHeight() const;
+            unsigned            getNumLineages() const;
                         
-            static void     readTreefile(const string filename,
+            static void         readTreefile(const string filename,
                                         unsigned skip,
                                         const vector<string> & leaf_names,
                                         map<unsigned,unsigned> & taxon_map,
                                         vector<string> & names,
                                         vector<string> & newicks);
                                         
-            string          makeNewick(unsigned precision = 6,
+            string              makeNewick(unsigned precision = 6,
                                         bool use_names = true,
                                         bool coalunits = false) const;
-            void            buildFromNewick(const string newick);
+            void                buildFromNewick(const string newick);
             
-            unsigned        advanceAllLineagesBy(double t);
-            void            heightsInternalsPreorders();
+            unsigned            advanceAllLineagesBy(double t);
+            void                heightsInternalsPreorders();
             
-            virtual void    createTrivialForest(bool compute_partials) = 0;
-            virtual bool    isSpeciesForest() const = 0;
+            virtual void        clearMark() = 0;
+            virtual void        revertToMark() = 0;
+            virtual void        finalizeProposal() = 0;
+            virtual void        createTrivialForest(bool compute_partials) = 0;
+            virtual bool        isSpeciesForest() const = 0;
 
         protected:
         
@@ -79,6 +82,11 @@ namespace proj {
             double                  _log_species_tree_prior;
             vector<Node>            _nodes;
             Node::ptr_vect_t        _lineages;
+            
+            // Not copied in operator because it should be empty when particles are copied
+            stack<double>                       _mark_increments;
+            stack<Node *>                       _mark_anc_nodes;
+            stack<pair<unsigned, unsigned> >    _mark_left_right_pos;
                                     
             // Because these can be recalulated at any time, they should not
             // affect the const status of the Forest object
@@ -169,7 +177,7 @@ namespace proj {
     inline void Forest::setSpeciesFromNodeName(Node * nd) {
         try {
             Node::setSpeciesBit(nd->_species, SMCGlobal::_taxon_to_species.at(nd->_name), /*init_to_zero_first*/true);
-        } catch(const out_of_range & oor) {
+        } catch(const out_of_range &) {
             throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % nd->_name));
         }
     }
@@ -895,8 +903,10 @@ namespace proj {
             
     inline unsigned Forest::advanceAllLineagesBy(double dt) {
         // Note: dt may be negative
-        assert(dt != SMCGlobal::_infinity);
-        
+        if (dt > 0.0) {
+            _mark_increments.push(dt);
+        }
+                
         // Add t to the edge length of all lineage root nodes, unless there
         // is just one lineage, in which case do nothing
         unsigned n = (unsigned)_lineages.size();

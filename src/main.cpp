@@ -163,7 +163,7 @@ static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in orde
 double                              SMCGlobal::_infinity = numeric_limits<double>::infinity();
 double                              SMCGlobal::_negative_infinity = -numeric_limits<double>::infinity();
 
-bool                                SMCGlobal::_prior_prior        = true;
+bool                                SMCGlobal::_prior_post        = false;
 
 PartialStore::leaf_partials_t       GeneForest::_leaf_partials;
 

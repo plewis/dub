@@ -21,7 +21,7 @@ namespace proj {
             pair<bool,double> advanceGeneForest(unsigned step,
                                                 unsigned particle,
                                                 bool simulating);
-            void simulateData(Data::SharedPtr data,
+            void simulateData(Lot::SharedPtr lot, Data::SharedPtr data,
                                 unsigned starting_site,
                                 unsigned nsites);
             
@@ -41,14 +41,18 @@ namespace proj {
 
             string lineagesWithinSpeciesKeyError(SMCGlobal::species_t spp);
 
-            double calcTotalRate(vector<SMCGlobal::species_tuple_t> & species_tuples, double speciation_increment);
-            double coalescentEvent(Lot::SharedPtr lot, SMCGlobal::species_t spp, Node * anc, bool compute_partial, bool make_permanent);
+            double calcTotalRate(vector<Node::species_tuple_t> & species_tuples, double speciation_increment);
+            double coalescentEventPriorPrior(Lot::SharedPtr lot, SMCGlobal::species_t spp, Node * anc, unsigned & first_index, unsigned & second_index, bool compute_partial);
+            double coalescentEventPriorPost(Lot::SharedPtr lot, SMCGlobal::species_t spp, Node * anc, unsigned & first_index, unsigned & second_index);
             void mergeSpecies(SMCGlobal::species_t left_species, SMCGlobal::species_t right_species, SMCGlobal::species_t anc_species);
             
             // Overrides of base class functions
             void clear();
             
             // Overrides of abstract base class functions
+            void clearMark();
+            void revertToMark();
+            void finalizeProposal();
             void createTrivialForest(bool compute_partials = true);
             bool isSpeciesForest() const {return false;}
             
@@ -109,6 +113,89 @@ namespace proj {
         _lineages_within_species.clear();
     }
 
+    inline void GeneForest::clearMark() {
+        // Clear the stacks so that future coalescent events can be recorded
+        _mark_increments = {};
+        _mark_anc_nodes = {};
+        _mark_left_right_pos = {};
+    }
+    
+    inline void GeneForest::revertToMark() {
+        if (!_mark_anc_nodes.empty()) {
+            // Identify the nodes involved in the coalescent event
+            Node * anc = _mark_anc_nodes.top();
+            _mark_anc_nodes.pop();
+            assert(anc);
+
+            Node * lchild = anc->_left_child;
+            assert(lchild);
+
+            Node * rchild = lchild->_right_sib;
+            assert(rchild);
+
+            // Return partial to be reused next time
+            stowPartial(anc);
+
+            // Reverse the coalescence join
+            unjoinLineagePair(anc, lchild, rchild);
+            stowNode(anc);
+            anc = nullptr;
+        }
+
+        if (!_mark_increments.empty()) {
+            // Reverse the increment associated with the coalescent event
+            // as well as any increments associated with speciation events
+            double dt = 0.0;
+            while (!_mark_increments.empty()) {
+                dt += _mark_increments.top();
+                _mark_increments.pop();
+            }
+
+            advanceAllLineagesBy(-dt);
+        }
+        
+        for (auto & nd : _nodes) {
+            nd.revertSpecies();
+        }
+        
+    }
+    
+    inline void GeneForest::finalizeProposal() {
+        // If this gene forest was the one in which the coalescent event occurred,
+        // make the coalescent event permanent by modifying _lineages and
+        // _lineages_within_species
+        if (!_mark_anc_nodes.empty()) {
+            Node * anc_node = _mark_anc_nodes.top();
+            _mark_anc_nodes.pop();
+            assert(anc_node);
+            SMCGlobal::species_t spp = anc_node->getSpecies();
+            
+            // Empty anc_node's _prev_species_stack since this will be a permanent change
+            anc_node->emptyPrevSpeciesStack();
+            
+            Node * first_node = anc_node->getLeftChild();
+            assert(first_node);
+
+            Node * second_node = first_node->getRightSib();
+            assert(second_node);
+
+            // Update lineage vector since this will be a permanent change
+            try {
+                removeTwoAddOne(_lineages_within_species.at(spp), first_node, second_node, anc_node);
+            } catch(const out_of_range &) {
+                throw XProj(lineagesWithinSpeciesKeyError(spp));
+            }
+            removeTwoAddOne(_lineages, first_node, second_node, anc_node);
+            refreshAllPreorders();
+        }
+    
+        // Empty the _prev_species_stack
+        for (auto & nd : _nodes) {
+            nd.emptyPrevSpeciesStack();
+        }
+        clearMark();
+    }
+    
     inline void GeneForest::debugCheckPartials(bool verbose) const {
         double tmp = 0.0;
         if (_preorders.size() == 0) {
@@ -181,7 +268,7 @@ namespace proj {
         _gene_index = i;
     }
     
-    inline double GeneForest::calcTotalRate(vector<SMCGlobal::species_tuple_t> & species_tuples, double speciation_increment) {
+    inline double GeneForest::calcTotalRate(vector<Node::species_tuple_t> & species_tuples, double speciation_increment) {
         double total_rate = 0.0;
         
         // Build _lineages_within_species, a map that provides a vector
@@ -190,10 +277,11 @@ namespace proj {
 
         for (auto & kvpair : _lineages_within_species) {
             // Get number of lineages in this species
-            double n = (double)kvpair.second.size();
+            unsigned n = (unsigned)kvpair.second.size();
             if (n > 1) {
-                total_rate += n*(n-1)/SMCGlobal::_theta;
-                species_tuples.push_back(make_tuple(n, _gene_index, kvpair.first));
+                total_rate += 1.0*n*(n-1)/SMCGlobal::_theta;
+                Node::species_tuple_t x = make_tuple(n, _gene_index, kvpair.first, kvpair.second);
+                species_tuples.push_back(x);
             }
         }
         
@@ -214,9 +302,10 @@ namespace proj {
         return msg;
     }
 
-    inline double GeneForest::coalescentEvent(Lot::SharedPtr lot, SMCGlobal::species_t spp, Node * anc_node, bool compute_partial, bool make_permanent) {
+    inline double GeneForest::coalescentEventPriorPrior(Lot::SharedPtr lot, SMCGlobal::species_t spp, Node * anc_node, unsigned & first_index, unsigned & second_index, bool compute_partial) {
         double log_weight = 0.0;
-        
+
+#if 0
         // Get vector of nodes in the specified species spp
         unsigned i = 0;
         unsigned j = 0;
@@ -232,12 +321,16 @@ namespace proj {
             i = chosen_pair.first;
             j = chosen_pair.second;
             
+            // Return the chosen pair in the supplied reference variables
+            first_index = i;
+            second_index = j;
+            
             // Join the chosen pair of lineages
             first_node  = node_vect[i];
             second_node = node_vect[j];
             joinLineagePair(anc_node, first_node, second_node);
         }
-        catch (const out_of_range & oor) {
+        catch (const out_of_range &) {
             throw XProj(lineagesWithinSpeciesKeyError(spp));
         }
 
@@ -257,24 +350,164 @@ namespace proj {
             assert(!isnan(log_weight));
             assert(!isinf(log_weight));
         }
-        if (make_permanent) {
-            // Empty anc_node's _prev_species_stack since this will be a permanent change
-            anc_node->emptyPrevSpeciesStack();
         
-            // Update lineage vector since this will be a permanent change
+        _mark_anc_nodes.push(anc_node);
+        _mark_left_right_pos.push(make_pair(first_index, second_index));
+#endif
+        return log_weight;
+    }
+    
+    inline double GeneForest::coalescentEventPriorPost(Lot::SharedPtr lot, SMCGlobal::species_t spp, Node * anc_node, unsigned & first_index, unsigned & second_index) {
+        assert(_data);
+        double log_weight = 0.0;
+#if 0
+        Node * first_node = nullptr;
+        Node * second_node = nullptr;
+        
+        if (first_index != second_index) {
+            // Just join nodes first_index and second_index in species spp
+            
             try {
-                removeTwoAddOne(_lineages_within_species.at(spp), first_node, second_node, anc_node);
-            } catch(const out_of_range & oor) {
+                // Get vector of nodes in the specified species spp
+                auto & node_vect = _lineages_within_species.at(spp);
+                unsigned n = (unsigned)node_vect.size();
+                assert(n > 1);
+                
+                // Sanity checks: first_index and second_index should have
+                // been assigned correct values before calling this function
+                assert(first_index < n);
+                assert(second_index < n);
+                
+                first_node  = node_vect[first_index];
+                second_node = node_vect[second_index];
+
+                // Coalescent events should not cross species boundaries
+                assert(first_node->getSpecies() == spp);
+                assert(second_node->getSpecies() == spp);
+                
+                joinLineagePair(anc_node, first_node, second_node);
+
+                double logw = calcPartialArray(anc_node);
+                assert(!isnan(logw));
+                assert(!isinf(logw));
+
+                anc_node->setSpecies(spp);
+
+                // Empty anc_node's _prev_species_stack since this will be a permanent change
+                anc_node->emptyPrevSpeciesStack();
+            
+                // Update lineage vector since this will be a permanent change
+                try {
+                    removeTwoAddOne(_lineages_within_species.at(spp), first_node, second_node, anc_node);
+                } catch(const out_of_range &) {
+                    throw XProj(lineagesWithinSpeciesKeyError(spp));
+                }
+                removeTwoAddOne(_lineages, first_node, second_node, anc_node);
+                refreshAllPreorders();
+            }
+            catch (const out_of_range &) {
                 throw XProj(lineagesWithinSpeciesKeyError(spp));
             }
-            removeTwoAddOne(_lineages, first_node, second_node, anc_node);
-            refreshAllPreorders();
-            
+                        
 #if defined(DEBUGGING_SANITY_CHECK)
             debugCheckPartials();
 #endif
         }
-        
+        else {
+            // first_index == second_index, which means these indices were not
+            // supplied and thus should be determined and returned
+            try {
+                // Get vector of nodes in the specified species spp
+                auto & node_vect = _lineages_within_species.at(spp);
+                unsigned n = (unsigned)node_vect.size();
+                assert(n > 1);
+                
+                // Visit each possible pair of nodes to join and compute
+                // log weight of that join
+                unsigned npairs = n*(n-1)/2;
+                vector<double> log_weights(npairs, 0.0);
+                vector<pair<unsigned, unsigned> > ijpairs(npairs);
+                unsigned pair_index = 0;
+                for (unsigned i = 0; i < n - 1; i++) {
+                    for (unsigned j = i + 1; j < n; j++) {
+                        ijpairs[pair_index] = make_pair(i,j);
+                        
+                        // Join the chosen pair of lineages
+                        first_node  = node_vect[i];
+                        second_node = node_vect[j];
+
+                        // Coalescent events should not cross species boundaries
+                        assert(first_node->getSpecies() == spp);
+                        assert(second_node->getSpecies() == spp);
+                        
+                        joinLineagePair(anc_node, first_node, second_node);
+
+                        // Compute partial likelihood array of ancestral node
+                        assert(anc_node->_left_child);
+                        assert(anc_node->_left_child->_right_sib);
+                        assert(anc_node->_partial);
+
+                        double logw = calcPartialArray(anc_node);
+                        assert(!isnan(logw));
+                        assert(!isinf(logw));
+                        log_weights[pair_index] = logw;
+                        
+                        // Unjoin the chosen pair of lineages
+                        unjoinLineagePair(anc_node, first_node, second_node);
+                        
+                        pair_index++;
+                    }
+                }
+                
+                // Compute log of sum of weights
+                double sum_log_weights = SMCGlobal::calcLogSum(log_weights);
+                
+                //temporary!
+                //if (sum_log_weights == 0.0) {
+                //    //lock_guard<mutex> guard(SMCGlobal::_debug_mutex);
+                //    cerr << "sum_log_weights == 0.0 in coalescentEventPriorPost" << endl;
+                //    cerr << str(format("  gene = %d") % _gene_index) << endl;
+                //    cerr << str(format("  spp = %d") % spp) << endl;
+                //    cerr << str(format("  n = %d") % n) << endl;
+                //    cerr << "  log_weights:" << endl;
+                //    for (auto logw : log_weights) {
+                //        cerr << str(format("  %12.9f") % logw) << endl;
+                //    }
+                //}
+                      
+                // Create multinomial probability distribution by normalizing
+                // the log weights
+                vector<double> probs(npairs, 0.0);
+                transform(log_weights.begin(), log_weights.end(), probs.begin(), [sum_log_weights](double logw){return exp(logw - sum_log_weights);});
+                
+                // Choose one pair
+                unsigned which_pair = SMCGlobal::multinomialDraw(lot, probs);
+                auto chosen_pair = ijpairs[which_pair];
+                first_index = chosen_pair.first;
+                second_index = chosen_pair.second;
+                log_weight = sum_log_weights;
+
+                // Join the chosen pair of lineages
+                first_node  = node_vect[first_index];
+                second_node = node_vect[second_index];
+                joinLineagePair(anc_node, first_node, second_node);
+                
+                anc_node->setSpecies(spp);
+
+                // Recalculate partial for anc_node
+                //TODO: try to remove this if possible
+                double logw = calcPartialArray(anc_node);
+                assert(!isnan(logw));
+                assert(!isinf(logw));
+                
+                //temporary!
+                //cerr << "logw for chosen prior-post pair = " << logw << endl;
+            }
+            catch (const out_of_range & ) {
+                throw XProj(lineagesWithinSpeciesKeyError(spp));
+            }
+        } // if make_permanent ... else ...
+#endif
         return log_weight;
     }
     
@@ -295,7 +528,7 @@ namespace proj {
         for_each(_lineages.begin(), _lineages.end(), reassign);
     }
     
-    inline void GeneForest::simulateData(Data::SharedPtr data, unsigned starting_site, unsigned nsites) {
+    inline void GeneForest::simulateData(Lot::SharedPtr lot, Data::SharedPtr data, unsigned starting_site, unsigned nsites) {
         
 #if !defined(USE_JUKE_CANTOR_MODEL)
 #   error Must define USE_JUKE_CANTOR_MODEL as that is the only model currently implemented
@@ -324,7 +557,7 @@ namespace proj {
         unsigned ndnum = nd->_number;
         assert(ndnum < nnodes);
         for (unsigned i = 0; i < nsites; i++) {
-            sequences[ndnum][i] = rng.randint(0,3);
+            sequences[ndnum][i] = lot->randint(0,3);
         }
         
         nd = findNextPreorder(nd);
@@ -341,7 +574,7 @@ namespace proj {
             for (unsigned i = 0; i < nsites; i++) {
                 unsigned from_state = sequences[parnum][i];
                 double cum_prob = 0.0;
-                double u = rng.uniform();
+                double u = lot->uniform();
                 for (unsigned to_state = 0; to_state < 4; to_state++) {
                     cum_prob += calcTransitionProbability(from_state, to_state, nd->_edge_length);
                     if (u < cum_prob) {
@@ -388,7 +621,7 @@ namespace proj {
             _nodes[i]._height = 0.0;
             try {
                 Node::setSpeciesBit(_nodes[i]._species, SMCGlobal::_taxon_to_species.at(taxon_name), /*init_to_zero_first*/true);
-            } catch(const out_of_range & oor) {
+            } catch(const out_of_range &) {
                 throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % taxon_name));
             }
             if (compute_partials) {

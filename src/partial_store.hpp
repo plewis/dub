@@ -42,11 +42,6 @@ namespace proj {
     }
     
     inline Partial::~Partial() {
-        //temporary!
-        //if (SMCGlobal::_debugging) {
-        //    cerr << "partial being destroyed" << endl;
-        //}
-    
 #if defined(LOG_MEMORY)
         _ndestroyed[_g]++;
 #endif

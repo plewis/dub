@@ -25,6 +25,7 @@ namespace proj {
                                         ~Node();
 
                     typedef vector<Node *>  ptr_vect_t;
+                    typedef tuple<unsigned, unsigned, SMCGlobal::species_t, Node::ptr_vect_t>  species_tuple_t; // no. lineages, gene locus, spp, vector of node pointers
         
                     Node *              getParent()                 {return _parent;}
                     const Node *        getParent() const           {return _parent;}

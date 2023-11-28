@@ -12,11 +12,8 @@ namespace proj {
         
             SpeciesForest();
              ~SpeciesForest();
-            
-            void speciationEvent(Lot::SharedPtr lot, Node * anc_node, unsigned & left_pos, unsigned & right_pos, SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc);
-            //POLTMP unsigned getNumNewSpeciationEvents() const;
-            //POLTMP unsigned revertAllSpeciationEvents();
-            //void simulateSpeciesTree();
+             
+            void speciationEvent(Lot::SharedPtr lot, SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc);
             
             Node * findSpecies(SMCGlobal::species_t spp);
 
@@ -24,8 +21,11 @@ namespace proj {
             void clear();
             
             // Overrides of abstract base class functions
-            void    createTrivialForest(bool compute_partials = false);
-            bool    isSpeciesForest() const {return true;}
+            void clearMark();
+            void revertToMark();
+            void finalizeProposal();
+            void createTrivialForest(bool compute_partials = false);
+            bool isSpeciesForest() const {return true;}
 
             pair<double,double> drawIncrement(Lot::SharedPtr lot);
             double calcLogSpeciesTreeDensity(double lambda) const;
@@ -37,7 +37,6 @@ namespace proj {
             double advanceSpeciesForest(unsigned particle, unsigned step);
             
             // NOTE: any variables added must be copied in operator=
-            //POLTMP stack<tuple<Node *, Node *, Node *> > _node_stack;
     };
     
     inline SpeciesForest::SpeciesForest() {
@@ -50,7 +49,7 @@ namespace proj {
     inline void SpeciesForest::clear() {
         Forest::clear();
     }
-    
+        
     inline Node * SpeciesForest::findSpecies(SMCGlobal::species_t spp) {
         Node * the_node = nullptr;
         for (auto nd : _lineages) {
@@ -130,362 +129,112 @@ namespace proj {
         
         return log_prob_density;
     }
+            
+    inline void SpeciesForest::clearMark() {
+        // Clear the stacks so that future speciation events can be recorded
+        _mark_increments = {};
+        _mark_anc_nodes = {};
+        _mark_left_right_pos = {};
+    }
+    
+    inline void SpeciesForest::revertToMark() {
+        // Should be one increment corresponding to the coalescent event
+        assert(!_mark_increments.empty());
+        double dt = _mark_increments.top();
+        _mark_increments.pop();
+        advanceAllLineagesBy(-dt);
         
-    //inline void SpeciesForest::createFromTree(Tree::SharedPtr t) {
-    //    // Assumes leaf numbers in t are indices into the GeneForest::_species_names vector
-    //    createTrivialForest();
-    //    for (Node * nd : boost::adaptors::reverse(t->_preorder)) {
-    //        unsigned num = nd->getNumber();
-    //        Node * lchild = nd->getLeftChild();
-    //        unsigned lnum = lchild->getNumber();
-    //        if (lchild) {
-    //            // internal
-    //            Node * rchild = lchild->getRightSib();
-    //            unsigned rnum = rchild->getNumber();
-    //            _nodes[num]._left_child = &_nodes[lnum];
-    //            _nodes[lnum]._right_sib = &_nodes[rnum];
-    //            _nodes[lnum]._parent = &_nodes[num];
-    //            _nodes[rnum]._parent = &_nodes[num];
-    //            _nodes[lnum]._edge_length = lchild->getEdgeLength();
-    //            _nodes[rnum]._edge_length = rchild->getEdgeLength();
-    //        }
-    //        else {
-    //            // leaf
-    //            assert(nd->getName() == GeneForest::_species_names[num]);
-    //        }
-    //    }
-    //}
+        assert(_mark_left_right_pos.size() == _mark_anc_nodes.size());
+        
+        while (!_mark_left_right_pos.empty()) {
+            pair<unsigned, unsigned> p = _mark_left_right_pos.top();
+            _mark_left_right_pos.pop();
+            unsigned left_pos  = p.first;
+            unsigned right_pos = p.second;
+            
+            // Get pointer to ancestral node representing the speciation event
+            Node * anc = _mark_anc_nodes.top();
+            _mark_anc_nodes.pop();
+            
+            assert(anc);
+            assert(fabs(anc->getEdgeLength()) < 0.00001);
+            
+            // Get pointer to ancestral node's left child
+            SMCGlobal::species_t spp = anc->getSpecies();
+            Node * lchild = anc->getLeftChild();
+            assert(lchild);
+
+            // Get pointer to ancestral node's right child
+            Node * rchild = lchild->getRightSib();
+            rchild = lchild->_right_sib;
+            assert(rchild);
+            
+            // Reverse the speciation join
+            unjoinLineagePair(anc, lchild, rchild);
+            
+            // Update lineage vector
+            addTwoRemoveOneAt(_lineages, left_pos, lchild, right_pos, rchild, anc);
+
+            // Return anc to the pool of unused nodes
+            stowNode(anc);
+            anc = nullptr;
+            
+            // Remove increment associated with this speciation event
+            double dt = _mark_increments.top();
+            _mark_increments.pop();
+            advanceAllLineagesBy(-dt);
+        }
+        assert(_mark_increments.empty());
+    }
     
-    //POLTMP inline unsigned SpeciesForest::getNumNewSpeciationEvents() const {
-    //POLTMP    return (unsigned)_node_stack.size();
-    //POLTMP}
+    inline void SpeciesForest::finalizeProposal() {
+        // Empty the _prev_species_stack for all nodes in the species tree
+        for (auto & nd : _nodes) {
+            nd.emptyPrevSpeciesStack();
+        }
+        clearMark();
+    }
     
-    //POLTMP inline unsigned SpeciesForest::revertAllSpeciationEvents() {
-    //POLTMP     unsigned num_speciations = (unsigned)_node_stack.size();
-    //POLTMP     while (!_node_stack.empty()) {
-    //POLTMP         // Get lineages involved in previous join
-    //POLTMP         auto & node_tuple  = _node_stack.top();
-    //POLTMP         Node * first_node  = get<0>(node_tuple);
-    //POLTMP         Node * second_node = get<1>(node_tuple);
-    //POLTMP         Node * anc_node    = get<2>(node_tuple);
-    //POLTMP
-    //POLTMP         // Unjoin them
-    //POLTMP         unjoinLineagePair(anc_node, first_node, second_node);
-    //POLTMP
-    //POLTMP         // Update lineage vector
-    //POLTMP         addTwoRemoveOne(_lineages, first_node, second_node, anc_node);
-    //POLTMP
-    //POLTMP         anc_node = nullptr;
-    //POLTMP         _node_stack.pop();
-    //POLTMP     }
-    //POLTMP     return num_speciations;
-    //POLTMP }
-    
-    inline void SpeciesForest::speciationEvent(Lot::SharedPtr lot, Node * anc_node, unsigned & left_pos, unsigned & right_pos, SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc) {
+    inline void SpeciesForest::speciationEvent(Lot::SharedPtr lot, SMCGlobal::species_t & left_spp, SMCGlobal::species_t & right_spp, SMCGlobal::species_t & anc_spp) {
         //TODO: SpeciesForest::speciationEvent
         unsigned nlineages = (unsigned)_lineages.size();
         
         // Choose two lineages to join
         assert(nlineages > 1);
         auto chosen_pair = lot->nchoose2(nlineages);
-        left_pos = chosen_pair.first;
-        right_pos = chosen_pair.second;
+        unsigned left_pos = chosen_pair.first;
+        unsigned right_pos = chosen_pair.second;
         Node * first_node  = _lineages[left_pos];
         Node * second_node = _lineages[right_pos];
         
         // Get species for the two lineages to join
-        SMCGlobal::species_t spp1 = first_node->getSpecies();
-        SMCGlobal::species_t spp2 = second_node->getSpecies();
+        left_spp = first_node->getSpecies();
+        right_spp = second_node->getSpecies();
 
         // Create ancestral node
+        Node * anc_node = pullNode();
         joinLineagePair(anc_node, first_node, second_node);
-        anc_node->setSpeciesToUnion(spp1, spp2);
+        anc_node->setSpeciesToUnion(left_spp, right_spp);
 
         // Get species for the new ancestral node
-        SMCGlobal::species_t spp3 = anc_node->getSpecies();
+        anc_spp = anc_node->getSpecies();
         
-        // Update lineage vector
+        // Update _lineages vector
         removeTwoAddOne(_lineages, first_node, second_node, anc_node);
         refreshAllPreorders();
-                
-        // Return species joined in supplied reference variables
-        left  = spp1;
-        right = spp2;
-        anc   = spp3;
+        
+        // Save info needed to revert
+        _mark_anc_nodes.push(anc_node);
+        _mark_left_right_pos.push(make_pair(left_pos, right_pos));
     }
-    
-//    inline void SpeciesForest::simulateSpeciesTree() {
-//        createTrivialForest();
-//        unsigned nsteps = SMCGlobal::_nspecies - 1;
-//        for (unsigned i = 0; i < nsteps; ++i) {
-//            unsigned nlineages = (unsigned)_lineages.size();
-//            assert(nlineages > 1);
-//
-//            // Choose waiting time until the next speciation event
-//            double u = rng.uniform();
-//            double r = SMCGlobal::_lambda*nlineages;
-//            double t = -log(1.0 - u)/r;
-//
-//            // Increment height of forest
-//            _forest_height += t;
-//
-//            // Update edge lengths
-//            for (auto nd : _lineages)
-//                nd->_edge_length += t;
-//
-//            // Choose two lineages to join
-//            auto chosen_pair = rng.nchoose2(nlineages);
-//
-//            Node * first_node  = _lineages[chosen_pair.first];
-//            Node * second_node = _lineages[chosen_pair.second];
-//            Node * anc_node    = joinLineagePair(first_node, second_node);
-//            anc_node->setSpeciesToUnion(first_node->getSpecies(), second_node->getSpecies());
-//
-//            // Update lineage vector
-//            removeTwoAddOne(_lineages, first_node, second_node, anc_node);
-//        }
-//
-//        heightsInternalsPreorders();
-//    }
-    
-    inline double SpeciesForest::advanceSpeciesForest(unsigned particle, unsigned step) {
-#if 0
-//        // Advances species forest by one join given the current gene trees.
-//        // Also adds to _log_species_tree_prior.
-//        //
-//        // Step 0
-//        //    <------ gene tree 0 ---->      <------ gene tree 1 ---->
-//        //
-//        //    0   0   1   1   1   2   2      0   0   1   1   1   2   2  0   _
-//        //    |   |   |   |   |   |   |      |   |   |   |   |   |   |  1   |
-//        //    |   |   |   |   |   |   |      +-0-+   |   |   |   |   |  2   | first speciation event must
-//        //    +-0-+   |   |   |   |   |        |     +-1-+   |   |   |  3   | occur in this interval,
-//        //      |     |   |   |   |   |        |       |     |   |   |  4   | regardless of the species
-//        //      |     |   +-1-+   |   |        |       |     |   |   |  5   | joined
-//        //      |     |     |     +-2-+        |       |     +1,2+   |  6   -
-//        //      |     +--1--+       |          |       |       |     |  7
-//        //      |        |          |          |       +--1,2--+     |  8
-//        //      |        |          |          |           |         |  9
-//        //      |        |          |          |           |         | 10
-//        //      +---0,1--+          |          |           |         | 11
-//        //           |              |          +-- 0,1,2---+         | 12
-//        //           |              |                |               | 13
-//        //           |              |                |               | 14
-//        //           +-----0,1,2----+                |               | 15
-//        //                                           |               | 16
-//        //                                           +-----0,1,2-----+ 17
-//        //  _species_tree._epochs:
-//        //     type   height  gene    species
-//        //       I       -1      0              <-- these entries are used to
-//        //       I       -1      1              <-- initialize lineage counts
-//        //       C        2      1    0
-//        //       C        3      0    0
-//        //       C        3      1    1
-//        //       C        5      0    1
-//        //       C        6      0    2
-//        //       C        6      1    1,2       <-- this entry sets bound
-//        //       C        7      0    1
-//        //       C        8      1    1,2
-//        //       C       11      0    0,1
-//        //       C       12      1    0,1,2
-//        //       C       15      0    0,1,2
-//        //       C       17      1    0,1,2
-//        //
-//        //    Increment chosen at height 4.5, but no join performed first step.
-//        //    Coalescent likelihood returned after step 0 considers all coalescent
-//        //    events with heights > 4.5 to be in a single population.
-//        //
-//        // Step 1
-//        //    <------ gene tree 0 ---->      <------ gene tree 1 ---->
-//        //
-//        //    0   0   1   1   1   2   2      0   0   1   1   1   2   2  0   Begin by choosing two species
-//        //    |   |   |   |   |   |   |      |   |   |   |   |   |   |  1   to join: choose to join 0 and 1
-//        //    |   |   |   |   |   |   |      +-0-+   |   |   |   |   |  2   to create species 01. All 0 and 1
-//        //    +-0-+   |   |   |   |   |        |     +-1-+   |   |   |  3   species are converted to 01 below
-//        //      |     |   |   |   |   |        |       |     |   |   |  4   speciation event.
-//        //    --------------------------------------------------------- 4.5 -
-//        //      |     |   +-01+   |   |        |       |     |   |   |  5   | Second speciation event
-//        //      |     |     |     +-2-+        |       |     01,2+   |  6   - must occur in this interval
-//        //      |     +--01-+       |          |       |       |     |  7
-//        //      |        |          |          |       +-01,2--+     |  8
-//        //      |        |          |          |           |         |  9
-//        //      |        |          |          |           |         | 10
-//        //      +----01--+          |          |           |         | 11
-//        //           |              |          +----01,2---+         | 12
-//        //           |              |                |               | 13
-//        //           |              |                |               | 14
-//        //           +------01,2-----+               |               | 15
-//        //                                           |               | 16
-//        //                                           +------01,2-----+ 17
-//        //
-//        //  _species_tree._epochs:
-//        //     type   height  gene    species
-//        //       I       -1      0    -        <-- these entries are used to
-//        //       I       -1      1    -        <-- initialize lineage counts
-//        //       C        2      1    0
-//        //       C        3      0    0
-//        //       C        3      1    1
-//        //       S       4.5     -    -        <-- species 0 and 1 joined to create species 01
-//        //       C        5      0    01
-//        //       C        6      0    2
-//        //       C        6      1    01,2     <-- this entry sets bound
-//        //       C        7      0    01
-//        //       C        8      1    01,2
-//        //       C       11      0    01,1
-//        //       C       12      1    01,2
-//        //       C       15      0    01,2
-//        //       C       17      1    01,2
-//        //
-//        //    Species 0 and 1 joined to create species 01.
-//        //    All epochs downstream replace species 0 and species 1 with 01.
-//        //    New increment chosen taking us to height 5.5.
-//        //    Coalescent likelihood returned after step 1 considers all coalescent
-//        //    events with heights > 5.5 to be in a single population.
-//        //
-//        // Step 2
-//        //    <------ gene tree 0 ---->      <------ gene tree 1 ---->
-//        //
-//        //    0   0   1   1   1   2   2      0   0   1   1   1   2   2  0
-//        //    |   |   |   |   |   |   |      |   |   |   |   |   |   |  1
-//        //    |   |   |   |   |   |   |      +-0-+   |   |   |   |   |  2
-//        //    +-0-+   |   |   |   |   |        |     +-1-+   |   |   |  3
-//        //      |     |   |   |   |   |        |       |     |   |   |  4
-//        //    --------------------------------------------------------- 4.5
-//        //      |     |   +-01+   |   |        |       |     |   |   |  5
-//        //    --------------------------------------------------------- 5.5
-//        //      |     |     |     +012+        |       |     +012+   |  6
-//        //      |     +-012-+       |          |       |       |     |  7
-//        //      |        |          |          |       +--012--+     |  8
-//        //      |        |          |          |           |         |  9
-//        //      |        |          |          |           |         | 10
-//        //      +---012--+          |          |           |         | 11
-//        //           |              |          +----012----+         | 12
-//        //           |              |                |               | 13
-//        //           |              |                |               | 14
-//        //           +------012-----+                |               | 15
-//        //                                           |               | 16
-//        //                                           +------012------+ 17
-//        //
-//        //  _species_tree._epochs:
-//        //     type   height  gene      species
-//        //       I       -1      0      -         <-- these entries are used to
-//        //       I       -1      1      -         <-- initialize lineage counts
-//        //       C        2      1      0
-//        //       C        3      0      0
-//        //       C        3      1      1
-//        //       S       4.5     -      -         <-- species 0 and 1 joined to create species 01
-//        //       C        5      0      01
-//        //       S       5.5     -      -         <-- species 01 and 2 joined to create species 012
-//        //       C        6      0      012
-//        //       C        6      1      012
-//        //       C        7      0      012
-//        //       C        8      1      012
-//        //       C       11      0      012
-//        //       C       12      1      012
-//        //       C       15      0      012
-//        //       C       17      1      012
-//        //
-//        //    Species 01 and 2 are joined at height 5.5 to create species 012.
-//        //    All epochs downstream replace species 01 and species 2 with 012.
-//        //    No more increments or joins are possible, so finish calculating the
-//        //    coalescent likelihood by considering the remaining coalescent epochs.
-//        
-//        // This is the return value
-//        double log_weight = 0.0;
-//        
-//        unsigned nlineages = (unsigned)_lineages.size();
-//        assert(nlineages > 1);
-//        
-//        if (step > 0) {
-//            // Only join species after first step because a join in a species tree
-//            // only affects downstream (further into the past) coalescent events.
-//            // Joining first and then choosing increment allows filtering to take
-//            // account of the consequences of the join.
-//            pair<unsigned,unsigned> chosen_pair = rng.nchoose2(nlineages);
-//            Node * first_node  = _lineages[chosen_pair.first];
-//            Node * second_node = _lineages[chosen_pair.second];
-//            Node * anc_node    = joinLineagePair(first_node, second_node);
-//            anc_node->setSpeciesToUnion(first_node->getSpecies(), second_node->getSpecies());
-//            
-//            // Insert a speciation epoch and revise subsequent coalescent epochs to replace the two
-//            // old species with the new species
-//            //SMCGlobal::species_t oldspp1 = first_node->getSpecies();
-//            //SMCGlobal::species_t oldspp2 = second_node->getSpecies();
-//            //SMCGlobal::species_t newspp  = anc_node->getSpecies();
-//
-//            // Update lineage vector
-//            removeTwoAddOne(_lineages, first_node, second_node, anc_node);
-//            --nlineages;
-//        }
-//
-//        // Create a set of all species that currently (looking backward in time) exist
-//        set<SMCGlobal::species_t> current_species;
-//        for (auto lit = _lineages.begin(); lit != _lineages.end(); lit++) {
-//            Node * nd = *lit;
-//            current_species.insert(nd->_species);
-//        }
-//        assert(current_species.size() == nlineages);
-//        
-//        // Find next coalescent event (over all gene trees) involving more than one species
-//        // That sets an upper bound on the time of the next speciation event, regardless of
-//        // which two species ultimately end up being joined.
-//        //double maxT = calcMaxT(_epochs, _forest_height, current_species);
-//        //double max_waiting_time = maxT - _forest_height;
-//            
-//        // Choose waiting time until the next speciation event (conditional on maxT)
-//        double u = rng.uniform();
-//        double r = SMCGlobal::_lambda*nlineages;
-//        //double t = -log(1.0 - u*(1.0 - exp(-r*max_waiting_time)))/r;
-//        double t = -log(1.0 - u)/r;
-//        
-//        // Update log of the species tree prior (prior is Exponential(r) but
-//        // conditioned on t < max_waiting_time)
-//        _log_species_tree_prior += log(r) - r*t;
-//        //_log_species_tree_prior -= log(1.0 - exp(-r*max_waiting_time));
-//            
-//        // Increment height of forest
-//        advanceAllLineagesBy(t);
-//        
-//        if (nlineages == 2) {
-//            // Down to final 2 lineages; go ahead and join them to complete the species tree
-//            Node * first_node  = _lineages[0];
-//            Node * second_node = _lineages[1];
-//            Node * anc_node    = joinLineagePair(first_node, second_node);
-//            anc_node->setSpeciesToUnion(first_node->getSpecies(), second_node->getSpecies());
-//            
-//            // Insert a speciation epoch and revise subsequent coalescent epochs to replace the two
-//            // old species with the new species
-//            //SMCGlobal::species_t oldspp1 = first_node->getSpecies();
-//            //SMCGlobal::species_t oldspp2 = second_node->getSpecies();
-//            //SMCGlobal::species_t newspp  = anc_node->getSpecies();
-//
-//            // Update lineage vector
-//            removeTwoAddOne(_lineages, first_node, second_node, anc_node);
-//            --nlineages;
-//        }
-//                
-//        // Compute coalescent likelihood
-//        //double log_coalescent_likelihood = 0.0;
-//        //for (unsigned g = 0; g < Forest::_ngenes; g++) {
-//        //    log_coalescent_likelihood += calcLogCoalescentLikelihood(_epochs, g);
-//        //}
-//        
-//        //log_weight = log_coalescent_likelihood - _prev_log_coalescent_likelihood;
-//        //_prev_log_coalescent_likelihood = log_coalescent_likelihood;
-//
-//        //output(format("Species forest in particle %d after step %d (height = %.5f)\n    %s") % particle % step % _forest_height % makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false), 2);
-//        
-//        return log_weight;
-#endif
-        return 0.0;
-    }
-    
+        
     inline void SpeciesForest::operator=(const SpeciesForest & other) {
         Forest::operator=(other);
         
-        // No reversion is going to happen after copying, so we can just
-        // reset these pointers (which are set in speciationEvent).
-        //POLTMP _node_stack.empty();
+        // Should not be anything in the mark stacks if copying
+        assert(_mark_increments.empty());
+        assert(_mark_anc_nodes.empty());
+        assert(_mark_left_right_pos.empty());
 
 #if defined(DEBUGGING_SANITY_CHECK)
         // Sanity check: make sure that _partials do not exist for either this nor other
