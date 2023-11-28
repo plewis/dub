@@ -34,6 +34,7 @@ namespace proj {
                                         bool use_names = true,
                                         bool coalunits = false) const;
             void                buildFromNewick(const string newick);
+            void                alignTaxaUsing(const map<unsigned, unsigned> & taxon_map);
             
             unsigned            advanceAllLineagesBy(double t);
             void                heightsInternalsPreorders();
@@ -55,6 +56,8 @@ namespace proj {
             bool        canHaveSibling(Node * nd) const;
             void        refreshPreorder(Node::ptr_vect_t & preorder) const;
             void        refreshAllPreorders() const;
+            void        storeEdgelensBySplit(map<Split, double> & edgelenmap);
+            void        storeSplits(std::set<Split> & splitset);
             void        resizeAllSplits(unsigned nleaves);
             void        refreshAllHeightsAndPreorders();
             Node *      pullNode();
@@ -354,6 +357,28 @@ namespace proj {
         return newick;
     }
 
+    inline void Forest::alignTaxaUsing(const map<unsigned, unsigned> & taxon_map) {
+        for (auto & preorder : _preorders) {
+            for (auto nd : boost::adaptors::reverse(preorder)) {
+                if (!nd->_left_child) {
+                    // leaf node
+                    try {
+                        unsigned leaf_index = taxon_map.at(nd->_number + 1);
+                        nd->_number = leaf_index;
+                        nd->_name = SMCGlobal::_species_names[leaf_index];
+                    }
+                    catch (const out_of_range &) {
+                        output("\ntaxon_map:\n",1);
+                        for (auto t : taxon_map) {
+                            output(format("  key: %d --> value: %d\n") % t.first % t.second,1);
+                        }
+                        throw XProj(format("%d is not a key in taxon_map") % (nd->_number + 1));
+                    }
+                }
+            }
+        }
+    }
+    
     inline void Forest::buildFromNewick(const string newick) {
         // Builds strictly-bifurcating ultrametric, rooted, complete (i.e.
         // _lineages contains just one element) forest from the supplied newick
@@ -657,6 +682,40 @@ namespace proj {
         }
     }
     
+inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
+    edgelenmap.clear();
+    for (auto & preorder : _preorders) {
+        for (auto nd : preorder) {
+            edgelenmap[nd->_split] = nd->_edge_length;
+        }
+    }
+}
+
+    inline void Forest::storeSplits(set<Split> & splitset) {
+        // Resize all splits (also clears all splits)
+        resizeAllSplits(isSpeciesForest() ? SMCGlobal::_nspecies : SMCGlobal::_ntaxa);
+
+        // Now do a postorder traversal and add the bit corresponding
+        // to the current node in its parent node's split
+        for (auto & preorder : _preorders) {
+            for (auto nd : boost::adaptors::reverse(preorder)) {
+                if (nd->_left_child) {
+                    // add this internal node's split to splitset
+                    splitset.insert(nd->_split);
+                }
+                else {
+                    // set bit corresponding to this leaf node's number
+                    nd->_split.setBitAt(nd->_number);
+                }
+
+                if (nd->_parent) {
+                    // parent's bits are the union of the bits set in all its children
+                    nd->_parent->_split.addSplit(nd->_split);
+                }
+            }
+        }
+    }
+
     inline void Forest::resizeAllSplits(unsigned nleaves) {
         for (auto & nd : _nodes) {
             nd._split.resize(nleaves);
@@ -844,19 +903,28 @@ namespace proj {
             // It is possible (probable even) that the order of taxa in taxa_block will differ from
             // the order in leaf_names. Therefore, taxon_map is constructed the keys of which are the
             // taxon numbers in the newick tree description (corresponding to taxa_block); the values
-            // are the index of the taxon in leaf_names. For example:
+            // are the index of the taxon in leaf_names. For example (branch lengths omitted):
             //
-            //   #nexus              newick = (1,2,(3,4)) --> (A,D,(C,B))
-            //   begin trees;        leaf_names: [A,B,C,D]
-            //     translate
-            //       1 A,            t           = 0  1  2  3
-            //       2 D,            taxon_label = A  D  C  B  <-- order in taxa block
-            //       3 C,            d           = 0  3  2  1  <-- index into leaf_names
-            //       4 B             t+1         = 1  2  3  4
-            //     ;                 taxon_map: {1:0, 2:3, 3:2, 4:1}
-            //   end;                                 | |
-            //                                        | index into leaf_names vector
-            //                                        number in newick string
+            // #NEXUS
+            // begin trees;
+            //   tree tree1 = [&R] (A,(((D,B),C),E));
+            // end;
+            //
+            // Supplied to readTreeFile function:
+            //   leaf_names = {"A","B","C","D","E"}
+            //                  0   1   2   3   4
+            //
+            // Populated by readTreeFile function:
+            //   tree_names = {"tree1"}
+            //   newicks = {"(1,(((2,3),4),5))"}
+            //   taxon_map: (newick)    (leaf_names)
+            //                key          value
+            //                 1    -->      0 (i.e. "A")
+            //                 2    -->      3 (i.e. "D")
+            //                 3    -->      1 (i.e. "B")
+            //                 4    -->      2 (i.e. "C")
+            //                 5    -->      4 (i.e. "E")
+            
             taxon_map.clear();
             for (unsigned t = 0; t < num_leaves; t++) {
                 string taxon_label = taxa_block->GetTaxonLabel(t);

@@ -77,6 +77,7 @@ namespace proj {
             void                         outputTrees(SpeciesForest & sf, vector<GeneForest> & gfvect);
             void                         outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric, const vector<string> & newick_gene_trees_numeric);
             void                         outputAnnotatedNexusTreefile(string fn, const vector<tuple<unsigned, double, string, string, string> > & treeinfo) const;
+            void                         compareToReferenceTrees(list<Particle> particle_list, map<string, tuple<unsigned, double, double, double, double> > & m);
             void                         saveAllSpeciesTrees(string fn, const list<Particle> particle_list);
             void                         saveAllGeneTrees(unsigned gene, string fn, const vector<Particle> particles);
             void                         saveUniqueSpeciesTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts);
@@ -102,6 +103,8 @@ namespace proj {
             void                         showSettings() const;
             
             string                       _data_file_name;
+            string                       _species_tree_ref_file_name;
+            string                       _gene_trees_ref_file_name;
             string                       _start_mode;
             unsigned                     _niter;
             Partition::SharedPtr         _partition;
@@ -159,17 +162,19 @@ namespace proj {
     }
     
     inline void Proj::clear() {
-        _use_gpu                = true;
-        _ambig_missing          = true;
-        _sort_forests           = false;
-        _visualization_cutoff   = 0.99;
-        _entropy_percent_cutoff = 99.7;
+        _use_gpu                    = true;
+        _ambig_missing              = true;
+        _sort_forests               = false;
+        _visualization_cutoff       = 0.99;
+        _entropy_percent_cutoff     = 99.7;
 
         // data related
-        _data                   = nullptr;
-        _data_file_name         = "";
-        _start_mode             = "smc";
-        _niter                  = 1;
+        _data                       = nullptr;
+        _data_file_name             = "";
+        _species_tree_ref_file_name = "";
+        _gene_trees_ref_file_name   = "";
+        _start_mode                 = "smc";
+        _niter                      = 1;
         _partition.reset(new Partition());
         
         // simulation related
@@ -198,6 +203,8 @@ namespace proj {
         ("help,h", "produce help message")
         ("version,v", "show program version")
         ("datafile",  value(&_data_file_name)->required(), "name of a data file in NEXUS format")
+        ("speciestreeref",  value(&_species_tree_ref_file_name), "name of a tree file containing a single reference species tree")
+        ("genetreeref",  value(&_gene_trees_ref_file_name), "name of a tree file containing a reference gene tree for each locus")
         ("startmode", value(&_start_mode), "if 'simulate', simulate gene trees, species tree, and data; if 'smc', estimate from supplied datafile")
         ("niter", value(&_niter), "number of iterations, where one iteration involves SMC of gene trees give species tree combined with an SMC of species tree given gene trees")
         ("subset",  value(&partition_subsets), "a string defining a partition subset, e.g. 'first:1-1234\3' or 'default[codon:standard]:1-3702'")
@@ -958,12 +965,55 @@ namespace proj {
         outputAnnotatedNexusTreefile(fn, treeinfo);
     }
     
-    inline void Proj::saveAllSpeciesTrees(string fn, const list<Particle> particle_list) {
-        map<string,unsigned> tree_map;
-        auto it = tree_map.begin();
-        for (const Particle & p : particle_list) {
+    inline void Proj::compareToReferenceTrees(list<Particle> particle_list, map<string, tuple<unsigned, double, double, double, double> > & m) {
+        // Bail out if no reference tree was specified
+        if (_species_tree_ref_file_name.empty())
+            return;
+            
+        // Read in the reference species tree
+        SMCGlobal::_nexus_taxon_map.clear();
+        vector<string> tree_names;
+        vector<string> newicks;
+        SpeciesForest::readTreefile(_species_tree_ref_file_name, /*skip*/0, SMCGlobal::_species_names, SMCGlobal::_nexus_taxon_map, tree_names, newicks);
+                
+        SpeciesForest ref;
+        ref.buildFromNewick(newicks[0]);
+        double ref_height = ref.getHeight();
+        
+        for (Particle & p : particle_list) {
             unsigned c = p.getCount();
             string newick = p.getSpeciesForest().makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
+            if (m.count(newick) == 1) {
+                // newick already in m, so just update count
+                tuple<unsigned, double, double, double, double> & t = m[newick];
+                unsigned cnew = c + get<0>(t);
+                double ref_height = get<1>(t);
+                double test_height = get<2>(t);
+                double kf = get<3>(t);
+                double rf = get<4>(t);
+                m[newick] = make_tuple(cnew, ref_height, test_height, kf, rf);
+            }
+            else {
+                // newick is distinct, so calculate KF,RF distances and root height
+                SpeciesForest & test = p.getSpeciesForest();
+                double test_height = test.getHeight();
+#if defined(DEBUGGING_SANITY_CHECK)
+                test.heightsInternalsPreorders();
+                double hcheck = test.getHeight();
+                assert(fabs(hcheck - test_height) < 0.001);
+#endif
+                pair<double,double> kf_rf = SpeciesForest::calcTreeDistances(ref, test);
+                m[newick] = make_tuple(c, ref_height, test_height, kf_rf.first, kf_rf.second);
+            }
+        }
+    }
+
+    inline void Proj::saveAllSpeciesTrees(string fn, const list<Particle> particle_list) {
+        map<string,unsigned> tree_map;
+        //auto it = tree_map.begin();
+        for (const Particle & p : particle_list) {
+            unsigned c = p.getCount();
+            string newick = p.getSpeciesForestConst().makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
             try {
                 unsigned curr = tree_map.at(newick);
                 tree_map[newick] += c;
@@ -996,7 +1046,7 @@ namespace proj {
                 double pct = 100.0*c/_nparticles;
                 string note = str(format("This tree found in %d particles (%.1f%% of %d total particles)") % c % pct % _nparticles);
                 string treename = str(format("tree%d-%d") % i % c);
-                string newick = particles[p].getSpeciesForest().makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false);
+                string newick = particles[p].getSpeciesForestConst().makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false);
                 treeinfo.push_back(make_tuple(c, pct, note, treename, newick));
                 ++i;
             }
@@ -1686,6 +1736,75 @@ namespace proj {
                 //    output(format("Gene trees for locus %d saved to file \"final-gene%d-trees.tre\"\n") % (g+1) % (g+1), 1);
                 //    saveAllGeneTrees(g, str(format("final-gene%d-trees.tre") % (g+1)), _particles);
                 //}
+                
+                map<string, tuple<unsigned, double, double, double, double> > m;
+                compareToReferenceTrees(_particle_list, m);
+                
+                double ref_height = 0.0;
+                double mean_height = 0.0;
+                double meanKF = 0.0;
+                double minKF = SMCGlobal::_infinity;
+                double maxKF = 0.0;
+                double meanRF = 0.0;
+                double minRF = SMCGlobal::_infinity;
+                double maxRF = 0.0;
+                unsigned total_count = 0;
+                for (auto & kv : m) {
+                    tuple<unsigned, double, double, double, double> & t = kv.second;
+                    unsigned c = get<0>(t);
+                    ref_height  = get<1>(t);
+                    double test_height  = get<2>(t);
+                    double kf = get<3>(t);
+                    double rf = get<4>(t);
+                    total_count += c;
+                    mean_height += test_height*c;
+                    meanKF += kf*c;
+                    if (kf < minKF)
+                        minKF = kf;
+                    if (kf > maxKF)
+                        maxKF = kf;
+                    meanRF += rf*c;
+                    if (rf < minRF)
+                        minRF = rf;
+                    if (rf > maxRF)
+                        maxRF = rf;
+                }
+                meanKF /= total_count;
+                meanRF /= total_count;
+                mean_height /= total_count;
+
+                ofstream outf("report.txt");
+                outf << str(format("%12s %12s %12s %12s %12s %12s %12s %12s %12s %12s %12s %12s %12s %12s")
+                    % "Genes"
+                    % "Steps"
+                    % "Distinct"
+                    % "RefH"
+                    % "MeanH"
+                    % "MeanKF"
+                    % "MinKF"
+                    % "MaxKF"
+                    % "SpreadKF"
+                    % "MeanRF"
+                    % "MinRF"
+                    % "MaxRF"
+                    % "SpreadRF"
+                    % "logML") << endl;
+                outf << str(format("%12d %12d %12d %12.5f %12.5f %12.5f %12.5f %12.5f %12.5f %12.5f %12.5f %12.5f %12.5f %12.5f")
+                    % SMCGlobal::_ngenes
+                    % nsteps
+                    % m.size()
+                    % ref_height
+                    % mean_height
+                    % meanKF
+                    % minKF
+                    % maxKF
+                    % (maxKF - minKF)
+                    % meanRF
+                    % minRF
+                    % maxRF
+                    % (maxRF - minRF)
+                    % _log_marg_like) << endl;
+                outf.close();
             }
         }
         catch (XProj & x) {

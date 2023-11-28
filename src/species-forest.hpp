@@ -16,6 +16,8 @@ namespace proj {
             void speciationEvent(Lot::SharedPtr lot, SMCGlobal::species_t & left, SMCGlobal::species_t & right, SMCGlobal::species_t & anc);
             
             Node * findSpecies(SMCGlobal::species_t spp);
+            
+            static pair<double,double> calcTreeDistances(SpeciesForest & ref, SpeciesForest & test);
 
             // Overrides of base class functions
             void clear();
@@ -49,7 +51,92 @@ namespace proj {
     inline void SpeciesForest::clear() {
         Forest::clear();
     }
+
+    inline pair<double,double> SpeciesForest::calcTreeDistances(SpeciesForest & ref, SpeciesForest & test) {
+        // Store splits from reference tree
+        Split::treeid_t ref_splits;
+        ref.storeSplits(ref_splits);
         
+        // Store edge lengths from reference tree
+        map<Split, double> ref_edgelen_map;
+        ref.storeEdgelensBySplit(ref_edgelen_map);
+                
+        // Store splits from test tree
+        Split::treeid_t test_splits;
+        test.storeSplits(test_splits);
+        
+        // Store edge lengths from test tree
+        map<Split, double> test_edgelen_map;
+        test.storeEdgelensBySplit(test_edgelen_map);
+                
+        // Now calculate squares for leaf nodes, storing in KLleaves
+        std::vector<double> KLleaves(SMCGlobal::_nspecies);
+        Split s;
+        s.resize(SMCGlobal::_nspecies);
+        Split sroot;
+        sroot.resize(SMCGlobal::_nspecies);
+        for (unsigned i = 0; i < SMCGlobal::_nspecies; i++) {
+            s.clear();
+            s.setBitAt(i);
+            sroot.setBitAt(i);
+            assert(ref_edgelen_map.count(s) == 1);
+            assert(test_edgelen_map.count(s) == 1);
+            double ref_edge_length  = ref_edgelen_map[s];
+            double test_edge_length = test_edgelen_map[s];
+            double square = pow(test_edge_length - ref_edge_length, 2.0);
+            KLleaves[i] = square;
+        }
+        
+        // Store union of refsplits and testsplits in allsplits
+        Split::treeid_t all_splits;
+        set_union(
+            ref_splits.begin(), ref_splits.end(),
+            test_splits.begin(), test_splits.end(),
+            std::inserter(all_splits, all_splits.begin()));
+        
+        // Traverse allsplits, storing squared branch length differences in KLinternals
+        std::vector<double> KLinternals(all_splits.size());
+        double RFdist = 0.0;
+        unsigned i = 0;
+        for (auto s : all_splits) {
+            if (s == sroot)
+                continue;
+            bool s_in_ref  = ref_edgelen_map.count(s) == 1;
+            bool s_in_test = test_edgelen_map.count(s) == 1;
+            assert(s_in_ref || s_in_test);
+            if (!s_in_ref) {
+                double test_edge_length = test_edgelen_map[s];
+                double test_square = pow(test_edge_length, 2.0);
+                KLinternals[i++] = test_square;
+                RFdist += 1.0;
+            }
+            else if (!s_in_test) {
+                double ref_edge_length = ref_edgelen_map[s];
+                double ref_square = pow(ref_edge_length, 2.0);
+                KLinternals[i++] = ref_square;
+                RFdist += 1.0;
+            }
+            else {
+                double test_edge_length = test_edgelen_map[s];
+                double ref_edge_length = ref_edgelen_map[s];
+                double square = pow(test_edge_length - ref_edge_length, 2.0);
+                KLinternals[i++] = square;
+            }
+        }
+            
+        // Calculate KL distance
+        double KFSS = 0.0;
+        for (auto square : KLinternals) {
+            KFSS += square;
+        }
+        for (auto square : KLleaves) {
+            KFSS += square;
+        }
+        assert(KFSS >= 0.0);
+        double KFdist = sqrt(KFSS);
+        return make_pair(KFdist, RFdist);
+    }
+    
     inline Node * SpeciesForest::findSpecies(SMCGlobal::species_t spp) {
         Node * the_node = nullptr;
         for (auto nd : _lineages) {

@@ -71,7 +71,7 @@ namespace proj {
             void refreshHeightsInternalsPreorders();
             
             SpeciesForest       & getSpeciesForest();
-            const SpeciesForest & getSpeciesForest() const;
+            const SpeciesForest & getSpeciesForestConst() const;
 
             vector<GeneForest>       & getGeneForests();
             const vector<GeneForest> & getGeneForests() const;
@@ -749,7 +749,7 @@ namespace proj {
         return _species_forest;
     }
     
-    inline const SpeciesForest & Particle::getSpeciesForest() const {
+    inline const SpeciesForest & Particle::getSpeciesForestConst() const {
         return _species_forest;
     }
     
