@@ -94,10 +94,10 @@ namespace proj {
 
     inline int GeneticCode::getStateCode(int triplet_index) const {
         int retval = 0;
-        try {
-            retval = _genetic_code_map.at(triplet_index);
-        } catch(const out_of_range &) {
+        if (_genetic_code_map.count(triplet_index) == 0)
             throw XProj(format("GeneticCode::getStateCode failed because key %d does not exist in _genetic_code_map") % triplet_index);
+        else {
+            retval = _genetic_code_map.at(triplet_index);
         }
         return retval;
     }

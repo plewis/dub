@@ -30,7 +30,7 @@ namespace proj {
             void clearMarkAllForests();
             void revertToMarkAllForests();
             void advanceAllLineagesBy(double dt);
-            double proposeCoalescence(unsigned seed, unsigned step, unsigned pindex, bool compute_partial, bool make_permanent);
+            pair<double, unsigned> proposeCoalescence(unsigned seed, unsigned step, unsigned pindex, bool compute_partial, bool make_permanent);
             void finalizeProposalAllForests();
             double priorPrior(unsigned step, unsigned pindex, double total_rate, bool compute_partial);
             double priorPost(unsigned step, unsigned pindex, bool make_permanent);
@@ -285,7 +285,7 @@ namespace proj {
     }
 
     inline void Particle::finalizeProposalAllForests() {
-        //TODO: Particle::finalizeProposal
+        //BOOKMARK: Particle::finalizeProposalAllForests
         _species_forest.finalizeProposal();
         for (auto & gf : _gene_forests) {
             gf.finalizeProposal();
@@ -321,8 +321,8 @@ namespace proj {
 #endif
     }
     
-    inline double Particle::proposeCoalescence(unsigned seed, unsigned step, unsigned pindex, bool compute_partial, bool make_permanent) {
-        //TODO: Particle::proposeCoalescence
+    inline pair<double, unsigned> Particle::proposeCoalescence(unsigned seed, unsigned step, unsigned pindex, bool compute_partial, bool make_permanent) {
+        //BOOKMARK: Particle::proposeCoalescence
         setSeed(seed);
         
         clearMarkAllForests();
@@ -332,6 +332,8 @@ namespace proj {
             advance(step, pindex, compute_partial, make_permanent);
         }
         
+        unsigned num_species_tree_lineages = _species_forest.getNumLineages();
+        
         if (make_permanent) {
             finalizeProposalAllForests();
         }
@@ -339,7 +341,7 @@ namespace proj {
             revertToMarkAllForests();
 
         double log_weight = getLogWeight();
-        return log_weight;
+        return make_pair(log_weight, num_species_tree_lineages);
     }
     
     inline double Particle::calcTotalCoalRate(double speciation_increment) {
@@ -424,7 +426,9 @@ namespace proj {
         unsigned j = 0;
         Node * first_node = nullptr;
         Node * second_node = nullptr;
-        try {
+        if (gf._lineages_within_species.count(spp) == 0)
+            throw XProj(gf.lineagesWithinSpeciesKeyError(spp));
+        else {
             auto & node_vect = gf._lineages_within_species.at(spp);
             unsigned n = (unsigned)node_vect.size();
             assert(n > 1);
@@ -442,9 +446,6 @@ namespace proj {
             first_node  = node_vect[i];
             second_node = node_vect[j];
             gf.joinLineagePair(anc_node, first_node, second_node);
-        }
-        catch (const out_of_range &) {
-            throw XProj(gf.lineagesWithinSpeciesKeyError(spp));
         }
 
         anc_node->setSpecies(spp);
@@ -496,14 +497,13 @@ namespace proj {
             anc_node->_partial = pullPartial(g);
             
             // Join the chosen pair of lineages
-            try {
+            if (gf._lineages_within_species.count(spp) == 0)
+                throw XProj(gf.lineagesWithinSpeciesKeyError(spp));
+            else {
                 auto & node_vect = gf._lineages_within_species.at(spp);
                 Node * first_node  = node_vect[first_index];
                 Node * second_node = node_vect[second_index];
                 gf.joinLineagePair(anc_node, first_node, second_node);
-            }
-            catch (const out_of_range &) {
-                throw XProj(gf.lineagesWithinSpeciesKeyError(spp));
             }
             
             anc_node->setSpecies(spp);
@@ -651,8 +651,7 @@ namespace proj {
     }
 
     inline void Particle::advance(unsigned step, unsigned pindex, bool compute_partial, bool make_permanent) {
-        //TODO: Particle::advance
-        
+        //BOOKMARK: advance
         // Clear species_tuples vector. Each 4-tuple entry stores:
         //  1. number of lineages
         //  2. gene index

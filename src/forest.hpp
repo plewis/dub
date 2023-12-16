@@ -178,10 +178,10 @@ namespace proj {
     }
 
     inline void Forest::setSpeciesFromNodeName(Node * nd) {
-        try {
-            Node::setSpeciesBit(nd->_species, SMCGlobal::_taxon_to_species.at(nd->_name), /*init_to_zero_first*/true);
-        } catch(const out_of_range &) {
+        if (SMCGlobal::_taxon_to_species.count(nd->_name) == 0)
             throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % nd->_name));
+        else {
+            Node::setSpeciesBit(nd->_species, SMCGlobal::_taxon_to_species.at(nd->_name), /*init_to_zero_first*/true);
         }
     }
     
@@ -362,17 +362,17 @@ namespace proj {
             for (auto nd : boost::adaptors::reverse(preorder)) {
                 if (!nd->_left_child) {
                     // leaf node
-                    try {
-                        unsigned leaf_index = taxon_map.at(nd->_number + 1);
-                        nd->_number = leaf_index;
-                        nd->_name = SMCGlobal::_species_names[leaf_index];
-                    }
-                    catch (const out_of_range &) {
+                    if (taxon_map.count(nd->_number + 1) == 0) {
                         output("\ntaxon_map:\n",1);
                         for (auto t : taxon_map) {
                             output(format("  key: %d --> value: %d\n") % t.first % t.second,1);
                         }
                         throw XProj(format("%d is not a key in taxon_map") % (nd->_number + 1));
+                    }
+                    else {
+                        unsigned leaf_index = taxon_map.at(nd->_number + 1);
+                        nd->_number = leaf_index;
+                        nd->_name = SMCGlobal::_species_names[leaf_index];
                     }
                 }
             }

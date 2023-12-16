@@ -128,6 +128,7 @@ namespace proj {
             vector<SMCGlobal::species_t> _proposed_spp;
             vector<unsigned>             _proposed_first;
             vector<unsigned>             _proposed_second;
+            vector<unsigned>             _proposed_species_tree_lineages;
 
             double                       _log_marg_like;
             
@@ -381,10 +382,10 @@ namespace proj {
                 unsigned gnsites = _partition->numSitesInSubset(g);
                 string gname = _partition->getSubsetName(g);
                 double r = 0.0;
-                try {
-                    r = _relrate_map.at(gname);
-                } catch(const out_of_range &) {
+                if (_relrate_map.count(gname) == 0)
                     throw XProj(format("Proj::setRelativeRates failed because key \"%s\" does not exist in _relrate_map") % gname);
+                else {
+                    r = _relrate_map.at(gname);
                 }
                 SMCGlobal::_relrate_for_gene[g] = r;
                 output(format("%12s %12.5f\n") % gname % r,2);
@@ -433,10 +434,10 @@ namespace proj {
         output("\nMapping species names to species index\n", 2);
         for (auto & sname : SMCGlobal::_species_names) {
             unsigned species_index = 0;
-            try {
-                species_index = species_name_to_index.at(sname);
-            } catch(const out_of_range & ) {
+            if (species_name_to_index.count(sname) == 0)
                 throw XProj(format("Proj::buildSpeciesMap failed because key \"%s\" does not exist in species_name_to_index map") % sname);
+            else {
+                species_index = species_name_to_index.at(sname);
             }
             output(format("  %s --> %d\n") % sname % species_index, 2);
             SMCGlobal::_taxon_to_species[sname] = species_index;
@@ -553,12 +554,14 @@ namespace proj {
         assert(particle.getGeneForests().size() == ngenes);
         
         // Determine total number of steps required to build all gene trees and the species tree
-        unsigned nsteps = (nspecies - 1) + ngenes*(ntaxa - 1);
+        unsigned nsteps = ngenes*(ntaxa - 1);
+        
+        vector<unsigned> update_seeds(nsteps);
+        generateUpdateSeeds(update_seeds);
         
         // Add coalescent events and speciation events until all trees are built
         for (unsigned step = 0; step < nsteps; step++) {
-            particle.advance(step, 0, /*calculate_partial*/false, /*make_permanent*/true);
-            //TODO: deal with removal of make_permanent
+            particle.proposeCoalescence(update_seeds[step], step, /*particle index*/0, /*compute_partial*/false, /*make_permanent*/true);
         }
         
         particle.refreshHeightsInternalsPreorders();
@@ -808,10 +811,21 @@ namespace proj {
     }
 
     inline double Proj::filterParticles(unsigned step, list<Particle> & particle_list, vector<double> & log_weights, vector<unsigned> & counts, vector<unsigned> & rnseeds) {
-        //TODO: Proj::filterParticles
+        //BOOKMARK: Proj::filterParticles
         // Sanity checks
         assert(counts.size() == _nparticles);
         assert(log_weights.size() == _nparticles);
+        
+        //temporary!
+        //map<unsigned, unsigned> spp_classes;
+        //for (auto l : _proposed_species_tree_lineages) {
+        //    spp_classes[l]++;
+        //}
+        //output(format("\n%12s %12s\n") % "Count" % "Lineages", 1);
+        //for (auto kv : spp_classes) {
+        //    output(format("%12d %12d\n") % kv.second % kv.first, 1);
+        //}
+        //output("\n",1);
                 
         // Normalize log_weights to create discrete probability distribution
         double log_sum_weights = SMCGlobal::calcLogSum(log_weights);
@@ -1014,13 +1028,10 @@ namespace proj {
         for (const Particle & p : particle_list) {
             unsigned c = p.getCount();
             string newick = p.getSpeciesForestConst().makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
-            try {
-                unsigned curr = tree_map.at(newick);
-                tree_map[newick] += c;
-            }
-            catch(const out_of_range &) {
+            if (tree_map.count(newick) == 0)
                 tree_map[newick] = c;
-            }
+            else
+                tree_map[newick] += c;
         }
         
         vector<tuple<unsigned, double, string, string, string> > treeinfo;
@@ -1112,7 +1123,9 @@ namespace proj {
                 
                 // Propose a coalescence event (which may involve also proposing
                 // one or more intervening speciation events)
-                _log_weights[i] = p.proposeCoalescence(update_seeds[i], step, i,  /*compute_partial*/true, /*make_permanent*/false);
+                auto proposed = p.proposeCoalescence(update_seeds[i], step, i,  /*compute_partial*/true, /*make_permanent*/false);
+                _log_weights[i] = proposed.first;
+                _proposed_species_tree_lineages[i] = proposed.second;
                 _proposed_gene[i] = p.getLastProposedGene();
                 _proposed_spp[i] = p.getLastProposedSpecies();
                 _proposed_first[i] = p.getLastProposedFirstIndex();
@@ -1203,8 +1216,7 @@ namespace proj {
     }
 #elif defined(USING_MULTITHREADING)
     inline void Proj::particleLoopMT(unsigned step, const vector<pair<unsigned, unsigned> > & thread_schedule, const vector<unsigned> & update_seeds) {
-        //TODO: multithreading particle loop
-
+        //BOOKMARK: Proj::particleLoopMT
         vector<thread> threads;
         for (unsigned i = 0; i < SMCGlobal::_nthreads; i++) {
             threads.push_back(thread(&Proj::advanceParticleRange,
@@ -1223,7 +1235,7 @@ namespace proj {
     }
 #else   // not USING_MPI or USING_MULTITHREADING
     inline void Proj::particleLoopStd(unsigned step, const vector<unsigned> & update_seeds) {
-        //TODO: standard particle loop
+        //BOOKMARK: Proj::particleLoopStd
         unsigned i = 0;
         for (auto & p : _particle_list) {
             // Second element of pair is number of copies of particle
@@ -1242,7 +1254,9 @@ namespace proj {
                 
                 // Propose a coalescence event (which may involve also proposing
                 // one or more intervening speciation events)
-                _log_weights[i] = p.proposeCoalescence(update_seeds[i], step, i, /*compute_partial*/true, /*make_permanent*/false);
+                auto proposed = p.proposeCoalescence(update_seeds[i], step, i, /*compute_partial*/true, /*make_permanent*/false);
+                _log_weights[i] = proposed.first;
+                _proposed_species_tree_lineages[i] = proposed.second;
                 _proposed_gene[i] = p.getLastProposedGene();
                 _proposed_spp[i] = p.getLastProposedSpecies();
                 _proposed_first[i] = p.getLastProposedFirstIndex();
@@ -1465,7 +1479,7 @@ namespace proj {
 //        //            5           17
 //        // ------------ ------------
 //        //        total          100
-//        //TODO: Proj::balanceThreads
+//
 //        assert(SMCGlobal::_nthreads > 0);
 //        if (SMCGlobal::_nthreads == 1) {
 //            thread_schedule.clear();
@@ -1667,7 +1681,7 @@ namespace proj {
                 _log_marg_like = starting_log_likelihood;
                 double cum_secs = 0.0;
                 for (unsigned step = 0; step < nsteps; ++step) {
-                    //TODO: main step loop
+                    //BOOKMARK: main step loop
                     stopwatch.start();
 
 #if defined(USING_MULTITHREADING)
@@ -1680,6 +1694,7 @@ namespace proj {
                     _proposed_spp.assign(_nparticles, 0);
                     _proposed_first.assign(_nparticles, 0);
                     _proposed_second.assign(_nparticles, 0);
+                    _proposed_species_tree_lineages.assign(_nparticles, 0);
                     
                     // Assign _nparticles random number seeds to use for generating the next step
                     generateUpdateSeeds(update_seeds);

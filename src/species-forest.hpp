@@ -247,7 +247,6 @@ namespace proj {
             assert(fabs(anc->getEdgeLength()) < 0.00001);
             
             // Get pointer to ancestral node's left child
-            SMCGlobal::species_t spp = anc->getSpecies();
             Node * lchild = anc->getLeftChild();
             assert(lchild);
 
@@ -283,7 +282,7 @@ namespace proj {
     }
     
     inline void SpeciesForest::speciationEvent(Lot::SharedPtr lot, SMCGlobal::species_t & left_spp, SMCGlobal::species_t & right_spp, SMCGlobal::species_t & anc_spp) {
-        //TODO: SpeciesForest::speciationEvent
+        //BOOKMARK: speciationEvent
         unsigned nlineages = (unsigned)_lineages.size();
         
         // Choose two lineages to join

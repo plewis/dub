@@ -180,10 +180,10 @@ namespace proj {
             assert(second_node);
 
             // Update lineage vector since this will be a permanent change
-            try {
-                removeTwoAddOne(_lineages_within_species.at(spp), first_node, second_node, anc_node);
-            } catch(const out_of_range &) {
+            if (_lineages_within_species.count(spp) == 0)
                 throw XProj(lineagesWithinSpeciesKeyError(spp));
+            else {
+                removeTwoAddOne(_lineages_within_species.at(spp), first_node, second_node, anc_node);
             }
             removeTwoAddOne(_lineages, first_node, second_node, anc_node);
             refreshAllPreorders();
@@ -311,7 +311,9 @@ namespace proj {
         unsigned j = 0;
         Node * first_node = nullptr;
         Node * second_node = nullptr;
-        try {
+        if (_lineages_within_species.count(spp) == 0)
+            throw XProj(lineagesWithinSpeciesKeyError(spp));
+        else {
             auto & node_vect = _lineages_within_species.at(spp);
             unsigned n = (unsigned)node_vect.size();
             assert(n > 1);
@@ -329,9 +331,6 @@ namespace proj {
             first_node  = node_vect[i];
             second_node = node_vect[j];
             joinLineagePair(anc_node, first_node, second_node);
-        }
-        catch (const out_of_range &) {
-            throw XProj(lineagesWithinSpeciesKeyError(spp));
         }
 
         anc_node->setSpecies(spp);
@@ -366,8 +365,9 @@ namespace proj {
         
         if (first_index != second_index) {
             // Just join nodes first_index and second_index in species spp
-            
-            try {
+            if (_lineages_within_species.count(spp) == 0)
+                throw XProj(lineagesWithinSpeciesKeyError(spp));
+            else {
                 // Get vector of nodes in the specified species spp
                 auto & node_vect = _lineages_within_species.at(spp);
                 unsigned n = (unsigned)node_vect.size();
@@ -397,16 +397,13 @@ namespace proj {
                 anc_node->emptyPrevSpeciesStack();
             
                 // Update lineage vector since this will be a permanent change
-                try {
-                    removeTwoAddOne(_lineages_within_species.at(spp), first_node, second_node, anc_node);
-                } catch(const out_of_range &) {
+                if (_lineages_within_species.count(spp) == 0)
                     throw XProj(lineagesWithinSpeciesKeyError(spp));
+                else {
+                    removeTwoAddOne(_lineages_within_species.at(spp), first_node, second_node, anc_node);
                 }
                 removeTwoAddOne(_lineages, first_node, second_node, anc_node);
                 refreshAllPreorders();
-            }
-            catch (const out_of_range &) {
-                throw XProj(lineagesWithinSpeciesKeyError(spp));
             }
                         
 #if defined(DEBUGGING_SANITY_CHECK)
@@ -416,7 +413,9 @@ namespace proj {
         else {
             // first_index == second_index, which means these indices were not
             // supplied and thus should be determined and returned
-            try {
+            if (_lineages_within_species.count(spp) == 0)
+                throw XProj(lineagesWithinSpeciesKeyError(spp));
+            else {
                 // Get vector of nodes in the specified species spp
                 auto & node_vect = _lineages_within_species.at(spp);
                 unsigned n = (unsigned)node_vect.size();
@@ -502,9 +501,6 @@ namespace proj {
                 
                 //temporary!
                 //cerr << "logw for chosen prior-post pair = " << logw << endl;
-            }
-            catch (const out_of_range & ) {
-                throw XProj(lineagesWithinSpeciesKeyError(spp));
             }
         } // if make_permanent ... else ...
 #endif
@@ -619,10 +615,10 @@ namespace proj {
             _nodes[i]._name = taxon_name;
             _nodes[i].setEdgeLength(0.0);
             _nodes[i]._height = 0.0;
-            try {
-                Node::setSpeciesBit(_nodes[i]._species, SMCGlobal::_taxon_to_species.at(taxon_name), /*init_to_zero_first*/true);
-            } catch(const out_of_range &) {
+            if (SMCGlobal::_taxon_to_species.count(taxon_name) == 0)
                 throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % taxon_name));
+            else {
+                Node::setSpeciesBit(_nodes[i]._species, SMCGlobal::_taxon_to_species.at(taxon_name), /*init_to_zero_first*/true);
             }
             if (compute_partials) {
                 assert(_data);
