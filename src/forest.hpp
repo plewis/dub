@@ -15,6 +15,9 @@ namespace proj {
         
         public:
         
+            typedef tuple<double, unsigned, SMCGlobal::species_t, SMCGlobal::species_t>   coalinfo_t;
+            typedef set<Split> treeid_t;
+
                                 Forest();
                                 ~Forest();
                 
@@ -34,6 +37,7 @@ namespace proj {
                                         bool use_names = true,
                                         bool coalunits = false) const;
             void                buildFromNewick(const string newick);
+            void                storeSplits(Forest::treeid_t & splitset);
             void                alignTaxaUsing(const map<unsigned, unsigned> & taxon_map);
             
             unsigned            advanceAllLineagesBy(double t);
@@ -44,6 +48,8 @@ namespace proj {
             virtual void        finalizeProposal() = 0;
             virtual void        createTrivialForest(bool compute_partials) = 0;
             virtual bool        isSpeciesForest() const = 0;
+            virtual void        saveCoalInfo(vector<coalinfo_t> & coalinfo_vect) const = 0;
+            virtual void        recordHeights(vector<double> & height_vect) const = 0;
 
         protected:
         
@@ -57,7 +63,6 @@ namespace proj {
             void        refreshPreorder(Node::ptr_vect_t & preorder) const;
             void        refreshAllPreorders() const;
             void        storeEdgelensBySplit(map<Split, double> & edgelenmap);
-            void        storeSplits(std::set<Split> & splitset);
             void        resizeAllSplits(unsigned nleaves);
             void        refreshAllHeightsAndPreorders();
             Node *      pullNode();
@@ -82,7 +87,7 @@ namespace proj {
             unsigned                _next_node_index;
             unsigned                _next_node_number;
             double                  _prev_log_likelihood;
-            double                  _log_species_tree_prior;
+            double                  _log_prior;
             vector<Node>            _nodes;
             Node::ptr_vect_t        _lineages;
             
@@ -109,6 +114,7 @@ namespace proj {
         _next_node_index = 0;
         _next_node_number = 0;
         _prev_log_likelihood = SMCGlobal::_negative_infinity;
+        _log_prior = 0.0;
         _nodes.clear();
         _preorders.clear();
         _lineages.clear();
@@ -691,7 +697,7 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
     }
 }
 
-    inline void Forest::storeSplits(set<Split> & splitset) {
+    inline void Forest::storeSplits(Forest::treeid_t & splitset) {
         // Resize all splits (also clears all splits)
         resizeAllSplits(isSpeciesForest() ? SMCGlobal::_nspecies : SMCGlobal::_ntaxa);
 
@@ -1132,7 +1138,6 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
         _next_node_index                = other._next_node_index;
         _next_node_number               = other._next_node_number;
         _prev_log_likelihood            = other._prev_log_likelihood;
-        _log_species_tree_prior         = other._log_species_tree_prior;
         
         // Create node map: if _nodes[3]._number = 2, then node_map[2] = 3 (i.e. node number 2 is at index 3 in _nodes vector)
         map<unsigned, unsigned> node_map;

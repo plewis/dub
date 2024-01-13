@@ -59,6 +59,9 @@ namespace proj {
             void debugCheckPartials(bool verbose = false) const;
             static void clearLeafPartials();
             
+            void saveCoalInfo(vector<Forest::coalinfo_t> & coalinfo_vect) const;
+            void recordHeights(vector<double> & height_vect) const;
+            
             void operator=(const GeneForest & other);
             
         protected:
@@ -632,6 +635,7 @@ namespace proj {
         _next_node_index = SMCGlobal::_ntaxa;
         _next_node_number = SMCGlobal::_ntaxa;
         _prev_log_likelihood = 0.0;
+        _log_prior = 0.0;
     }
     
     inline void GeneForest::debugComputeLeafPartials(unsigned gene, int number, PartialStore::partial_t partial) {
@@ -1072,4 +1076,56 @@ namespace proj {
         // every time it is used
     }
         
+    inline void GeneForest::saveCoalInfo(vector<Forest::coalinfo_t> & coalinfo_vect) const {
+        // Appends to coalinfo_vect; clear before calling if desired
+        // Assumes heights and preorders are up-to-date; call
+        //   heightsInternalsPreorders() beforehand to ensure this
+        
+        // coalinfo_t is a tuple with these elements:
+        // - height of node
+        // - 1-offset gene index (0 means speciation)
+        // - left child's species
+        // - right child's species
+        
+        // Should only be called for complete gene trees
+        assert(_lineages.size() == 1);
+        
+        // Save all internal node heights
+        vector< tuple<double, SMCGlobal::species_t, SMCGlobal::species_t> > height_spp_tuples;
+        for (auto nd : boost::adaptors::reverse(_preorders[0])) {
+            if (nd->_left_child) {
+                // internal
+                //string split_repr = nd->_split.createPatternRepresentation();
+                height_spp_tuples.push_back(make_tuple(
+                    nd->_height,
+                    nd->_left_child->_species,
+                    nd->_left_child->_right_sib->_species));
+            }
+        }
+        
+        // Sort heights from smallest to largest
+        sort(height_spp_tuples.begin(), height_spp_tuples.end());
+        
+        // Store tuples in coalinfo_vect
+        for (auto h : height_spp_tuples) {
+            coalinfo_vect.push_back(make_tuple(get<0>(h), _gene_index + 1, get<1>(h), get<2>(h)));
+        }
+    }
+    
+    void GeneForest::recordHeights(vector<double> & height_vect) const {
+        // Appends to height_vect; clear before calling if desired
+        // Assumes heights and preorders are up-to-date; call
+        //   heightsInternalsPreorders() beforehand to ensure this
+
+        // Should only be called for complete gene trees
+        assert(_lineages.size() == 1);
+                        
+        for (auto nd : boost::adaptors::reverse(_preorders[0])) {
+            if (nd->_left_child) {
+                // internal
+                height_vect.push_back(nd->_height);
+            }
+        }
+        
+    }
 }

@@ -1,6 +1,9 @@
 // Currently this is the only model implemented - do not uncomment!
 #define USE_JUKE_CANTOR_MODEL
 
+//temporary!
+//#define POLTMP1
+
 // Uncomment for release version
 //#define DEBUGGING_SANITY_CHECK
 

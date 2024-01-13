@@ -32,6 +32,9 @@ namespace proj {
             pair<double,double> drawIncrement(Lot::SharedPtr lot);
             double calcLogSpeciesTreeDensity(double lambda) const;
 
+            void saveCoalInfo(vector<Forest::coalinfo_t> & coalinfo_vect) const;
+            void recordHeights(vector<double> & height_vect) const;
+            
             void operator=(const SpeciesForest & other);
 
         protected:
@@ -179,7 +182,6 @@ namespace proj {
         _next_node_number = SMCGlobal::_nspecies;
         _prev_log_likelihood = 0.0;
         //_prev_log_coalescent_likelihood = 0.0;
-        _log_species_tree_prior = 0.0;
     }
     
     inline double SpeciesForest::calcLogSpeciesTreeDensity(double lambda) const {
@@ -330,4 +332,52 @@ namespace proj {
 #endif
     }
 
+    inline void SpeciesForest::saveCoalInfo(vector<Forest::coalinfo_t> & coalinfo_vect) const {
+        // Appends to params and splits; clear these before calling if desired
+        // Assumes heights and preorders are up-to-date; call
+        //   heightsInternalsPreorders() beforehand to ensure this
+
+        // Should only be called for complete species trees
+        assert(_lineages.size() == 1);
+                        
+        // Save all internal node heights
+        vector< tuple<double, SMCGlobal::species_t, SMCGlobal::species_t> > height_spp_tuples;
+        for (auto nd : boost::adaptors::reverse(_preorders[0])) {
+            if (nd->_left_child) {
+                // internal
+                //string split_repr = nd->_split.createPatternRepresentation();
+                height_spp_tuples.push_back(make_tuple(
+                    nd->_height,
+                    nd->_left_child->_species,
+                    nd->_left_child->_right_sib->_species));
+            }
+        }
+        
+        // Sort heights from smallest to largest
+        sort(height_spp_tuples.begin(), height_spp_tuples.end());
+        
+        // Compute increments between coalescent events and store in params
+        unsigned n = SMCGlobal::_nspecies;
+        assert(height_spp_tuples.size() == SMCGlobal::_nspecies - 1);
+        for (auto h : height_spp_tuples) {
+            coalinfo_vect.push_back(make_tuple(get<0>(h), 0, get<1>(h), get<2>(h)));
+            n--;
+        }
+    }
+    
+    void SpeciesForest::recordHeights(vector<double> & height_vect) const {
+        // Appends to height_vect; clear before calling if desired
+        // Assumes heights and preorders are up-to-date; call
+        //   heightsInternalsPreorders() beforehand to ensure this
+
+        // Should only be called for complete species trees
+        assert(_lineages.size() == 1);
+                        
+        for (auto nd : boost::adaptors::reverse(_preorders[0])) {
+            if (nd->_left_child) {
+                // internal
+                height_vect.push_back(nd->_height);
+            }
+        }
+    }
 }

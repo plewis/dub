@@ -34,6 +34,7 @@ namespace proj {
         static vector<unsigned>         _nsites_per_gene;
         static map<unsigned, double>    _relrate_for_gene;
         
+        static double                   _phi;
         static double                   _theta;
         static double                   _lambda;
         
@@ -58,7 +59,7 @@ namespace proj {
         static void     normalizeCounts(const vector<unsigned> counts, vector<double> & probs);
         static unsigned multinomialDraw(Lot::SharedPtr lot, const vector<double> & probs);
         static string   speciesStringRepresentation(SMCGlobal::species_t species);
-
+        static set<unsigned> speciesToUnsignedSet(SMCGlobal::species_t species);
     };
 
     inline double SMCGlobal::calcLogSum(const vector<double> & log_values) {
@@ -175,6 +176,28 @@ namespace proj {
             if (bit_is_set) {
                 // Add species i to the string
                 s += to_string(i);
+                
+                // Zero that bit so we know when we are done
+                species_copy &= ~bitmask;
+            }
+            if (!species_copy) {
+                // If species_copy is zero, there are no more bits set
+                break;
+            }
+        }
+        return s;
+    }
+    
+    inline set<unsigned> SMCGlobal::speciesToUnsignedSet(SMCGlobal::species_t species) {
+        species_t species_copy = species;
+        unsigned bits_avail = (unsigned)sizeof(species_t);
+        set<unsigned> s;
+        for (unsigned i = 0; i < bits_avail; ++i) {
+            species_t bitmask = ((species_t)1 << i);
+            bool bit_is_set = ((species_copy & bitmask) > (species_t)0);
+            if (bit_is_set) {
+                // Add species i to the string
+                s.insert(i);
                 
                 // Zero that bit so we know when we are done
                 species_copy &= ~bitmask;

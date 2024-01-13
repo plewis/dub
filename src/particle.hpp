@@ -705,7 +705,8 @@ namespace proj {
                 _log_weight = priorPrior(step, pindex, total_rate, compute_partial);
             }
             
-            if (compute_partial) {
+            //temporary!
+            if (false && compute_partial) {
                 // Adjust weight for fact that proposal differs from prior
                 if (_species_forest.getNumLineages() > 1) {
                     _log_weight -= speciation_rate*(delta - Delta);

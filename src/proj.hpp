@@ -58,7 +58,14 @@ namespace proj {
             void                         generateUpdateSeeds(vector<unsigned> & seeds) const;
             void                         memoryReport(ofstream & memf) const;
             
+            void                         getAllParamNames(vector<string> & names) const;
+            unsigned                     countDistinctGeneTreeTopologies();
+            void                         saveParamsForLoRaD();
+
         private:
+        
+            double                        calcLogCoalLike(vector<Forest::coalinfo_t> & coalinfo_vect) const;
+            double                        calcLogSpeciesTreePrior(vector<Forest::coalinfo_t> & coalinfo_vect) const;
                     
             void                         updateCountMap(map<string, unsigned> & count_map, string & newick,    unsigned count);
             //unsigned                    countSpeciations(const vector<Particle> & particles);
@@ -78,9 +85,9 @@ namespace proj {
             void                         outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric, const vector<string> & newick_gene_trees_numeric);
             void                         outputAnnotatedNexusTreefile(string fn, const vector<tuple<unsigned, double, string, string, string> > & treeinfo) const;
             void                         compareToReferenceTrees(list<Particle> particle_list, map<string, tuple<unsigned, double, double, double, double> > & m);
-            void                         saveAllSpeciesTrees(string fn, const list<Particle> particle_list);
-            void                         saveAllGeneTrees(unsigned gene, string fn, const vector<Particle> particles);
-            void                         saveUniqueSpeciesTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts);
+            void                         saveAllSpeciesTrees(string fn, const list<Particle> & particle_list, unsigned compression_level = 2);
+            void                         saveAllGeneTrees(unsigned gene, string fn, const list<Particle> & particle_list, unsigned compression_level = 2);
+            //void                         saveUniqueSpeciesTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts);
 
 #if defined(USING_MULTITHREADING)
             void                         debugCheckThreadSchedule(const vector<pair<unsigned, unsigned> > & thread_schedule) const;
@@ -206,7 +213,7 @@ namespace proj {
         ("datafile",  value(&_data_file_name)->required(), "name of a data file in NEXUS format")
         ("speciestreeref",  value(&_species_tree_ref_file_name), "name of a tree file containing a single reference species tree")
         ("genetreeref",  value(&_gene_trees_ref_file_name), "name of a tree file containing a reference gene tree for each locus")
-        ("startmode", value(&_start_mode), "if 'simulate', simulate gene trees, species tree, and data; if 'smc', estimate from supplied datafile")
+        ("startmode", value(&_start_mode), "if 'sim', simulate gene trees, species tree, and data; if 'smc', estimate from supplied datafile")
         ("niter", value(&_niter), "number of iterations, where one iteration involves SMC of gene trees give species tree combined with an SMC of species tree given gene trees")
         ("subset",  value(&partition_subsets), "a string defining a partition subset, e.g. 'first:1-1234\3' or 'default[codon:standard]:1-3702'")
         ("relrate",  value(&partition_relrates), "a relative rate for a previously-defined subset; format first:3.1")
@@ -218,6 +225,7 @@ namespace proj {
         ("nparticles",  value(&_nparticles)->default_value(1000), "number of particles in a population")
         ("nthreads",  value(&SMCGlobal::_nthreads)->default_value(3), "number of threads (each thread will handle nparticles/nthreads particle updates)")
         ("priorpost", value(&SMCGlobal::_prior_post)->default_value(false), "use prior-post approach to choose coalescence joins (default is prior-prior)")
+        ("phi",  value(&SMCGlobal::_phi)->default_value(1.0), "power to which particle weight is raised")
         ("theta",  value(&_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
         ("lambda",  value(&_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
         ("thetapriormean",  value(&SMCGlobal::_theta_prior_mean)->default_value(0.05), "mean of exponential prior for theta")
@@ -286,7 +294,7 @@ namespace proj {
         // that the user is not trying to simulate with priorpost set
         // (that won't work because priorpost requires data).
         if (vm.count("priorpost") > 0) {
-            if (SMCGlobal::_prior_post && _start_mode == "simulate") {
+            if (SMCGlobal::_prior_post && _start_mode == "sim") {
                 throw XProj("Cannot choose simulate for startmode and yes for prior_post at the same time");
             }
         }
@@ -541,7 +549,6 @@ namespace proj {
     }
     
     inline void Proj::simulateTrees(Particle & particle) {
-        unsigned nspecies = SMCGlobal::_nspecies;
         unsigned ngenes   = SMCGlobal::_ngenes;
         unsigned ntaxa    = SMCGlobal::_ntaxa;
         
@@ -706,7 +713,7 @@ namespace proj {
         }
 
         // Report taxon names created
-        cout << "  Taxon names:\n";
+        output("  Taxon names:\n", 2);
         for (unsigned i = 0; i < SMCGlobal::_ntaxa; ++i) {
             string taxon_name = SMCGlobal::_taxon_names[i];
             output(format("    %s\n") % taxon_name, 2);
@@ -743,7 +750,7 @@ namespace proj {
         // Output data to file
         _data->compressPatterns();
         _data->writeDataToFile(_data_file_name);
-        cout << "  Sequence data saved in file \"" << _data_file_name << "\"\n";
+        output(format("  Sequence data saved in file \"%s\"\n") % _data_file_name, 1);
                  
         // Output a PAUP* command file for estimating the species tree using
         // svd quartets and qage
@@ -763,6 +770,148 @@ namespace proj {
         paupf.close();
      }
      
+    double Proj::calcLogCoalLike(vector<Forest::coalinfo_t> & coalinfo_vect) const {
+        double log_prior = 0.0;
+        typedef SMCGlobal::species_t spp_t;
+        typedef map<spp_t, unsigned> lmap_t;
+        unsigned ngenes = SMCGlobal::_ngenes;
+
+        // Create vector of gene-specific lineage maps
+        vector<lmap_t> lmaps(ngenes);
+        
+        // Do work needed to initialize lineage map for first gene
+        // This lineage map will be copied for other genes
+        for (auto cinfo : coalinfo_vect) {
+            unsigned gene_plus_1 = get<1>(cinfo);
+            if (gene_plus_1 > 0) {
+                // Only need to consider gene trees (gene_plus_1 == 0 is specie tree)
+                
+                // Check that coalescent event merged 2 lineages from same species
+                spp_t sleft  = get<2>(cinfo);
+                spp_t sright = get<3>(cinfo);
+                assert(sleft == sright);
+                
+                if (lmaps[0].count(sleft) == 0) {
+                    // Species involved the coalescence not yet encountered, so use this
+                    // opportunity to initialize value for this key
+                    lmaps[0][sleft] = 0;
+                }
+                
+                // if sleft == sright, as asserted above, then code below is redundant
+                //spp_t s = sleft | sright;
+                //if (lmaps[0].count(s) == 0) {
+                //    lmaps[0][s] = 0;
+                //}
+            }
+        }
+        
+        // Enumerate lineages for each species at leaf level for first gene
+        for (unsigned t = 0; t < SMCGlobal::_ntaxa; t++) {
+            string taxon_name = SMCGlobal::_taxon_names[t];
+            unsigned species_index = SMCGlobal::_taxon_to_species[taxon_name];
+            spp_t s = (spp_t)1 << species_index;
+            lmaps[0][s]++;
+        }
+        
+        // Copy first gene's lineage map to create lineage maps for other genes
+        for (unsigned g = 1; g < ngenes; g++) {
+            lmaps[g] = lmaps[0];
+        }
+        
+        // Accumulate log_prior
+        double   tprev       = 0.0;
+        double   t           = 0.0;
+        unsigned gene_plus_1 = 0;
+        spp_t    sleft       = 0;
+        spp_t    sright      = 0;
+        spp_t    s           = 0;
+        double   theta       = SMCGlobal::_theta;
+        for (auto cinfo : coalinfo_vect) {
+            t           = get<0>(cinfo);
+            gene_plus_1 = get<1>(cinfo);
+            sleft       = get<2>(cinfo);
+            sright      = get<3>(cinfo);
+            s           = sleft | sright;
+            
+            // Update log prior for this increment
+            // Each gene/species combination with at least 2 lineages
+            // contributes something
+            for (unsigned g = 0; g < lmaps.size(); g++) {
+                for (auto p : lmaps[g]) {
+                    unsigned n = p.second;
+                    if (n > 1) {
+                        log_prior -= (t - tprev)*n*(n-1)/theta;
+                    }
+                }
+            }
+
+            // Now update the lmaps depending on what event occurred
+            if (gene_plus_1 == 0) {
+                // speciation event: merge counts for species subsumed in s,
+                // where s is the species created by the speciation event
+                for (unsigned g = 0; g < lmaps.size(); g++) {
+                    assert(lmaps[g][s] == 0);
+                    for (auto p : lmaps[g]) {
+                        spp_t    species = p.first;
+                        unsigned count = p.second;
+                        
+                        if (species < s && species & s) {
+                            lmaps[g][species] = 0;
+                            lmaps[g][s] += count;
+                        }
+                    }
+                }
+            }
+            else {
+                // coalescent event: remove 1 from appropriate lineage count
+                // and add log(rate) for the appropriate value of rate
+                // to log_prior
+                assert(sleft == sright);
+                unsigned g = gene_plus_1 - 1;
+                unsigned n = lmaps[g][sleft];
+                assert(n > 1);
+                
+                //TODO: shouldn't this be 2/theta? r currently does not
+                // take account of the choice of lineages to join, which
+                // is 2/[n(n-1)]
+                double r = (double)n*(n-1)/theta;
+                log_prior += log(r);
+                lmaps[g][sleft]--;
+            }
+            
+            tprev = t;
+        }
+        
+        return log_prior;
+    }
+    
+    double Proj::calcLogSpeciesTreePrior(vector<Forest::coalinfo_t> & coalinfo_vect) const {
+        double log_prior = 0.0;
+        double tprev = 0.0;
+        double t = 0.0;
+        unsigned n = SMCGlobal::_nspecies;
+        double lambda = SMCGlobal::_lambda;
+        for (auto cinfo : coalinfo_vect) {
+            unsigned gene_plus_1 = get<1>(cinfo);
+            if (gene_plus_1 == 0) {
+                // Species tree join
+                t = get<0>(cinfo);
+                double dt = t - tprev;
+                
+                // Prior for increment
+                log_prior += log(lambda*n) - lambda*n*dt;
+                
+                // Prior for join
+                log_prior += log(2.) - log(n) - log(n-1);
+                
+                tprev = t;
+                n--;
+            }
+        }
+        
+        return log_prior;
+    }
+
     inline void Proj::updateCountMap(map<string, unsigned> & count_map, string & newick, unsigned count) {
         // If newick is not already in count_map, insert it and set value to count.
         // If it does exist, increase its current value by count.
@@ -853,6 +1002,9 @@ namespace proj {
             counts[which]++;
         }
         
+        //temporary!
+        unsigned maxn = 0;
+        
         // Suppose _nparticles = 20 and counts looks like this:
         //                   <----------- 1st particle -----------><-- 2nd particle --->
         //         counts = {0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 12}
@@ -883,6 +1035,11 @@ namespace proj {
             // Next n elements of counts belong to particle p
             unsigned n = p.getCount();
             
+            //temporary!
+            if (n > maxn) {
+                maxn = n;
+            }
+
             // Find all non-zero counts associated with particle p
             vector<unsigned> nonzeros;
             findNonZeroCountsInRange(nonzeros, counts, i, i + n);
@@ -924,6 +1081,9 @@ namespace proj {
         // Eliminate all particles with a count of 0
         pruneParticles(particle_list);
 
+        //temporary!
+        //cerr << "~~> maxn = " << maxn << endl;
+
         return ess;
     }
 
@@ -945,40 +1105,6 @@ namespace proj {
         streef.close();
     }
 
-    inline void Proj::saveAllGeneTrees(unsigned gene_index, string fn, const vector<Particle> particles) {
-    
-        // First pass builds map of newick (key) and count (value)
-        map<string, unsigned> count_map;
-        for (auto & p : particles) {
-            assert(gene_index < p.getGeneForests().size());
-            const GeneForest & gf = p.getGeneForests()[gene_index];
-            string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false);
-            updateCountMap(count_map, newick, 1);
-        }
-        
-        // Now create treeinfo tuples
-        vector<tuple<unsigned, double, string, string, string> > treeinfo;
-        //unsigned i = 0;
-        for (auto & kv : count_map) {
-            double pct = 100.0*kv.second/_nparticles;
-            string note = str(format("freq = %d") % kv.second);
-            string treename = str(format("tree%d") % kv.second);
-            treeinfo.push_back(make_tuple(kv.second, pct, note, treename, kv.first));
-
-            // Compute log-likelihood and store tree description of
-            // gene tree from locus gene_index in this particle
-            //assert(gene_index < p.getGeneForests().size());
-            //const GeneForest & gf = p.getGeneForests()[gene_index];
-            //double log_likelihood = gf.calcLogLikelihood();
-            //string note = str(format("lnL = %.5f") % log_likelihood);
-            //string treename = str(format("tree%d") % i);
-            //string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false);
-            //treeinfo.push_back(make_tuple(c, pct, note, treename, newick));
-            //++i;
-        }
-        outputAnnotatedNexusTreefile(fn, treeinfo);
-    }
-    
     inline void Proj::compareToReferenceTrees(list<Particle> particle_list, map<string, tuple<unsigned, double, double, double, double> > & m) {
         // Bail out if no reference tree was specified
         if (_species_tree_ref_file_name.empty())
@@ -1022,51 +1148,146 @@ namespace proj {
         }
     }
 
-    inline void Proj::saveAllSpeciesTrees(string fn, const list<Particle> particle_list) {
-        map<string,unsigned> tree_map;
-        //auto it = tree_map.begin();
-        for (const Particle & p : particle_list) {
-            unsigned c = p.getCount();
-            string newick = p.getSpeciesForestConst().makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
-            if (tree_map.count(newick) == 0)
-                tree_map[newick] = c;
-            else
-                tree_map[newick] += c;
+    inline void Proj::saveAllSpeciesTrees(string fn, const list<Particle> & particle_list, unsigned compression_level) {
+        assert(compression_level >= 0 && compression_level <= 2);
+        typedef tuple<unsigned, double, string, string, string> treeinfo_t;
+        treeinfo_t treeinfo;
+        vector<treeinfo_t> treeinfo_vect;
+        if (compression_level == 2) {
+            // Save unique species trees along with their frequency in the sample
+            map<string,unsigned> tree_map;
+            for (const Particle & p : particle_list) {
+                unsigned c = p.getCount();
+                string newick = p.getSpeciesForestConst().makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
+                if (tree_map.count(newick) == 0)
+                    tree_map[newick] = c;
+                else
+                    tree_map[newick] += c;
+            }
+            
+            unsigned i = 0;
+            for (auto it = tree_map.begin(); it != tree_map.end(); ++it) {
+                const string & newick = it->first;
+                unsigned c = it->second;
+                double pct = 100.0*c/_nparticles;
+                string note = str(format("freq = %d") % c);
+                string treename = str(format("'tree%d-freq%d'") % i % c);
+                treeinfo = make_tuple(c, pct, note, treename, newick);
+                treeinfo_vect.push_back(treeinfo);
+                i++;
+            }
         }
-        
-        vector<tuple<unsigned, double, string, string, string> > treeinfo;
-        unsigned i = 0;
-        for (auto it = tree_map.begin(); it != tree_map.end(); ++it) {
-            const string & newick = it->first;
-            unsigned c = it->second;
-            double pct = 100.0*c/_nparticles;
-            string note = str(format("freq = %d") % c);
-            string treename = str(format("'tree%d-freq%d'") % i % c);
-            treeinfo.push_back(make_tuple(c, pct, note, treename, newick));
-            ++i;
+        else {
+            // Save all species trees (might involve saving the same newick string many times)
+            // Some compression still performed (despite compress being false) as a particle with
+            // count 100 will only be saved once and labeled as having freq=100
+            unsigned i = 0;
+            for (const Particle & p : particle_list) {
+                unsigned c = p.getCount();
+                string newick = p.getSpeciesForestConst().makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
+                if (compression_level == 1) {
+                    double pct = 100.0*c/_nparticles;
+                    string note = str(format("freq = %d") % c);
+                    string treename = str(format("'tree%d-freq%d'") % i % c);
+                    treeinfo = make_tuple(c, pct, note, treename, newick);
+                    treeinfo_vect.push_back(treeinfo);
+                    i++;
+                }
+                else {
+                    double pct = 100.0/_nparticles;
+                    string note = "freq = 1";
+                    for (unsigned j = 0; j < c; j++) {
+                        string treename = str(format("'tree%d-freq1'") % i);
+                        treeinfo = make_tuple(c, pct, note, treename, newick);
+                        treeinfo_vect.push_back(treeinfo);
+                        i++;
+                    }
+                }
+            }
         }
-        outputAnnotatedNexusTreefile(fn, treeinfo);
+        outputAnnotatedNexusTreefile(fn, treeinfo_vect);
     }
     
-    inline void Proj::saveUniqueSpeciesTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts) {
-        vector<tuple<unsigned, double, string, string, string> > treeinfo;
-        unsigned p = 0;
-        unsigned i = 0;
-        for (auto c : counts) {
-            if (c > 0) {
+    inline void Proj::saveAllGeneTrees(unsigned gene_index, string fn, const list<Particle> & particle_list, unsigned compression_level) {
+        assert(compression_level >= 0 && compression_level <= 2);
+        typedef tuple<unsigned, double, string, string, string> treeinfo_t;
+        treeinfo_t treeinfo;
+        vector<treeinfo_t> treeinfo_vect;
+        if (compression_level == 2) {
+            // Save only unique newick strings
+            map<string,unsigned> tree_map;
+            for (const Particle & p : particle_list) {
+                unsigned c = p.getCount();
+                assert(gene_index < p.getGeneForests().size());
+                const GeneForest & gf = p.getGeneForests()[gene_index];
+                string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
+                if (tree_map.count(newick) == 0)
+                    tree_map[newick] = c;
+                else
+                    tree_map[newick] += c;
+            }
+            
+            unsigned i = 0;
+            for (auto it = tree_map.begin(); it != tree_map.end(); ++it) {
+                const string & newick = it->first;
+                unsigned c = it->second;
                 double pct = 100.0*c/_nparticles;
-                string note = str(format("This tree found in %d particles (%.1f%% of %d total particles)") % c % pct % _nparticles);
-                string treename = str(format("tree%d-%d") % i % c);
-                string newick = particles[p].getSpeciesForestConst().makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false);
-                treeinfo.push_back(make_tuple(c, pct, note, treename, newick));
+                string note = str(format("freq = %d") % c);
+                string treename = str(format("'tree%d-freq%d'") % i % c);
+                treeinfo = make_tuple(c, pct, note, treename, newick);
+                treeinfo_vect.push_back(treeinfo);
                 ++i;
             }
-            ++p;
         }
-        sort(treeinfo.begin(), treeinfo.end());
-        reverse(treeinfo.begin(), treeinfo.end());
-        outputAnnotatedNexusTreefile(fn, treeinfo);
+        else {
+            unsigned i = 0;
+            for (const Particle & p : particle_list) {
+                unsigned c = p.getCount();
+                assert(gene_index < p.getGeneForests().size());
+                const GeneForest & gf = p.getGeneForests()[gene_index];
+                string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
+                if (compression_level == 1) {
+                    double pct = 100.0*c/_nparticles;
+                    string note = str(format("freq = %d") % c);
+                    string treename = str(format("'tree%d-freq%d'") % i % c);
+                    treeinfo = make_tuple(c, pct, note, treename, newick);
+                    treeinfo_vect.push_back(treeinfo);
+                    i++;
+                }
+                else {
+                    double pct = 100.0/_nparticles;
+                    string note = "freq = 1";
+                    for (unsigned j = 0; j < c; j++) {
+                        string treename = str(format("'tree%d-freq1'") % i);
+                        treeinfo = make_tuple(c, pct, note, treename, newick);
+                        treeinfo_vect.push_back(treeinfo);
+                        i++;
+                    }
+                }
+            }
+        }
+        outputAnnotatedNexusTreefile(fn, treeinfo_vect);
     }
+    
+    //inline void Proj::saveUniqueSpeciesTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts) {
+    //    vector<tuple<unsigned, double, string, string, string> > treeinfo;
+    //    unsigned p = 0;
+    //    unsigned i = 0;
+    //    for (auto c : counts) {
+    //        if (c > 0) {
+    //            double pct = 100.0*c/_nparticles;
+    //            string note = str(format("This tree found in %d particles (%.1f%% of %d total particles)") % c % pct % _nparticles);
+    //            string treename = str(format("tree%d-%d") % i % c);
+    //            string newick = particles[p].getSpeciesForestConst().makeNewick(/*precision*/9, /*use names*/true, /*coalescent units*/false);
+    //            treeinfo.push_back(make_tuple(c, pct, note, treename, newick));
+    //            ++i;
+    //        }
+    //        ++p;
+    //    }
+    //    sort(treeinfo.begin(), treeinfo.end());
+    //    reverse(treeinfo.begin(), treeinfo.end());
+    //    outputAnnotatedNexusTreefile(fn, treeinfo);
+    //}
     
     //inline unsigned Proj::countSpeciations(const vector<Particle> & particles) {
     //    unsigned nspeciations = 0;
@@ -1124,7 +1345,7 @@ namespace proj {
                 // Propose a coalescence event (which may involve also proposing
                 // one or more intervening speciation events)
                 auto proposed = p.proposeCoalescence(update_seeds[i], step, i,  /*compute_partial*/true, /*make_permanent*/false);
-                _log_weights[i] = proposed.first;
+                _log_weights[i] = SMCGlobal::_phi*proposed.first;
                 _proposed_species_tree_lineages[i] = proposed.second;
                 _proposed_gene[i] = p.getLastProposedGene();
                 _proposed_spp[i] = p.getLastProposedSpecies();
@@ -1255,7 +1476,7 @@ namespace proj {
                 // Propose a coalescence event (which may involve also proposing
                 // one or more intervening speciation events)
                 auto proposed = p.proposeCoalescence(update_seeds[i], step, i, /*compute_partial*/true, /*make_permanent*/false);
-                _log_weights[i] = proposed.first;
+                _log_weights[i] = SMCGlobal::_phi*proposed.first;
                 _proposed_species_tree_lineages[i] = proposed.second;
                 _proposed_gene[i] = p.getLastProposedGene();
                 _proposed_spp[i] = p.getLastProposedSpecies();
@@ -1592,12 +1813,17 @@ namespace proj {
     inline void Proj::run() {
     
         output("Starting...\n", 2);
+
+#if defined(USING_MULTITHREADING)
+        output(format("Multithreaded version with %d threads\n") % SMCGlobal::_nthreads, 2);
+#endif
+
         output(format("Current working directory: %s\n") % current_path(), 2);
         
         try {
             rng.setSeed(_rnseed);
             
-            if (_start_mode == "simulate") {
+            if (_start_mode == "sim") {
                 simulateData();
             }
             else {
@@ -1610,8 +1836,6 @@ namespace proj {
                 SMCGlobal::_ngenes = _data->getNumSubsets();
                 assert(SMCGlobal::_ngenes > 0);
 
-//#if defined(USING_MULTITHREADING)
-//                threadSetSchedule();
 #if defined(USING_MPI)
                 mpiSetSchedule();
 #endif
@@ -1657,6 +1881,7 @@ namespace proj {
                 
                 // Compute initial log likelihood
                 double starting_log_likelihood = template_particle.calcLogLikelihood();
+                starting_log_likelihood *= SMCGlobal::_phi;
                 
 #if defined(MINIMIZE_PARTIALS)
                 stowAllPartials();
@@ -1743,14 +1968,21 @@ namespace proj {
                     //}
                 }
                 
+                //temporary!
+                unsigned treefile_compression = 0;
+                
                 output(format("log(marginal likelihood) = %.6f\n") % _log_marg_like, 1);
                 output("\nSpecies trees saved to file \"final-species-trees.tre\"\n", 1);
-                saveAllSpeciesTrees("final-species-trees.tre", _particle_list);
+                saveAllSpeciesTrees("final-species-trees.tre", _particle_list, treefile_compression);
                 
-                //for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
-                //    output(format("Gene trees for locus %d saved to file \"final-gene%d-trees.tre\"\n") % (g+1) % (g+1), 1);
-                //    saveAllGeneTrees(g, str(format("final-gene%d-trees.tre") % (g+1)), _particles);
-                //}
+                saveParamsForLoRaD();
+                
+                if (true) {
+                    for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
+                        output(format("Gene trees for locus %d saved to file \"final-gene%d-trees.tre\"\n") % (g+1) % (g+1), 1);
+                        saveAllGeneTrees(g, str(format("final-gene%d-trees.tre") % (g+1)), _particle_list, treefile_compression);
+                    }
+                }
                 
                 map<string, tuple<unsigned, double, double, double, double> > m;
                 compareToReferenceTrees(_particle_list, m);
@@ -1919,4 +2151,223 @@ namespace proj {
     }
 #endif
 
+    inline void Proj::getAllParamNames(vector<string> & names) const {
+        // Get species tree increment names
+        for (unsigned i = 0; i < SMCGlobal::_nspecies - 1; i++) {
+            names.push_back("sincr." + to_string(i));
+        }
+        
+        // Get gene tree increment names
+        for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
+            for (unsigned i = 0; i < SMCGlobal::_ntaxa - 1; i++) {
+                names.push_back(SMCGlobal::_gene_names[g] + "." + to_string(i));
+            }
+        }
+    }
+    
+    inline unsigned Proj::countDistinctGeneTreeTopologies() {
+        set<Forest::treeid_t> unique_topologies;
+        for (auto & p : _particle_list) {
+            for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
+                GeneForest & gf = p.getGeneForest(g);
+                Forest::treeid_t id;
+                gf.storeSplits(id);
+                unique_topologies.insert(id);
+            }
+        }
+        return (unsigned)unique_topologies.size();
+    }
+    
+    inline void Proj::saveParamsForLoRaD() {
+        output("Saving parameters for LoRaD...\n", 1);
+        output("  Parameter file is \"params-lorad.txt\"\n", 1);
+        output("  Run LoRaD using \"rscript lorad.R\"\n", 1);
+        unsigned num_distinct = countDistinctGeneTreeTopologies();
+        if (num_distinct == 1) {
+            output("  Topology identical for all gene trees in all particles\n",1);
+        }
+        else {
+            output("  *** warning ***: more than one distinct gene tree topology\n",1);
+        }
+        
+        // Open the file into which parameters will be saved
+        // in a format useful to LoRaD
+        ofstream loradf("params-lorad.txt");
+        
+        // Save column names on first line
+        vector<string> names;
+        names.push_back("particle");
+        names.push_back("logFelsL");
+        names.push_back("logCoalL");
+        names.push_back("logPrior");
+        getAllParamNames(names);
+        loradf << boost::join(names, "\t") << endl;
+        
+        unsigned particle_index = 0;
+        
+        //temporary!
+        unsigned tmp_nparticle_objects = (unsigned)_particle_list.size();
+        
+        for (auto & p : _particle_list) {
+            // Stores tuple (height, gene + 1, left species, right species)
+            // for each join in either species tree or any gene tree.
+            // To get 0-offset gene index, subtract
+            // one from second element of tuple (0 means tuple represents a
+            // species tree join).
+            vector<Forest::coalinfo_t> coalinfo_vect;
+            
+            // Add species tree joins to coalinfo_vect
+            SpeciesForest & sf = p.getSpeciesForest();
+            sf.heightsInternalsPreorders();
+            sf.saveCoalInfo(coalinfo_vect);
+
+            // Add gene tree joins to coalinfo_vect
+            double log_likelihood = 0.0;
+            for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
+                GeneForest & gf = p.getGeneForest(g);
+                gf.heightsInternalsPreorders();
+                gf.saveCoalInfo(coalinfo_vect);
+                log_likelihood += gf.calcLogLikelihood();
+            }
+            log_likelihood *= SMCGlobal::_phi;
+            
+            // Sort coalinfo_vect from smallest to largest height
+            sort(coalinfo_vect.begin(), coalinfo_vect.end());
+            
+            // Calculate log coalescent likelihood (joint prior for gene trees)
+            double log_gene_tree_prior = calcLogCoalLike(coalinfo_vect);
+            
+            // Calculate log species tree prior
+            double log_species_tree_prior = calcLogSpeciesTreePrior(coalinfo_vect);
+                        
+            // This vector will hold all increments from the species tree
+            // and all gene trees (in order)
+            vector<string> params;
+            
+            // Calculate increments in species tree
+            double hprev = 0.0;
+            for (auto cinfo : coalinfo_vect) {
+                unsigned gene_plus_1 = get<1>(cinfo);
+                if (gene_plus_1 == 0) {
+                    double               h      = get<0>(cinfo);
+                    params.push_back(str(format("%.9f") % (h - hprev)));
+                    hprev = h;
+                }
+            }
+            
+#if defined(POLTMP1)
+            for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
+                // Map to store previous height for each species
+                map<SMCGlobal::species_t, double> height_map;
+                hprev = 0.0;
+                for (auto cinfo : coalinfo_vect) {
+                    // Get info about this event
+                    unsigned gene_plus_1 = get<1>(cinfo);
+                    double               h      = get<0>(cinfo);
+                    SMCGlobal::species_t sleft  = get<2>(cinfo);
+                    SMCGlobal::species_t sright = get<3>(cinfo);
+                    
+                    if (gene_plus_1 == 0) {
+                        // Ascertain ancestral species in this speciation event
+                        SMCGlobal::species_t sanc = sleft;
+                        sanc |= sright;
+                    
+                        // If haven't seen this species before, initialize height
+                        // to be equal to largest height in either sleft or sright
+                        if (height_map.count(sanc) == 0) {
+                            double lheight = height_map[sleft];
+                            double rheight = height_map[sright];
+                            double prevheight = (lheight > rheight ? lheight : rheight);
+                            height_map[sanc] = prevheight;
+                        }
+                    }
+                    else {
+                        // Coalescent event
+                        assert(sleft == sright);
+                        
+                        // If haven't seen this species before, initialize height
+                        if (height_map.count(sleft) == 0) {
+                            height_map[sleft] = 0.0;
+                        }
+                            
+                        unsigned gene_index = gene_plus_1 - 1;
+                        if (gene_index == g) {
+                            // coalescence event in gene g
+                            double hincr = h - height_map[sleft];
+                            params.push_back(str(format("%.9f") % hincr));
+                            height_map[sleft] = h;
+                        }
+                    }
+                }
+            }
+#else
+            for (unsigned g = 0; g < SMCGlobal::_ngenes; g++) {
+                // Map to store previous height for each species
+                //map<SMCGlobal::species_t, double> height_map;
+                hprev = 0.0;
+                for (auto cinfo : coalinfo_vect) {
+                    unsigned gene_plus_1 = get<1>(cinfo);
+                    double               h      = get<0>(cinfo);
+                    SMCGlobal::species_t sleft  = get<2>(cinfo);
+                    SMCGlobal::species_t sright = get<3>(cinfo);
+                    if (gene_plus_1 > 0) {
+                        unsigned gene_index = gene_plus_1 - 1;
+                        if (gene_index == g) {
+                            // coalescence event in gene g
+                            assert(sleft == sright);
+                            params.push_back(str(format("%.9f") % (h - hprev)));
+                            hprev = h;
+                        }
+                    }
+                }
+            }
+#endif
+
+            // Second element of pair is number of copies of particle
+            unsigned n = p.getCount();
+            for (unsigned i = 0; i < n; i++) {
+                particle_index++;
+                loradf << str(format("%d\t%.9f\t%.9f\t%.9f\t%s")
+                    % particle_index
+                    % log_likelihood
+                    % log_gene_tree_prior
+                    % log_species_tree_prior
+                    % boost::join(params, "\t")) << endl;
+            }
+        }
+        loradf.close();
+        
+        ofstream loradRf("lorad.R");
+        loradRf << "library(lorad)\n";
+        loradRf << "colspec <- c(";
+        loradRf << "\"particle\" = \"iteration\",";
+        loradRf << " \"logFelsL\" = \"posterior\",";
+        loradRf << " \"logCoalL\" = \"posterior\",";
+        loradRf << " \"logPrior\" = \"posterior\",";
+        for (unsigned i = 4; i < names.size(); i++) {
+            loradRf << " \"" << names[i] << "\" = \"positive\"";
+            if (i < names.size() - 1)
+                loradRf << ",";
+        }
+        loradRf << ")\n";
+        loradRf << "params <- read.table(\"params-lorad.txt\", header=TRUE)\n";
+        loradRf << "results <- lorad_estimate(params, colspec, 0.5, \"random\", 0.1)\n";
+        loradRf << "lorad_summary(results)\n";
+        
+        loradRf.close();
+        
+        ofstream conf("loradml.conf");
+        conf << "paramfile = params-lorad.txt\n";
+        conf << "plotfprefix = lnlplot\n";
+        conf << "trainingfrac = 0.5\n";
+        conf << "coverage = 0.1\n";
+        conf << "colspec = iteration particle\n";
+        conf << "colspec = posterior logFelsL\n";
+        conf << "colspec = posterior logCoalL\n";
+        conf << "colspec = posterior logPrior\n";
+        for (unsigned i = 4; i < names.size(); i++) {
+            conf << "colspec = positive " << names[i] << "\n";
+        }
+        conf.close();
+    }
 }

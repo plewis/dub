@@ -9,7 +9,7 @@
 #include <fstream>
 #include <limits>
 #include <map>
-#include <memory>
+#include <memory>   // shared_ptr
 #include <new>      // used by Mallocator: bad_alloc, bad_array_new_length
 #include <numeric>
 #include <queue>
@@ -149,6 +149,7 @@ vector<string>                      SMCGlobal::_gene_names;
 vector<unsigned>                    SMCGlobal::_nsites_per_gene;
 map<unsigned, double>               SMCGlobal::_relrate_for_gene;
 
+double                              SMCGlobal::_phi                = 1.0;
 double                              SMCGlobal::_theta              = 0.05;
 double                              SMCGlobal::_lambda             = 1.0;
 
@@ -226,12 +227,12 @@ int main(int argc, const char * argv[]) {
         output(format("\nTotal time: %.5f seconds\n") % total_seconds, 1);
     }
     catch(std::exception & x) {
-        output(format("Exception: %s\n") % x.what(), 2);
-        output("Aborted.\n", 2);
+        cerr << str(format("Exception: %s\n") % x.what());
+        cerr << "Aborted.\n";
         normal_termination = false;
     }
     catch(...) {
-        output("Exception of unknown type!\n", 2);
+        cerr << "Exception of unknown type!\n";
         normal_termination = false;
     }
     
