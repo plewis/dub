@@ -15,7 +15,7 @@ namespace proj {
         
         public:
         
-            typedef tuple<double, unsigned, SMCGlobal::species_t, SMCGlobal::species_t>   coalinfo_t;
+            typedef tuple<double, unsigned, vector<G::species_t> >  coalinfo_t;
             typedef set<Split> treeid_t;
 
                                 Forest();
@@ -28,7 +28,7 @@ namespace proj {
                         
             static void         readTreefile(const string filename,
                                         unsigned skip,
-                                        const vector<string> & leaf_names,
+                                        vector<string> & leaf_names,
                                         map<unsigned,unsigned> & taxon_map,
                                         vector<string> & names,
                                         vector<string> & newicks);
@@ -40,24 +40,29 @@ namespace proj {
             void                storeSplits(Forest::treeid_t & splitset);
             void                alignTaxaUsing(const map<unsigned, unsigned> & taxon_map);
             
-            unsigned            advanceAllLineagesBy(double t);
+            unsigned            advanceAllLineagesBy(double dt, bool mark);
             void                heightsInternalsPreorders();
-            
-            virtual void        clearMark() = 0;
+
+            virtual void        clearMark();
             virtual void        revertToMark() = 0;
             virtual void        finalizeProposal() = 0;
             virtual void        createTrivialForest(bool compute_partials) = 0;
             virtual bool        isSpeciesForest() const = 0;
-            virtual void        saveCoalInfo(vector<coalinfo_t> & coalinfo_vect) const = 0;
             virtual void        recordHeights(vector<double> & height_vect) const = 0;
+            virtual void        setSpeciesFromNodeName(Node * nd) = 0;
+
+            virtual void        addCoalInfoElem(const Node *, vector<coalinfo_t> & recipient) = 0;
+            virtual void        saveCoalInfo(vector<coalinfo_t> & coalinfo_vect, bool cap = false) const = 0;
+            
+            static void         debugShowCoalInfo(string title, vector<coalinfo_t> & coalinfo_vect);
+            static pair<double,double> calcTreeDistances(Forest & ref, Forest & test);
+            static bool         subsumed(G::species_t test_species, G::species_t subtending_species);
 
         protected:
         
             int         extractNodeNumberFromName(string node_name, set<unsigned> & used);
             void        extractEdgeLen(Node * nd, string edge_length_string);
             void        setNodeNameFromNumber(Node * nd);
-            void        setSpeciesFromNodeName(Node * nd);
-            void        setSpeciesFrommNodeName(Node * nd);
             Node *      findNextPreorder(Node * nd) const;
             bool        canHaveSibling(Node * nd) const;
             void        refreshPreorder(Node::ptr_vect_t & preorder) const;
@@ -73,6 +78,8 @@ namespace proj {
             void        addTwoRemoveOne(Node::ptr_vect_t & node_vect, Node * del1, Node * del2, Node * add);
             void        addTwoRemoveOneAt(Node::ptr_vect_t & node_vect, unsigned pos1, Node * del1, unsigned pos2, Node * del2, Node * add);
             
+            void        debugCheckCoalInfoSorted(const vector<coalinfo_t> & coalinfo_vect) const;
+            void        debugCheckMarkEmpty() const;
             void        debugCheckPreorder(const Node::ptr_vect_t & preorder) const;
             void        debugCheckAllPreorders() const;
             void        debugShowNodeInfo(string title);
@@ -90,13 +97,15 @@ namespace proj {
             double                  _log_prior;
             vector<Node>            _nodes;
             Node::ptr_vect_t        _lineages;
+            vector<coalinfo_t>      _coalinfo;
             
-            // Not copied in operator because it should be empty when particles are copied
+            // These not copied in operator because they should be empty when particles are copied
+            vector<coalinfo_t>                  _mark_coalinfo;
             stack<double>                       _mark_increments;
             stack<Node *>                       _mark_anc_nodes;
             stack<pair<unsigned, unsigned> >    _mark_left_right_pos;
                                     
-            // Because these can be recalulated at any time, they should not
+            // Because these can be recalculated at any time, they should not
             // affect the const status of the Forest object
             mutable vector<Node::ptr_vect_t> _preorders;
 };
@@ -113,11 +122,16 @@ namespace proj {
         _forest_height = 0.0;
         _next_node_index = 0;
         _next_node_number = 0;
-        _prev_log_likelihood = SMCGlobal::_negative_infinity;
+        _prev_log_likelihood = 0.0;
         _log_prior = 0.0;
         _nodes.clear();
         _preorders.clear();
         _lineages.clear();
+        _coalinfo.clear();
+        _mark_coalinfo.clear();
+        _mark_increments = {};
+        _mark_anc_nodes = {};
+        _mark_left_right_pos = {};
     }
     
     inline double Forest::getPrevHeight() const {
@@ -183,25 +197,17 @@ namespace proj {
             throw XProj(str(format("%s is not interpretable as an edge length") % edge_length_string));
     }
 
-    inline void Forest::setSpeciesFromNodeName(Node * nd) {
-        if (SMCGlobal::_taxon_to_species.count(nd->_name) == 0)
-            throw XProj(str(format("Could not find an index for the taxon name \"%s\"") % nd->_name));
-        else {
-            Node::setSpeciesBit(nd->_species, SMCGlobal::_taxon_to_species.at(nd->_name), /*init_to_zero_first*/true);
-        }
-    }
-    
     inline void Forest::setNodeNameFromNumber(Node * nd) {
         unsigned n = nd->_number;
         if (isSpeciesForest()) {
-            assert(n < 2*SMCGlobal::_species_names.size() - 1);
-            if (n < SMCGlobal::_species_names.size())
-                nd->_name = SMCGlobal::_species_names[n];
+            assert(n < 2*G::_species_names.size() - 1);
+            if (n < G::_species_names.size())
+                nd->_name = G::_species_names[n];
         }
         else {
-            assert(n < 2*SMCGlobal::_taxon_names.size() - 1);
-            if (n < SMCGlobal::_taxon_names.size())
-                nd->_name = SMCGlobal::_taxon_names[n];
+            assert(n < 2*G::_taxon_names.size() - 1);
+            if (n < G::_taxon_names.size())
+                nd->_name = G::_taxon_names[n];
         }
     }
     
@@ -269,7 +275,7 @@ namespace proj {
         // the _forest_height
         double basal_polytomy_height = 0.0; //_forest_height*(1.1);
         bool is_complete_tree = (bool)(_preorders.size() == 1);
-        double coalfactor = (coalunits ? (2.0/SMCGlobal::_theta) : 1.0);
+        double coalfactor = (coalunits ? (2.0/G::_theta) : 1.0);
         
         //const format basal_subtree_format( str(format("%%s:%%.%df") % precision) );
         const format tip_node_name_format( str(format("%%s:%%.%df") % precision) );
@@ -378,7 +384,7 @@ namespace proj {
                     else {
                         unsigned leaf_index = taxon_map.at(nd->_number + 1);
                         nd->_number = leaf_index;
-                        nd->_name = SMCGlobal::_species_names[leaf_index];
+                        nd->_name = G::_species_names[leaf_index];
                     }
                 }
             }
@@ -390,9 +396,9 @@ namespace proj {
         // _lineages contains just one element) forest from the supplied newick
         // tree description. Assumes newick either uses names for leaves or,
         // if it specifies numbers, the numbers correspond to keys in
-        // SMCGlobal::_nexus_taxon_map, which translates taxon numbers in newick
-        // strings to the index of the taxon in SMCGlobal::_species_names (if
-        // building a species tree) or SMCGlobal::_taxon_names (if building a
+        // G::_nexus_taxon_map, which translates taxon numbers in newick
+        // strings to the index of the taxon in G::_species_names (if
+        // building a species tree) or G::_taxon_names (if building a
         // gene tree).
         
         // Remove all nodes and all pointers to nodes
@@ -487,7 +493,7 @@ namespace proj {
                         if (!nd->_left_child) {
                             int num = extractNodeNumberFromName(nd->_name, used);
                             assert(num > 0);
-                            nd->_number = SMCGlobal::_nexus_taxon_map[(unsigned)num];
+                            nd->_number = G::_nexus_taxon_map[(unsigned)num];
                             setNodeNameFromNumber(nd);
                             setSpeciesFromNodeName(nd);
                             curr_leaf++;
@@ -515,7 +521,7 @@ namespace proj {
                         if (!nd->_left_child) {
                             int num = extractNodeNumberFromName(nd->_name, used);
                             assert(num > 0);
-                            nd->_number = SMCGlobal::_nexus_taxon_map[(unsigned)num];
+                            nd->_number = G::_nexus_taxon_map[(unsigned)num];
                             //nd->_number = (unsigned)(num - 1);
                             setNodeNameFromNumber(nd);
                             setSpeciesFromNodeName(nd);
@@ -699,7 +705,7 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
 
     inline void Forest::storeSplits(Forest::treeid_t & splitset) {
         // Resize all splits (also clears all splits)
-        resizeAllSplits(isSpeciesForest() ? SMCGlobal::_nspecies : SMCGlobal::_ntaxa);
+        resizeAllSplits(isSpeciesForest() ? G::_nspecies : G::_ntaxa);
 
         // Now do a postorder traversal and add the bit corresponding
         // to the current node in its parent node's split
@@ -778,7 +784,7 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
         // Refreshes _preorders and then recalculates heights of all nodes
         // and sets _forest_height
         
-        resizeAllSplits(isSpeciesForest() ? SMCGlobal::_nspecies : SMCGlobal::_ntaxa);
+        resizeAllSplits(isSpeciesForest() ? G::_nspecies : G::_ntaxa);
         refreshAllPreorders();
         _forest_height = 0.0;
 
@@ -787,7 +793,7 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
             for (auto nd : boost::adaptors::reverse(preorder)) {
                 if (nd->_left_child) {
                     // nd is an internal node
-                    assert(nd->_height != SMCGlobal::_infinity);
+                    assert(nd->_height != G::_infinity);
                     if (nd->_height + nd->_edge_length > _forest_height)
                         _forest_height = nd->_height + nd->_edge_length;
                 }
@@ -810,7 +816,7 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
                     }
                     
                     // If nd is not its parent's rightmost child, check ultrametric assumption
-                    assert(!is_rightmost_child || fabs(nd->_parent->_height - parent_height) < SMCGlobal::_small_enough);
+                    assert(!is_rightmost_child || fabs(nd->_parent->_height - parent_height) < G::_small_enough);
 
                     // Parent's bits are the union of the bits set in all its children
                     nd->_parent->_split.addSplit(nd->_split);
@@ -821,29 +827,33 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
     
     inline void Forest::heightsInternalsPreorders() {
         // Recalculates heights of all nodes, refreshes preorder sequences, and renumbers internal nodes
-        
         assert(_lineages.size() == 1);
         refreshAllPreorders();
         _forest_height = 0.0;
 
         // First internal node number is the number of leaves
-        _next_node_number = (unsigned)(isSpeciesForest() ? SMCGlobal::_species_names.size() : SMCGlobal::_taxon_names.size());
+        _next_node_number = (unsigned)(isSpeciesForest() ? G::_species_names.size() : G::_taxon_names.size());
 
         // Renumber internal nodes in postorder sequence for each lineage in turn
         for (auto & preorder : _preorders) {
             for (auto nd : boost::adaptors::reverse(preorder)) {
                 if (nd->_left_child) {
                     // nd is an internal node
-                    assert(nd->_height != SMCGlobal::_infinity);
+                    assert(nd->_height != G::_infinity);
                     if (nd->_height > _forest_height)
                         _forest_height = nd->_height;
                     nd->_number = _next_node_number++;
+                    nd->_species = nd->_left_child->_species;
+                    assert(nd->_left_child->_right_sib);
+                    nd->_species |= nd->_left_child->_right_sib->_species;
+                    assert(nd->_left_child->_right_sib->_right_sib == nullptr);
+                    //addCoalInfoElem(nd);
                 }
                 else {
                     // nd is a leaf node
                     nd->_height = 0.0;
                 }
-                
+                                
                 if (nd->_parent) {
                     // Set parent's height if nd is right-most child of its parent
                     bool is_rightmost_child = !nd->_right_sib;
@@ -853,7 +863,7 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
                     }
                     
                     // If nd is not its parent's rightmost child, check ultrametric assumption
-                    assert(!is_rightmost_child || fabs(nd->_parent->_height - parent_height) < SMCGlobal::_small_enough);
+                    assert(!is_rightmost_child || fabs(nd->_parent->_height - parent_height) < G::_small_enough);
                 }
             }
         }
@@ -861,7 +871,7 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
         
     inline void Forest::readTreefile(const string filename,
                                      unsigned skip,
-                                     const vector<string> & leaf_names,
+                                     vector<string> & leaf_names,
                                      map<unsigned,unsigned> & taxon_map,
                                      vector<string> & tree_names,
                                      vector<string> & newicks) {
@@ -903,7 +913,17 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
             // Ensure that the number of leaves accords with expectations
             unsigned num_leaves = (unsigned)taxa_block->GetNumTaxonLabels();
             if (num_leaves != leaf_names.size()) {
-                throw XProj(format("Found %d taxa in taxa block %d but was expecting %d") % num_leaves % (i+1) % leaf_names.size());
+                if (leaf_names.empty()) {
+                    // Populate leaf_names using taxa block
+                    leaf_names.resize(num_leaves);
+                    for (unsigned t = 0; t < num_leaves; t++) {
+                        leaf_names[t] = taxa_block->GetTaxonLabel(t);
+                    }
+                    output(format("Assuming %d taxon names are those found in taxa block") % num_leaves, 1);
+                }
+                else {
+                    throw XProj(format("Found %d taxa in taxa block %d but expecting %d") % num_leaves % (i+1) % leaf_names.size());
+                }
             }
             
             // It is possible (probable even) that the order of taxa in taxa_block will differ from
@@ -975,9 +995,9 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
         nexus_reader.DeleteBlocksFromFactories();
     }
             
-    inline unsigned Forest::advanceAllLineagesBy(double dt) {
+    inline unsigned Forest::advanceAllLineagesBy(double dt, bool mark) {
         // Note: dt may be negative
-        if (dt > 0.0) {
+        if (mark && dt > 0.0) {
             _mark_increments.push(dt);
         }
                 
@@ -1008,7 +1028,7 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
     
     inline Node * Forest::pullNode() {
         if (_next_node_index == _nodes.size()) {
-            unsigned nleaves = 2*(isSpeciesForest() ? SMCGlobal::_nspecies : SMCGlobal::_ntaxa) - 1;
+            unsigned nleaves = 2*(isSpeciesForest() ? G::_nspecies : G::_ntaxa) - 1;
             throw XProj(str(format("Forest::pullNode tried to return a node beyond the end of the _nodes vector (_next_node_index = %d equals %d nodes allocated for %d leaves)") % _next_node_index % _nodes.size() % nleaves));
         }
         Node * new_nd = &_nodes[_next_node_index++];
@@ -1035,14 +1055,14 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
         new_nd->_left_child  = subtree1;
         new_nd->_edge_length = 0.0;
         new_nd->_species = 0;
-        
+                
         // Calculate height of the new node
         // (should be the same whether computed via the left or right child)
         double h1 = subtree1->_height + subtree1->_edge_length;
         double h2 = subtree2->_height + subtree2->_edge_length;
 
-        //temporary! Probably need to reinstate this assert
-        //assert(fabs(h1 - h2) < SMCGlobal::_small_enough);
+        // //temporary! Probably need to reinstate this assert
+        //assert(fabs(h1 - h2) < G::_small_enough);
 
         new_nd->_height = (h1 + h2)/2.0;
 
@@ -1125,13 +1145,33 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
         output(format("\nNode::ptr_vect_t: %s\n") % title, 2);
         output(format("%6s %12s %6s %10s\n") % "index" % "address" % "number" % "species", 2);
         for (unsigned i = 0; i < v.size(); ++i) {
-            string memory_address = SMCGlobal::memoryAddressAsString((void *)&_nodes[i]);
-            string species_set = SMCGlobal::speciesStringRepresentation(v[i]->getSpecies());
+            string memory_address = G::memoryAddressAsString((void *)&_nodes[i]);
+            string species_set = G::speciesStringRepresentation(v[i]->getSpecies());
             output(format("%6d %12s %6d %10s\n") % i % memory_address % v[i]->_number % species_set, 2);
         }
         output("\n", 2);
     }
 
+    inline void Forest::debugShowCoalInfo(string title, vector<Forest::coalinfo_t> & coalinfo_vect) {
+        output(format("\n%s:\n") % title, 1);
+        output(format("%12s %12s %s\n") % "height" % "gene" % "child spp", 1);
+        for (auto cinfo : coalinfo_vect) {
+            double                                   h = get<0>(cinfo);
+            unsigned                       gene_plus_1 = get<1>(cinfo);
+            vector<G::species_t> &         spp = get<2>(cinfo);
+            //G::species_t sleft       = get<2>(cinfo);
+            //G::species_t sright      = get<3>(cinfo);
+            
+            ostringstream oss;
+            copy(spp.begin(), spp.end(), ostream_iterator<G::species_t>(oss, " "));
+            if (gene_plus_1 == 0)
+                output(format("%12.5f %12s %12s\n") % h % "(0)" % oss.str(), 1);
+            else
+                output(format("%12.5f %12d %12s\n") % h % gene_plus_1 % oss.str(), 1);
+        }
+        output("\n", 1);
+    }
+    
     inline void Forest::operator=(const Forest & other) {
         _prev_forest_height             = other._prev_forest_height;
         _forest_height                  = other._forest_height;
@@ -1205,7 +1245,141 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
         }
         assert(_lineages.size() == other._lineages.size());
         
+        _coalinfo = other._coalinfo;
+        
         refreshAllPreorders();
     }
 
+    inline bool Forest::subsumed(G::species_t test_species, G::species_t subtending_species) {
+        bool not_equal = (test_species != subtending_species);
+        bool is_subset = ((test_species & subtending_species) == test_species);
+        if (not_equal && is_subset)
+            return true;
+        else
+            return false;
+    }
+
+    inline pair<double,double> Forest::calcTreeDistances(Forest & ref, Forest & test) {
+        // Determine whether ref and test are species forests or gene forests
+        bool ref_is_species_forest  = ref.isSpeciesForest();
+        bool test_is_species_forest = test.isSpeciesForest();
+        bool species_forest_comparison = ref_is_species_forest && test_is_species_forest;
+        bool gene_forest_comparison = !ref_is_species_forest && !test_is_species_forest;
+        assert(species_forest_comparison || gene_forest_comparison);
+        unsigned nlvs = 0;
+        if (species_forest_comparison)
+            nlvs = G::_nspecies;
+        else
+            nlvs = G::_ntaxa;
+        
+        // Store splits from reference tree
+        Split::treeid_t ref_splits;
+        ref.storeSplits(ref_splits);
+        
+        // Store edge lengths from reference tree
+        map<Split, double> ref_edgelen_map;
+        ref.storeEdgelensBySplit(ref_edgelen_map);
+                
+        // Store splits from test tree
+        Split::treeid_t test_splits;
+        test.storeSplits(test_splits);
+        
+        // Store edge lengths from test tree
+        map<Split, double> test_edgelen_map;
+        test.storeEdgelensBySplit(test_edgelen_map);
+                
+        // Now calculate squares for leaf nodes, storing in KLleaves
+        std::vector<double> KLleaves(nlvs);
+        Split s;
+        s.resize(nlvs);
+        Split sroot;
+        sroot.resize(nlvs);
+        for (unsigned i = 0; i < nlvs; i++) {
+            s.clear();
+            s.setBitAt(i);
+            sroot.setBitAt(i);
+            assert(ref_edgelen_map.count(s) == 1);
+            assert(test_edgelen_map.count(s) == 1);
+            double ref_edge_length  = ref_edgelen_map[s];
+            double test_edge_length = test_edgelen_map[s];
+            double square = pow(test_edge_length - ref_edge_length, 2.0);
+            KLleaves[i] = square;
+        }
+        
+        // Store union of refsplits and testsplits in allsplits
+        Split::treeid_t all_splits;
+        set_union(
+            ref_splits.begin(), ref_splits.end(),
+            test_splits.begin(), test_splits.end(),
+            std::inserter(all_splits, all_splits.begin()));
+        
+        // Traverse allsplits, storing squared branch length differences in KLinternals
+        std::vector<double> KLinternals(all_splits.size());
+        double RFdist = 0.0;
+        unsigned i = 0;
+        for (auto s : all_splits) {
+            if (s == sroot)
+                continue;
+            bool s_in_ref  = ref_edgelen_map.count(s) == 1;
+            bool s_in_test = test_edgelen_map.count(s) == 1;
+            assert(s_in_ref || s_in_test);
+            if (!s_in_ref) {
+                double test_edge_length = test_edgelen_map[s];
+                double test_square = pow(test_edge_length, 2.0);
+                KLinternals[i++] = test_square;
+                RFdist += 1.0;
+            }
+            else if (!s_in_test) {
+                double ref_edge_length = ref_edgelen_map[s];
+                double ref_square = pow(ref_edge_length, 2.0);
+                KLinternals[i++] = ref_square;
+                RFdist += 1.0;
+            }
+            else {
+                double test_edge_length = test_edgelen_map[s];
+                double ref_edge_length = ref_edgelen_map[s];
+                double square = pow(test_edge_length - ref_edge_length, 2.0);
+                KLinternals[i++] = square;
+            }
+        }
+            
+        // Calculate KL distance
+        double KFSS = 0.0;
+        for (auto square : KLinternals) {
+            KFSS += square;
+        }
+        for (auto square : KLleaves) {
+            KFSS += square;
+        }
+        assert(KFSS >= 0.0);
+        double KFdist = sqrt(KFSS);
+        return make_pair(KFdist, RFdist);
+    }
+    
+    inline void Forest::debugCheckCoalInfoSorted(const vector<coalinfo_t> & coalinfo_vect) const {
+#if defined(DEBUG_SECOND_LEVEL)
+        double h = 0.0;
+        for (const auto & ci : coalinfo_vect) {
+            if (get<0>(ci) < h) {
+                throw XProj("coalinfo vector not sorted");
+            }
+        }
+#endif
+    }
+            
+    inline void Forest::debugCheckMarkEmpty() const {
+        assert(_mark_coalinfo.empty());
+        assert(_mark_increments.empty());
+        assert(_mark_anc_nodes.empty());
+        assert(_mark_left_right_pos.empty());
+    }
+    
+    inline void Forest::clearMark() {
+        // Clear the stacks so that future coalescence or speciation events can be recorded
+        _mark_coalinfo = {};
+        _mark_increments = {};
+        _mark_anc_nodes = {};
+        _mark_left_right_pos = {};
+    }
+    
 }

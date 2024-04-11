@@ -35,6 +35,7 @@
 #include <boost/random/uniform_real.hpp>
 #include <boost/random/variate_generator.hpp>
 #include <boost/range/adaptor/reversed.hpp>
+#include <boost/math/special_functions/gamma.hpp>
 
 #include "ncl/nxsmultiformat.h"
 
@@ -62,9 +63,15 @@ using boost::format;
 #include "partial_store.hpp"
 #include "node.hpp"
 #include "forest.hpp"
-#include "gene-forest.hpp"
 #include "species-forest.hpp"
+#include "policy-parallel-none.hpp"
+#include "smc.hpp"
 #include "particle.hpp"
+#include "gene-forest.hpp"
+#include "particle-func.hpp"
+#include "smc-func.hpp"
+//#include "policy-parallel-mt.hpp"
+//#include "policy-parallel-mpi.hpp"
 #include "proj.hpp"
 
 using namespace proj;
@@ -81,22 +88,22 @@ using namespace proj;
     unsigned my_last_particle = 0;
 
     void output(format & fmt, unsigned level) {
-        if (my_rank == 0 && SMCGlobal::_verbosity > 0 && level <= SMCGlobal::_verbosity)
+        if (my_rank == 0 && G::_verbosity > 0 && level <= G::_verbosity)
             cout << str(fmt);
     }
 
     void output(string msg, unsigned level) {
-        if (my_rank == 0 && SMCGlobal::_verbosity > 0 && level <= SMCGlobal::_verbosity)
+        if (my_rank == 0 && G::_verbosity > 0 && level <= G::_verbosity)
             cout << msg;
     }
 #else
     void output(format & fmt, unsigned level) {
-        if (SMCGlobal::_verbosity > 0 && level <= SMCGlobal::_verbosity)
+        if (G::_verbosity > 0 && level <= G::_verbosity)
             cout << str(fmt);
     }
 
     void output(string msg, unsigned level) {
-        if (SMCGlobal::_verbosity > 0 && level <= SMCGlobal::_verbosity)
+        if (G::_verbosity > 0 && level <= G::_verbosity)
             cout << msg;
     }
 #endif
@@ -120,52 +127,58 @@ unsigned long                       Partial::_total_max_bytes   = 0;
 unsigned                            Partial::_nstates           = 4;
 #endif
 
-bool                                SMCGlobal::_debugging       = false;
+string                              G::_species_tree_ref_file_name = "";
+string                              G::_gene_trees_ref_file_name = "";
 
-unsigned                            SMCGlobal::_nthreads        = 1;
+bool                                G::_debugging       = false;
+
+unsigned                            G::_nthreads        = 1;
 #if defined(USING_MULTITHREADING)
-mutex                               SMCGlobal::_mutex;
-mutex                               SMCGlobal::_gene_forest_clear_mutex;
-mutex                               SMCGlobal::_debug_mutex;
-//vector<unsigned>                    SMCGlobal::_thread_first_gene;
-//vector<unsigned>                    SMCGlobal::_thread_last_gene;
+mutex                               G::_mutex;
+mutex                               G::_gene_forest_clear_mutex;
+mutex                               G::_debug_mutex;
+//vector<unsigned>                    G::_thread_first_gene;
+//vector<unsigned>                    G::_thread_last_gene;
 #endif
 
-unsigned                            SMCGlobal::_verbosity          = 3;
+unsigned                            G::_verbosity          = 3;
 
-unsigned                            SMCGlobal::_nstates            = 4;
+unsigned                            G::_nstates            = 4;
 
-unsigned                            SMCGlobal::_ntaxa              = 0;
-vector<string>                      SMCGlobal::_taxon_names;
-map<string, unsigned>               SMCGlobal::_taxon_to_species;
+unsigned                            G::_ntaxa              = 0;
+vector<string>                      G::_taxon_names;
+map<string, unsigned>               G::_taxon_to_species;
 
-unsigned                            SMCGlobal::_nspecies           = 0;
-SMCGlobal::species_t                SMCGlobal::_species_mask       = (SMCGlobal::species_t)0;
-vector<string>                      SMCGlobal::_species_names;
-map<unsigned,unsigned>              SMCGlobal::_nexus_taxon_map;
+unsigned                            G::_nspecies           = 0;
+G::species_t                G::_species_mask       = (G::species_t)0;
+vector<string>                      G::_species_names;
+map<unsigned,unsigned>              G::_nexus_taxon_map;
 
-unsigned                            SMCGlobal::_ngenes             = 0;
-vector<string>                      SMCGlobal::_gene_names;
-vector<unsigned>                    SMCGlobal::_nsites_per_gene;
-map<unsigned, double>               SMCGlobal::_relrate_for_gene;
+unsigned                            G::_ngenes             = 0;
+vector<string>                      G::_gene_names;
+vector<unsigned>                    G::_nsites_per_gene;
+map<unsigned, double>               G::_relrate_for_gene;
 
-double                              SMCGlobal::_phi                = 1.0;
-double                              SMCGlobal::_theta              = 0.05;
-double                              SMCGlobal::_lambda             = 1.0;
+double                              G::_phi                = 1.0;
+double                              G::_theta              = 0.05;
+double                              G::_lambda             = 1.0;
 
-double                              SMCGlobal::_theta_prior_mean   = 0.05;
-double                              SMCGlobal::_lambda_prior_mean  = 1.0;
+double                              G::_theta_prior_mean   = 0.05;
+double                              G::_lambda_prior_mean  = 1.0;
 
-bool                                SMCGlobal::_update_theta       = true;
-bool                                SMCGlobal::_update_lambda      = true;
+bool                                G::_update_theta       = true;
+bool                                G::_update_lambda      = true;
 
-double                              SMCGlobal::_small_enough       = 0.00001;
+double                              G::_small_enough       = 0.00001;
+
+unsigned                            G::_nparticles         = 500;
+unsigned                            G::_nparticles2        = 1000;
 
 static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in order to use infinity()");
-double                              SMCGlobal::_infinity = numeric_limits<double>::infinity();
-double                              SMCGlobal::_negative_infinity = -numeric_limits<double>::infinity();
+double                              G::_infinity = numeric_limits<double>::infinity();
+double                              G::_negative_infinity = -numeric_limits<double>::infinity();
 
-bool                                SMCGlobal::_prior_post        = false;
+bool                                G::_prior_post        = false;
 
 PartialStore::leaf_partials_t       GeneForest::_leaf_partials;
 

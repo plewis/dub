@@ -25,7 +25,7 @@ namespace proj {
                                         ~Node();
 
                     typedef vector<Node *>  ptr_vect_t;
-                    typedef tuple<unsigned, unsigned, SMCGlobal::species_t, Node::ptr_vect_t>  species_tuple_t; // no. lineages, gene locus, spp, vector of node pointers
+                    typedef tuple<unsigned, unsigned, G::species_t, Node::ptr_vect_t>  species_tuple_t; // no. lineages, gene locus, spp, vector of node pointers
         
                     Node *              getParent()                 {return _parent;}
                     const Node *        getParent() const           {return _parent;}
@@ -68,11 +68,12 @@ namespace proj {
                     double              getEdgeLength() const       {return _edge_length;}
                     void                setEdgeLength(double v);
                     
-                    const SMCGlobal::species_t &    getSpecies() const {return _species;}
-                    SMCGlobal::species_t &          getSpecies() {return _species;}
-                    
-                    void                            setSpecies(const SMCGlobal::species_t other);
-                    void                            setSpeciesToUnion(const SMCGlobal::species_t left, const SMCGlobal::species_t right);
+                    const G::species_t &    getSpecies() const {return _species;}
+                    G::species_t &          getSpecies() {return _species;}
+                                        
+                    void                            setSpecies(const G::species_t other);
+                    void                            setSpeciesToUnion(const G::species_t left, const G::species_t right);
+                                        
                     void                            revertSpecies();
                     void                            emptyPrevSpeciesStack();
                     bool                            canRevertSpecies() const;
@@ -86,11 +87,11 @@ namespace proj {
                     
                     static string       taxonNameToSpeciesName(string taxon_name);
 
-                    static void         setSpeciesMask(SMCGlobal::species_t & mask, unsigned nspecies);
-                    static void         setSpeciesBits(SMCGlobal::species_t & to_species, const SMCGlobal::species_t & from_species, bool init_to_zero_first);
-                    static void         unsetSpeciesBits(SMCGlobal::species_t & to_species, const SMCGlobal::species_t & from_species);
-                    static void         setSpeciesBit(SMCGlobal::species_t & to_species, unsigned i, bool init_to_zero_first);
-                    static void         unsetSpeciesBit(SMCGlobal::species_t & to_species, unsigned i);
+                    static void         setSpeciesMask(G::species_t & mask, unsigned nspecies);
+                    static void         setSpeciesBits(G::species_t & to_species, const G::species_t & from_species, bool init_to_zero_first);
+                    static void         unsetSpeciesBits(G::species_t & to_species, const G::species_t & from_species);
+                    static void         setSpeciesBit(G::species_t & to_species, unsigned i, bool init_to_zero_first);
+                    static void         unsetSpeciesBit(G::species_t & to_species, unsigned i);
                                         
             static const double _smallest_edge_length;
 
@@ -114,10 +115,16 @@ namespace proj {
             int             _number;
             string          _name;
             double          _edge_length;
-            double          _height;        // distance from node to any leaf
             
-            stack<SMCGlobal::species_t> _prev_species_stack; // set when _species is reassigned
-            SMCGlobal::species_t        _species;      // bitset of species (indices) compatible with this node
+            // distance from node to any leaf
+            double          _height;
+            
+            // set when _species is reassigned
+            stack<G::species_t> _prev_species_stack;
+            
+            // Bitset of species (indices) compatible with this node
+            G::species_t    _species;
+                        
             Split           _split;
             int             _flags;
             
@@ -139,41 +146,41 @@ namespace proj {
         _edge_length = _smallest_edge_length;
         _height = 0.0;
         _prev_species_stack = {};
-        _species = (SMCGlobal::species_t)0;
+        _species = (G::species_t)0;
         _partial = nullptr;
     }
 
-    inline void Node::setSpeciesMask(SMCGlobal::species_t & mask, unsigned nspecies) {
-        mask = (SMCGlobal::species_t)0;
+    inline void Node::setSpeciesMask(G::species_t & mask, unsigned nspecies) {
+        mask = (G::species_t)0;
         for (unsigned i = 0; i < nspecies; ++i) {
-            mask |= ((SMCGlobal::species_t)1 << i);
+            mask |= ((G::species_t)1 << i);
         }
     }
     
-    inline void Node::setSpeciesBits(SMCGlobal::species_t & to_species, const SMCGlobal::species_t & from_species, bool init_to_zero_first) {
+    inline void Node::setSpeciesBits(G::species_t & to_species, const G::species_t & from_species, bool init_to_zero_first) {
         if (init_to_zero_first)
-            to_species = (SMCGlobal::species_t)0;
+            to_species = (G::species_t)0;
 
         // Copy bits in from_species to to_species
         to_species |= from_species;
     }
     
-    inline void Node::unsetSpeciesBits(SMCGlobal::species_t & to_species, const SMCGlobal::species_t & from_species) {
+    inline void Node::unsetSpeciesBits(G::species_t & to_species, const G::species_t & from_species) {
         // Zero from_species' bits in to_species
         to_species &= ~from_species;
     }
     
-    inline void Node::setSpeciesBit(SMCGlobal::species_t & to_species, unsigned i, bool init_to_zero_first) {
+    inline void Node::setSpeciesBit(G::species_t & to_species, unsigned i, bool init_to_zero_first) {
         if (init_to_zero_first)
-            to_species = (SMCGlobal::species_t)0;
+            to_species = (G::species_t)0;
             
         // Set ith bit in to_species
-        to_species |= ((SMCGlobal::species_t)1 << i);
+        to_species |= ((G::species_t)1 << i);
     }
     
-    inline void Node::unsetSpeciesBit(SMCGlobal::species_t & to_species, unsigned i) {
+    inline void Node::unsetSpeciesBit(G::species_t & to_species, unsigned i) {
         // Unset ith bit in to_species
-        to_species &= ~((SMCGlobal::species_t)1 << i);
+        to_species &= ~((G::species_t)1 << i);
     }
     
     inline void Node::setEdgeLength(double v) {
@@ -192,7 +199,7 @@ namespace proj {
         return n_children;
     }
     
-    inline void Node::setSpecies(const SMCGlobal::species_t spp) {
+    inline void Node::setSpecies(const G::species_t spp) {
         _prev_species_stack.push(_species);
         _species = spp;
     }
@@ -205,27 +212,27 @@ namespace proj {
     }
     
     inline void Node::emptyPrevSpeciesStack() {
-        //temporary! Probably best to have this assert in place
         //assert(!_prev_species_stack.empty());
-        while (!_prev_species_stack.empty()) {
-            _prev_species_stack.pop();
-        }
+        _prev_species_stack = {};
+        //while (!_prev_species_stack.empty()) {
+        //    _prev_species_stack.pop();
+        //}
     }
     
     inline bool Node::canRevertSpecies() const {
         return (_prev_species_stack.empty() ? false : true);
     }
     
-    inline void Node::setSpeciesToUnion(const SMCGlobal::species_t left, const SMCGlobal::species_t right) {
-        assert(_prev_species_stack.empty());
-        _prev_species_stack.push(_species);
-        _species = left;
-        Node::setSpeciesBits(_species, right, /*init_to_zero_first*/false);
-        
+    inline void Node::setSpeciesToUnion(const G::species_t left, const G::species_t right) {
         // Internal nodes can have species that are unions and hence have size > 1, but
         // leaf nodes should be assigned to just a single species. This function should only
         // be called for internal nodes.
         assert(_left_child);
+
+        assert(_prev_species_stack.empty());
+        _prev_species_stack.push(_species);
+        _species = left;
+        Node::setSpeciesBits(_species, right, /*init_to_zero_first*/false);
     }
         
     inline string Node::taxonNameToSpeciesName(string tname) {

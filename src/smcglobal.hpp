@@ -4,17 +4,15 @@ extern proj::Lot rng;
 
 namespace proj {
 
-    struct SMCGlobal {
-        typedef unsigned long                       species_t;
+    struct G {
+        typedef unsigned long           species_t;
+        
+        static string                   _species_tree_ref_file_name;
+        static string                   _gene_trees_ref_file_name;
         
         static bool                     _debugging;
 
         static unsigned                 _nthreads;
-#if defined(USING_MULTITHREADING)
-        static mutex                    _mutex;
-        static mutex                    _gene_forest_clear_mutex;
-        static mutex                    _debug_mutex;
-#endif
         
         static unsigned                 _verbosity;
 
@@ -49,7 +47,12 @@ namespace proj {
         static double                   _small_enough;
         static double                   _infinity;
         static double                   _negative_infinity;
+        
+        static unsigned                 _nparticles;
+        static unsigned                 _nparticles2;
                         
+        static void     getAllParamNames(vector<string> & names);
+        static void     generateUpdateSeeds(vector<unsigned> & seeds);
         static double   calcLogSum(const vector<double> & log_values);
         static string   unsignedVectToString(const vector<unsigned> & v);
         static void     createDefaultGeneTreeNexusTaxonMap();
@@ -58,11 +61,33 @@ namespace proj {
         static void     normalizeRates(const vector<double> rates, vector<double> & probs);
         static void     normalizeCounts(const vector<unsigned> counts, vector<double> & probs);
         static unsigned multinomialDraw(Lot::SharedPtr lot, const vector<double> & probs);
-        static string   speciesStringRepresentation(SMCGlobal::species_t species);
-        static set<unsigned> speciesToUnsignedSet(SMCGlobal::species_t species);
+        static string   speciesStringRepresentation(G::species_t species);
+        static set<unsigned> speciesToUnsignedSet(G::species_t species);
     };
+    
+    inline void G::getAllParamNames(vector<string> & names) {
+        // Get species tree increment names
+        for (unsigned i = 0; i < G::_nspecies - 1; i++) {
+            names.push_back("sincr." + to_string(i));
+        }
+        
+        // Get gene tree increment names
+        for (unsigned g = 0; g < G::_ngenes; g++) {
+            for (unsigned i = 0; i < G::_ntaxa - 1; i++) {
+                names.push_back(G::_gene_names[g] + "." + to_string(i));
+            }
+        }
+    }
 
-    inline double SMCGlobal::calcLogSum(const vector<double> & log_values) {
+    inline void G::generateUpdateSeeds(vector<unsigned> & seeds) {
+        unsigned psuffix = 1;
+        for (auto & s : seeds) {
+            s = rng.randint(1,9999) + psuffix;
+            psuffix += 2;    // pure superstition (I always use odd seeds)
+        }
+    }
+
+    inline double G::calcLogSum(const vector<double> & log_values) {
         double max_logv = *max_element(log_values.begin(), log_values.end());
         
         double factored_sum = 0.0;
@@ -73,7 +98,7 @@ namespace proj {
         return log_sum_values;
     }
     
-    inline string SMCGlobal::unsignedVectToString(const vector<unsigned> & v) {
+    inline string G::unsignedVectToString(const vector<unsigned> & v) {
         ostringstream oss;
         
         // Create string with values separated by commas
@@ -87,33 +112,33 @@ namespace proj {
         return oss.str();
     }
     
-    inline void SMCGlobal::createDefaultGeneTreeNexusTaxonMap() {
+    inline void G::createDefaultGeneTreeNexusTaxonMap() {
         // Build default _nexus_taxon_map used by buildFromNewick
         // that assumes taxon indices in the newick tree description are in
         // the same order as _taxon_names
         _nexus_taxon_map.clear();
-        for (unsigned i = 0; i < SMCGlobal::_ntaxa; ++i) {
+        for (unsigned i = 0; i < G::_ntaxa; ++i) {
             _nexus_taxon_map[i+1] = i;
         }
     }
     
-    inline void SMCGlobal::createDefaultSpeciesTreeNexusTaxonMap() {
+    inline void G::createDefaultSpeciesTreeNexusTaxonMap() {
         // Build default _nexus_taxon_map used by buildFromNewick
         // that assumes taxon indices in the newick tree description are in
         // the same order as _species_names
         _nexus_taxon_map.clear();
-        for (unsigned i = 0; i < SMCGlobal::_nspecies; ++i) {
+        for (unsigned i = 0; i < G::_nspecies; ++i) {
             _nexus_taxon_map[i+1] = i;
         }
     }
 
-    inline string SMCGlobal::memoryAddressAsString(const void * ptr) {
+    inline string G::memoryAddressAsString(const void * ptr) {
         ostringstream memory_address;
         memory_address << ptr;
         return memory_address.str();
     }
     
-    inline void SMCGlobal::normalizeCounts(const vector<unsigned> counts, vector<double> & probs) {
+    inline void G::normalizeCounts(const vector<unsigned> counts, vector<double> & probs) {
         // Determine sum of counts
         double total_count = accumulate(counts.begin(), counts.end(), 0.0);
         
@@ -122,7 +147,7 @@ namespace proj {
         assert(fabs(accumulate(probs.begin(), probs.end(), 0.0) - 1.0) < 0.0001);
     }
     
-    inline void SMCGlobal::normalizeRates(const vector<double> rates, vector<double> & probs) {
+    inline void G::normalizeRates(const vector<double> rates, vector<double> & probs) {
         // Determine sum of rates
         double total_rate = accumulate(rates.begin(), rates.end(), 0.0);
         
@@ -131,7 +156,7 @@ namespace proj {
         assert(fabs(accumulate(probs.begin(), probs.end(), 0.0) - 1.0) < 0.0001);
     }
     
-    inline unsigned SMCGlobal::multinomialDraw(Lot::SharedPtr lot, const vector<double> & probs) {
+    inline unsigned G::multinomialDraw(Lot::SharedPtr lot, const vector<double> & probs) {
         // Compute cumulative probababilities
         vector<double> cumprobs(probs.size());
         partial_sum(probs.begin(), probs.end(), cumprobs.begin());
@@ -157,7 +182,7 @@ namespace proj {
         auto it = find_if(cumprobs.begin(), cumprobs.end(), [u](double cumpr){return cumpr > u;});
         if (it == cumprobs.end()) {
             double last_cumprob = *(cumprobs.rbegin());
-            throw XProj(format("SMCGlobal::multinomialDraw failed: u = %.9f, last cumprob = %.9f") % u % last_cumprob);
+            throw XProj(format("G::multinomialDraw failed: u = %.9f, last cumprob = %.9f") % u % last_cumprob);
         }
 
         auto d = distance(cumprobs.begin(), it);
@@ -166,7 +191,7 @@ namespace proj {
         return (unsigned)d;
     }
     
-    inline string SMCGlobal::speciesStringRepresentation(SMCGlobal::species_t species) {
+    inline string G::speciesStringRepresentation(G::species_t species) {
         species_t species_copy = species;
         unsigned bits_avail = (unsigned)sizeof(species_t);
         string s;
@@ -188,7 +213,7 @@ namespace proj {
         return s;
     }
     
-    inline set<unsigned> SMCGlobal::speciesToUnsignedSet(SMCGlobal::species_t species) {
+    inline set<unsigned> G::speciesToUnsignedSet(G::species_t species) {
         species_t species_copy = species;
         unsigned bits_avail = (unsigned)sizeof(species_t);
         set<unsigned> s;
