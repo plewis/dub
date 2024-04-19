@@ -269,6 +269,11 @@ namespace proj {
     }
     
     inline string Forest::makeNewick(unsigned precision, bool use_names, bool coalunits) const  {
+#if defined(EST_THETA)
+        if (coalunits) {
+            throw XProj("Not yet ready for coalunits if thetas can vary across species tree (i.e. EST_THETA is #defined)");
+        }
+#endif
         refreshAllPreorders();
         //refreshAllHeightsAndPreorders();
         // Place basal polytomy (if there is one) at a height 10% greater than

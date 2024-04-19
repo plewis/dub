@@ -95,7 +95,7 @@ namespace proj {
         template_particle.resetGeneForests(/*compute_partials*/true);
 
         // Compute initial log likelihood
-        //_starting_log_likelihood = template_particle.calcLogLikelihood();
+        _starting_log_likelihood = template_particle.calcLogLikelihood();
         //template_particle.calcLogLikelihood();
         //_starting_log_likelihood *= G::_phi;
 
@@ -160,6 +160,10 @@ namespace proj {
             double ess = _nparticles;
             ess = filterParticles(step, _particle_list, _log_weights, _counts, _update_seeds);
             
+#if defined(EST_THETA)
+            debugSaveThetas(step);
+#endif
+            
             //debugCheckCountMap(count_map, _nparticles);
             double secs = stopwatch.stop();
             
@@ -174,9 +178,9 @@ namespace proj {
             npartials_inuse = ps.getInUse();
             npartials_stored = ps.getStored();
             
-            output(format("%12d %12.3f %12.3f %12.3f %24.6f %12d %12d %12.3f %12.3f\n") % (step+1) % ess % minlogw % maxlogw % _log_marg_like % npartials_inuse % npartials_stored % secs % wait, 3);
+            output(format("%12d %12.3f %12.3f %12.3f %24.6f %12d %12d %12.3f %12.3f\n") % (step+1) % ess % minlogw % maxlogw % _log_marg_like % npartials_inuse % npartials_stored % secs % wait, 2);
 #else
-            output(format("%12d %12.3f %12.3f %12.3f %24.6f %12.3f %12.3f\n") % (step+1) % ess % minlogw % maxlogw % _log_marg_like % secs % wait, 3);
+            output(format("%12d %12.3f %12.3f %12.3f %24.6f %12.3f %12.3f\n") % (step+1) % ess % minlogw % maxlogw % _log_marg_like % secs % wait, 2);
 #endif
         }
         
@@ -187,6 +191,49 @@ namespace proj {
         // sort(sppinfo_vect.begin(), sppinfo_vect.end());
         // Forest::debugShowCoalInfo("===== sppinfo for first particle =====", sppinfo_vect);
     }
+    
+#if defined(EST_THETA)
+    inline void SMC::debugSaveThetas(unsigned step) const {
+        if (step == 0) {
+            //    particle          0        1        2   ...  _nsteps
+            //      0         0.01234  0.00213  0.02009   ...  0.02137
+            //      1         0.01234  0.00019  0.02009   ...  0.00479
+            //      .               .        .        .
+            //      .               .        .        .
+            //      .               .        .        .
+            // _nparticles    0.00157  0.01234  0.00313   ...  0.00112
+            
+            _debug_theta_distr.clear();
+            _debug_theta_distr.resize(_nparticles);
+        }
+        
+        unsigned i = 0;
+        for (const auto & p : _particle_list) {
+            unsigned c = p.getCount();
+            double theta = p.getSpeciesForestConst().getThetaMean();
+            for (unsigned j = 0; j < c; ++j) {
+                assert(_debug_theta_distr[i].size() == step);
+                _debug_theta_distr[i++].push_back(theta);
+            }
+        }
+        assert(i == _nparticles);
+    }
+    
+    inline double SMC::calcPosteriorMeanTheta() const {
+        double sum_weights = 0.0;
+        double sum_weighted_thetas = 0.0;
+        for (const auto & p : _particle_list) {
+            const SpeciesForest & sf = p.getSpeciesForestConst();
+            double theta_mean = sf.getThetaMean();
+            double count = (double)p.getCount();
+            sum_weighted_thetas += theta_mean*count;
+            sum_weights += count;
+        }
+        assert(sum_weights > 0.0);
+        double posterior_mean = sum_weighted_thetas/sum_weights;
+        return posterior_mean;
+    }
+#endif
     
     inline void SMC::summarize() {
         string prefix = "1st";
@@ -200,6 +247,34 @@ namespace proj {
         
         string sfn = str(format("%s-final-species-trees.tre") % prefix);
         saveAllSpeciesTrees(sfn, _particle_list, treefile_compression);
+        
+#if defined(EST_THETA)
+        output(format("theta (posterior mean) = %.6f\n") % calcPosteriorMeanTheta(), 1);
+        
+        // Create a file that can be viewed in Tracer that shows
+        // the theta values for each particle in the population for
+        // each step in the SMC. The steps (columns) take the place
+        // of parameters and the particles (rows) take the place of
+        // generations/iterations
+        ofstream tracef("tracefile.txt");
+        
+        // Output row of headers
+        tracef << "particle";
+        for (unsigned j = 0; j < _nsteps; ++j) {
+            tracef << '\t' << "step" << j;
+        }
+        tracef << endl;
+        
+        // Output _nparticles rows each comprising _nsteps theta values
+        for (unsigned i = 0; i < _debug_theta_distr.size(); ++i) {
+            tracef << i;
+            for (unsigned j = 0; j < _debug_theta_distr[i].size(); ++j) {
+                tracef << '\t' << _debug_theta_distr[i][j];
+            }
+            tracef << endl;
+        }
+        tracef.close();
+#endif
         
         //saveParamsForLoRaD(prefix);
         
@@ -298,6 +373,8 @@ namespace proj {
                 
         // Compute component of the log marginal likelihood due to this step
         _log_marg_like += log_sum_weights - log(_nparticles);
+        if (step == 0)
+            _log_marg_like += _starting_log_likelihood;
         
         // Compute effective sample size
         double ess = computeEffectiveSampleSize(probs);

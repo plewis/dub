@@ -36,11 +36,15 @@ namespace proj {
         static double                   _theta;
         static double                   _lambda;
         
+        static double                   _invgamma_shape;
+        static bool                     _theta_mean_frozen;
+        static double                   _theta_mean_fixed;
+        static double                   _theta_proposal_mean;
         static double                   _theta_prior_mean;
         static double                   _lambda_prior_mean;
         
-        static bool                     _update_theta;
-        static bool                     _update_lambda;
+        //static bool                     _update_theta;
+        //static bool                     _update_lambda;
         
         static bool                     _prior_post;
         
@@ -50,7 +54,8 @@ namespace proj {
         
         static unsigned                 _nparticles;
         static unsigned                 _nparticles2;
-                        
+
+        static double   inverseGammaVariate(double shape, double rate);
         static void     getAllParamNames(vector<string> & names);
         static void     generateUpdateSeeds(vector<unsigned> & seeds);
         static double   calcLogSum(const vector<double> & log_values);
@@ -64,6 +69,12 @@ namespace proj {
         static string   speciesStringRepresentation(G::species_t species);
         static set<unsigned> speciesToUnsignedSet(G::species_t species);
     };
+    
+    inline double G::inverseGammaVariate(double shape, double rate) {
+        double gamma_variate = rng.gamma(shape, 1.0/rate);
+        double invgamma_variate = 1.0/gamma_variate;
+        return invgamma_variate;
+    }
     
     inline void G::getAllParamNames(vector<string> & names) {
         // Get species tree increment names

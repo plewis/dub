@@ -154,25 +154,29 @@ G::species_t                G::_species_mask       = (G::species_t)0;
 vector<string>                      G::_species_names;
 map<unsigned,unsigned>              G::_nexus_taxon_map;
 
-unsigned                            G::_ngenes             = 0;
+unsigned                            G::_ngenes              = 0;
 vector<string>                      G::_gene_names;
 vector<unsigned>                    G::_nsites_per_gene;
 map<unsigned, double>               G::_relrate_for_gene;
 
-double                              G::_phi                = 1.0;
-double                              G::_theta              = 0.05;
-double                              G::_lambda             = 1.0;
+double                              G::_phi                 = 1.0;
+double                              G::_theta               = 0.05;
+double                              G::_lambda              = 1.0;
 
-double                              G::_theta_prior_mean   = 0.05;
-double                              G::_lambda_prior_mean  = 1.0;
+double                              G::_invgamma_shape      = 2.0;
+bool                                G::_theta_mean_frozen   = false;
+double                              G::_theta_mean_fixed    = -1.0;
+double                              G::_theta_prior_mean    = 1.0;
+double                              G::_theta_proposal_mean = 0.1;
+double                              G::_lambda_prior_mean   = 1.0;
 
-bool                                G::_update_theta       = true;
-bool                                G::_update_lambda      = true;
+//bool                                G::_update_theta       = true;
+//bool                                G::_update_lambda      = true;
 
-double                              G::_small_enough       = 0.00001;
+double                              G::_small_enough         = 0.00001;
 
-unsigned                            G::_nparticles         = 500;
-unsigned                            G::_nparticles2        = 1000;
+unsigned                            G::_nparticles           = 500;
+unsigned                            G::_nparticles2          = 1000;
 
 static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in order to use infinity()");
 double                              G::_infinity = numeric_limits<double>::infinity();

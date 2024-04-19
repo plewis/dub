@@ -106,11 +106,11 @@ namespace proj {
                         
             map<string, double>          _relrate_map;
             
-            double                       _theta;
-            double                       _lambda;
+            //double                       _theta;
+            //double                       _lambda;
                         
-            double                       _theta_delta;
-            double                       _lambda_delta;
+            //double                       _theta_delta;
+            //double                       _lambda_delta;
             
             double                       _ntries_theta;
             double                       _ntries_lambda;
@@ -155,11 +155,11 @@ namespace proj {
         _nsimspecies = 5;
         _nsimtaxaperspecies = {2,2,2,2,2};
                 
-        _theta = 0.1;
-        _lambda = 1.0;
+        //_theta = 0.1;
+        //_lambda = 1.0;
         
-        _theta_delta = 1.0;
-        _lambda_delta = 20.0;
+        //_theta_delta = 1.0;
+        //_lambda_delta = 20.0;
         
         _ntries_theta = 100;
         _ntries_lambda = 100;
@@ -191,16 +191,23 @@ namespace proj {
         ("nthreads",  value(&G::_nthreads)->default_value(3), "number of threads (each thread will handle nparticles/nthreads particle updates)")
         ("priorpost", value(&G::_prior_post)->default_value(false), "use prior-post approach to choose coalescence joins (default is prior-prior)")
         ("phi",  value(&G::_phi)->default_value(1.0), "power to which particle weight is raised")
-        ("theta",  value(&_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
-        ("lambda",  value(&_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
-        ("thetapriormean",  value(&G::_theta_prior_mean)->default_value(0.05), "mean of exponential prior for theta")
+        ("lambda",  value(&G::_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
+#if defined(EST_THETA)
+        ("invgammashape", value(&G::_invgamma_shape)->default_value(2.0), "shape parameter of inverse gamma prior distribution used for species-specific theta values (default 2.0)")
+        ("freezethetamean",  value(&G::_theta_mean_frozen)->default_value(false), "if true, every species uses fixedthetamean (ignored if fixedthetamean is not specified or negative); if false, theta for any given species is drawn from InverseGamma(invgammashape, fixedthetamean) (default false)")
+        ("fixedthetamean",  value(&G::_theta_mean_fixed)->default_value(-1.0), "mean theta will be fixed to this value if specified; if not specified, theta mean will vary among particles (default -1.0, and negative value indicates \"not specified\")")
+#else
+        ("theta",  value(&G::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
+#endif
+        ("thetaproposalmean",  value(&G::_theta_proposal_mean)->default_value(0.1), "mean of exponential proposal distribution for theta")
+        ("thetapriormean",  value(&G::_theta_prior_mean)->default_value(1.0), "mean of exponential prior for theta")
         ("lambdapriormean",  value(&G::_lambda_prior_mean)->default_value(1.0), "mean of exponential prior for lambda")
         ("ntriestheta",  value(&_ntries_theta)->default_value(100), "number of multiple-try Metropolis trials when updating theta")
         ("ntrieslambda",  value(&_ntries_lambda)->default_value(100), "number of multiple-try Metropolis trials when updating lambda")
-        ("thetadelta",  value(&_theta_delta)->default_value(1.0), "mean of exponential prior for theta")
-        ("lambdadelta",  value(&_lambda_delta)->default_value(20.0), "mean of exponential prior for lambda")
-        ("updatetheta",  value(&G::_update_theta)->default_value(true), "if yes, update theta at the end of each iteration")
-        ("updatelambda",  value(&G::_update_lambda)->default_value(true), "if yes, update lambda at the end of each iteration")
+        //("thetadelta",  value(&_theta_delta)->default_value(1.0), "window width for updating theta")
+        //("lambdadelta",  value(&_lambda_delta)->default_value(20.0), "window width for updating lambda")
+        //("updatetheta",  value(&G::_update_theta)->default_value(true), "if yes, update theta at the end of each iteration")
+        //("updatelambda",  value(&G::_update_lambda)->default_value(true), "if yes, update lambda at the end of each iteration")
         ("rnseed",  value(&_rnseed)->default_value(13579), "pseudorandom number seed")
         ("sortforests",  value(&_sort_forests)->default_value(false), "sort forests by weight when saving to file")
         ("visualizationcutoff", value(&_visualization_cutoff)->default_value(0.99), "particles sorted from highest to lowest weight will be saved for visualization if cumulative weight is less than this value")
@@ -243,16 +250,6 @@ namespace proj {
             for (auto relrate_definition : partition_relrates) {
                 parseRelRateDefinition(relrate_definition);
             }
-        }
-        
-        // If user specified --theta on command line...
-        if (vm.count("theta") > 0) {
-            G::_theta = _theta;
-        }
-        
-        // If user specified --lambda on command line...
-        if (vm.count("lambda") > 0) {
-            G::_lambda = _lambda;
         }
         
         // If user specified --priorpost on command line, check to ensure
@@ -490,7 +487,22 @@ namespace proj {
     
     inline void Proj::showSettings() const {
         output(format("Speciation rate (lambda): %.9f\n") % G::_lambda, 2);
+#if defined(EST_THETA)
+        if (G::_theta_mean_fixed > 0.0) {
+            if (G::_theta_mean_frozen) {
+                output(format("Mutation-scaled pop. size (theta) mean (theta) fixed to the value %.9f for all species\n") % G::_theta_mean_fixed, 2);
+            }
+            else {
+                output(format("Mutation-scaled pop. size (theta) mean (theta) fixed to the value %.9f but theta varies among species\n") % G::_theta_mean_fixed, 2);
+            }
+        }
+        else {
+            output(format("Mutation-scaled pop. size (theta) proposal mean (theta): %.9f\n") % G::_theta_proposal_mean, 2);
+            output(format("Mutation-scaled pop. size (theta) prior mean (theta): %.9f\n") % G::_theta_prior_mean, 2);
+        }
+#else
         output(format("Coalescent parameter (theta): %.9f\n") % G::_theta, 2);
+#endif
         output(format("Number of particles: %d") % G::_nparticles, 2);
         output(format("Number of species particles: %d") % G::_nparticles2, 2);
     }
@@ -650,6 +662,9 @@ namespace proj {
     }
     
     inline void Proj::simulateData(bool chib) {
+#if defined(EST_THETA)
+        throw XProj("simulating data not yet implemented when EST_THETA is #defined");
+#endif
         G::_nspecies = _nsimspecies;
         G::_ntaxa = (unsigned)accumulate(_nsimtaxaperspecies.begin(), _nsimtaxaperspecies.end(), 0);
 
@@ -965,44 +980,46 @@ namespace proj {
                 smc.run();
                 smc.summarize();
                 
-                // Second-level particle filtering
-                list<Particle> & first_level_particles = smc.getParticles();
-                SMC ensemble;
-                ensemble.setMode(SMC::SPECIES_GIVEN_GENE);
-                unsigned which_first_level = 0;
-                unsigned which_second_level = 0;
-                for (auto p : first_level_particles) {
-                
-                    // //temporary!
-                    // vector<Forest::coalinfo_t> tmp_coalinfo_vect;
+                if (G::_nparticles2 > 0) {
+                    // Second-level particle filtering
+                    list<Particle> & first_level_particles = smc.getParticles();
+                    SMC ensemble;
+                    ensemble.setMode(SMC::SPECIES_GIVEN_GENE);
+                    unsigned which_first_level = 0;
+                    unsigned which_second_level = 0;
+                    for (auto p : first_level_particles) {
                     
-                    // Rebuild coal info vectors, stripping effect of previous species tree
-                    vector<GeneForest> & gtvect = p.getGeneForests();
-                    for (auto & gt : gtvect) {
-                        gt.buildCoalInfoVect();
+                        // //temporary!
+                        // vector<Forest::coalinfo_t> tmp_coalinfo_vect;
+                        
+                        // Rebuild coal info vectors, stripping effect of previous species tree
+                        vector<GeneForest> & gtvect = p.getGeneForests();
+                        for (auto & gt : gtvect) {
+                            gt.buildCoalInfoVect();
+                            
+                            // //temporary!
+                            // gt.saveCoalInfo(tmp_coalinfo_vect);
+                        }
                         
                         // //temporary!
-                        // gt.saveCoalInfo(tmp_coalinfo_vect);
+                        // sort(tmp_coalinfo_vect.begin(), tmp_coalinfo_vect.end());
+                        // Forest::debugShowCoalInfo("===== coalinfo =====", tmp_coalinfo_vect);
+                        
+                        unsigned n = p.getCount();
+                        for (unsigned j = 0; j < n; j++) {
+                            output(format("Working on 2nd-level SMC %d...\n") % which_second_level, 3);
+                            SMC smc2;
+                            smc2.setMode(SMC::SPECIES_GIVEN_GENE);
+                            smc2.setNParticles(G::_nparticles2);
+                            smc2.initFromParticle(p);
+                            smc2.run();
+                            smc2.dumpParticles(ensemble);
+                            which_second_level++;
+                        }
+                        which_first_level++;
                     }
-                    
-                    // //temporary!
-                    // sort(tmp_coalinfo_vect.begin(), tmp_coalinfo_vect.end());
-                    // Forest::debugShowCoalInfo("===== coalinfo =====", tmp_coalinfo_vect);
-                    
-                    unsigned n = p.getCount();
-                    for (unsigned j = 0; j < n; j++) {
-                        output(format("Working on 2nd-level SMC %d...\n") % which_second_level, 2);
-                        SMC smc2;
-                        smc2.setMode(SMC::SPECIES_GIVEN_GENE);
-                        smc2.setNParticles(G::_nparticles2);
-                        smc2.initFromParticle(p);
-                        smc2.run();
-                        smc2.dumpParticles(ensemble);
-                        which_second_level++;
-                    }
-                    which_first_level++;
+                    ensemble.summarize();
                 }
-                ensemble.summarize();
             }
         }
         catch (XProj & x) {

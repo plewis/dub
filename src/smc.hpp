@@ -36,6 +36,10 @@ namespace proj {
             void saveAllSpeciesTrees(string fn, const list<Particle> & particle_list, unsigned compression_level = 2);
             void saveAllGeneTrees(unsigned gene, string fn, const list<Particle> & particle_list, unsigned compression_level = 2);
             //void                         saveUniqueSpeciesTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts);
+#if defined(EST_THETA)
+            void debugSaveThetas(unsigned step) const;
+            double calcPosteriorMeanTheta() const;
+#endif
             void summarize();
             void dumpParticles(SMC & ensemble);
             void clear();
@@ -52,8 +56,12 @@ namespace proj {
             vector<unsigned>             _counts;
             vector<unsigned>             _update_seeds;
             
+#if defined(EST_THETA)
+            mutable vector<vector<double> > _debug_theta_distr;
+#endif
+
             unsigned                     _nsteps;
-            //double                       _starting_log_likelihood;
+            double                       _starting_log_likelihood;
 
             list<Particle>               _particle_list;
             double                       _log_marg_like;

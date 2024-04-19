@@ -17,6 +17,14 @@ namespace proj {
             
             Node * findSpecies(G::species_t spp);
             
+#if defined(EST_THETA)
+            void drawLineageSpecificThetas();
+            void drawThetaMean(double exponential_prior_rate);
+            void setThetaMean(double thetamean) {_theta_mean = thetamean;}
+            double getThetaMean() const {return _theta_mean;}
+            double thetaForSpecies(G::species_t s) const;
+#endif
+            
             void setJointEstimation(bool is_joint_estimation) {_joint_estimation = is_joint_estimation;}
                         
             void fixupCoalInfo(vector<coalinfo_t> & coalinfo_vect, vector<coalinfo_t> & sppinfo_vect);
@@ -48,6 +56,10 @@ namespace proj {
             
             // NOTE: any variables added must be copied in operator=
             bool _joint_estimation;
+#if defined(EST_THETA)
+            map<G::species_t, double> _theta_map;
+            double _theta_mean;
+#endif
     };
     
     inline SpeciesForest::SpeciesForest() {
@@ -61,6 +73,30 @@ namespace proj {
         Forest::clear();
         _joint_estimation = true;
     }
+
+#if defined(EST_THETA)
+    inline void SpeciesForest::drawLineageSpecificThetas() {
+        // Draw a theta value for each leaf species
+        _theta_map.clear();
+        for (auto nd : _lineages) {
+            G::species_t s = nd->_species;
+            if (G::_theta_mean_fixed > 0.0 && G::_theta_mean_frozen)
+                _theta_map[s] = G::_theta_mean_fixed;
+            else {
+                double b = (G::_invgamma_shape - 1.0)*_theta_mean;
+                _theta_map[s] = G::inverseGammaVariate(G::_invgamma_shape, b);
+            }
+        }
+    }
+    
+    inline void SpeciesForest::drawThetaMean(double exponential_prior_rate) {
+        // Should only be called for trivial forests
+        assert(_lineages.size() == G::_nspecies);
+        
+        // Draw _theta_mean from Exponential prior
+        _theta_mean = -log(1.0 - rng.uniform())/exponential_prior_rate;
+    }
+#endif
 
 //    inline pair<double,double> SpeciesForest::calcTreeDistances(SpeciesForest & ref, SpeciesForest & test) {
 //        // Store splits from reference tree
@@ -147,6 +183,15 @@ namespace proj {
 //        return make_pair(KFdist, RFdist);
 //    }
     
+#if defined(EST_THETA)
+    inline double SpeciesForest::thetaForSpecies(G::species_t s) const {
+        if (_theta_map.count(s) == 0) {
+            throw XProj(format("Could not find theta for species %d") % s);
+        }
+        return _theta_map.at(s);
+    }
+#endif
+
     inline Node * SpeciesForest::findSpecies(G::species_t spp) {
         Node * the_node = nullptr;
         for (auto nd : _lineages) {
@@ -201,8 +246,9 @@ namespace proj {
         clear();
         Forest::_nodes.resize(2*G::_nspecies - 1);
         for (unsigned i = 0; i < G::_nspecies; i++) {
+            string species_name = G::_species_names[i];
             _nodes[i]._number = (int)i;
-            _nodes[i]._name = G::_species_names[i];
+            _nodes[i]._name = species_name;
             _nodes[i]._edge_length = 0.0;
             _nodes[i]._height = 0.0;
             Node::setSpeciesBit(_nodes[i]._species, i, /*init_to_zero_first*/true);
@@ -433,6 +479,34 @@ namespace proj {
             assert(anc);
             assert(fabs(anc->getEdgeLength()) < 0.00001);
             
+#if defined(EST_THETA)
+            if (_joint_estimation) {
+                // If not joint estimation, then we are integrating out
+                // species-specific theta values, but if is joint estimation,
+                // then each proposed ancestral species has its own theta
+                // Erase theta corresponding to ancestral species
+                G::species_t s = anc->getSpecies();
+                
+                // //temporary!
+                // cerr << "erasing " << s << " from _theta_map" << endl;
+                // cerr << "_theta_map.count(" << s << ") = " << // _theta_map.count(s) << endl;
+                // cerr << "_theta_map before:" << endl;
+                // for (const auto & z : _theta_map) {
+                //     cerr << "  " << z.first << ": " << z.second << endl;
+                // }
+                
+                unsigned n = (unsigned)_theta_map.erase(s);
+                assert(n > 0);
+                
+                // //temporary!
+                // cerr << n << " element(s) erased" << endl;
+                // cerr << "_theta_map after:" << endl;
+                // for (const auto & z : _theta_map) {
+                //     cerr << "  " << z.first << ": " << z.second << endl;
+                // }
+            }
+#endif
+
             // Get pointer to ancestral node's left child
             Node * lchild = anc->getLeftChild();
             assert(lchild);
@@ -453,9 +527,9 @@ namespace proj {
             anc = nullptr;
 
             if (_joint_estimation) {
-                // If species forests are being built jointly with
-                // gene forests, then each speciation event is preceded
-                // by an increment, so reversion must remove the increment last.
+                // If species forests are being built jointly with gene forests, then
+                // each speciation event is preceded by an increment, so
+                // reversion must remove the increment last
                 double dt = _mark_increments.top();
                 _mark_increments.pop();
                 advanceAllLineagesBy(-dt, /*mark*/false);
@@ -501,6 +575,11 @@ namespace proj {
         // Get species for the new ancestral node
         anc_spp = anc_node->getSpecies();
         
+#if defined(EST_THETA)
+        assert(_theta_map.count(anc_spp) == 0);
+        _theta_map[anc_spp] = G::inverseGammaVariate(G::_invgamma_shape, _theta_mean);
+#endif
+        
         // Update _lineages vector
         removeTwoAddOne(_lineages, first_node, second_node, anc_node);
         refreshAllPreorders();
@@ -519,6 +598,11 @@ namespace proj {
         Forest::operator=(other);
         _joint_estimation = other._joint_estimation;
         
+#if defined(EST_THETA)
+        _theta_mean = other._theta_mean;
+        _theta_map = other._theta_map;
+#endif
+
         // Should not be anything in the mark stacks if copying
         assert(_mark_increments.empty());
         assert(_mark_anc_nodes.empty());

@@ -324,8 +324,12 @@ namespace proj {
         double log_likelihood = 0.0;
         
         if (integrate_out_thetas) {
-            double alpha = 2.0;
+            double alpha = 2.0; // G::_invgamma_shape;
+#if defined(EST_THETA)
+            double beta = _species_forest.getThetaMean();
+#else
             double beta = G::_theta;
+#endif
             double B = (double)branches.size();
             log_likelihood  = B*alpha*log(beta);
             log_likelihood -= B*boost::math::lgamma(alpha);
@@ -346,7 +350,11 @@ namespace proj {
             }
         }
         else {
+#if defined(EST_THETA)
+            double theta_b = _species_forest.getThetaMean();
+#else
             double theta_b = G::_theta;
+#endif
             double sum_log_rb = 0.0;
             double sum_gamma_b = 0.0;
             unsigned sum_qb = 0;
@@ -677,6 +685,34 @@ namespace proj {
         setSeed(seed);
         
         //clearMarkAllForests();
+#if defined(EST_THETA)
+        double log_weight_modifier = 0.0;
+        if (step == 0) {
+            if (G::_theta_mean_fixed > 0.0) {
+                _species_forest.setThetaMean(G::_theta_mean_fixed);
+            }
+            else {
+                // Draw mean theta from Exponential(r) proposal distribution,
+                // where r = 1/G::_theta_proposal_mean
+                _species_forest.drawThetaMean(1.0/G::_theta_proposal_mean);
+                
+                // Calculate weight modifier that takes account of the fact
+                // that the theta mean proposal distribution differs from its
+                // prior distribution
+                double prior_rate    = 1.0/G::_theta_prior_mean;
+                double proposal_rate = 1.0/G::_theta_proposal_mean;
+                log_weight_modifier = log(prior_rate) - log(proposal_rate) - (prior_rate - proposal_rate)*_species_forest.getThetaMean();
+            }
+            
+            // Draw values of theta for each leaf species from
+            // an InverseGamma(2, _theta_mean) distribution
+            // (unless G::_theta_mean_fixed was specified and
+            // G::_theta_mean_frozen is true, in which case
+            // make every species have the same theta value
+            // (equal to G::_theta_mean_fixed)
+            _species_forest.drawLineageSpecificThetas();
+        }
+#endif
         
         advance(step, pindex, compute_partial, make_permanent);
         while (lastEventSpeciation()) {
@@ -690,14 +726,16 @@ namespace proj {
         else
             revertToMarkAllForests();
 
-        double log_weight = getLogWeight();
+        double log_weight = log_weight_modifier + getLogWeight();
         return make_pair(log_weight, num_species_tree_lineages);
     }
     
-    inline double Particle::calcTotalCoalRate(double speciation_increment) {
+    //inline double Particle::calcTotalCoalRate(double speciation_increment) {
+    inline double Particle::calcTotalCoalRate() {
         double total_rate = 0.0;
         for (auto & gene_forest : _gene_forests) {
-            total_rate += gene_forest.calcTotalRate(_species_tuples, speciation_increment);
+            //total_rate += gene_forest.calcTotalRate(_species_tuples, speciation_increment);
+            total_rate += gene_forest.calcTotalRate(_species_tuples);
         }
         return total_rate;
     }
@@ -737,11 +775,12 @@ namespace proj {
         double log_weight = 0.0;
         
         // _species_tuples has already been filled
-        // Each 4-tuple entry stores:
-        //  1. number of lineages
-        //  2. gene index
-        //  3. species within gene
-        //  4. vector<Node *> holding lineage roots for gene/species combination
+        // Each tuple entry stores:
+        //  0. number of lineages
+        //  1. gene index
+        //  2. species within gene
+        //  3. vector<Node *> holding lineage roots for gene/species combination
+        //  4. theta (if #define EST_THETA)
         
         // Prior-prior chooses a locus and species in which to have a coalescence
         // from the prior. The probability of coalescence in one particular
@@ -754,7 +793,12 @@ namespace proj {
         vector<double> probs(_species_tuples.size());
         transform(_species_tuples.begin(), _species_tuples.end(), probs.begin(), [total_rate](Node::species_tuple_t & spp_tuple){
             double n = (double)get<0>(spp_tuple);
+#if defined(EST_THETA)
+            double theta = (double)get<4>(spp_tuple);
+            return n*(n - 1.0)/(theta*total_rate);
+#else
             return n*(n - 1.0)/(G::_theta*total_rate);
+#endif
         });
                 
 #if defined(DEBUGGING_SANITY_CHECK)
@@ -892,8 +936,9 @@ namespace proj {
     //        //  <2> the second index of the join.
     //        map<unsigned, tuple<unsigned, unsigned, unsigned> > index_map;
     //        
-    //        // The 4th element of _species_tuples provides pointers to the root nodes
-    //        // of each lineage in that locus-species combination
+    //        // The element at index 3 of _species_tuples provides
+    //        // pointers to the root nodes of each lineage in that
+    //        // locus-species combination
     //        unsigned log_weight_index = 0;
     //        unsigned species_tuples_index = 0;
     //        Node * first_node = nullptr;
@@ -1017,11 +1062,12 @@ namespace proj {
 
     inline void Particle::advance(unsigned step, unsigned pindex, bool compute_partial, bool make_permanent) {
         //MARK: advance
-        // Clear species_tuples vector. Each 4-tuple entry stores:
-        //  1. number of lineages
-        //  2. gene index
-        //  3. species within gene
-        //  4. vector<Node *> holding lineage roots for gene/species combination
+        // Clear species_tuples vector. Each tuple entry stores:
+        //  0. number of lineages
+        //  1. gene index
+        //  2. species within gene
+        //  3. vector<Node *> holding lineage roots for gene/species combination
+        //  4. theta for species (if #define EST_THETA)
         _species_tuples.clear();
         
         // Draw a speciation increment Delta. Note: speciation_increment will
@@ -1032,12 +1078,13 @@ namespace proj {
         
         // Visit each species within each locus, storing the number of lineages in
         // _species_tuples and computing the total coalescence rate (total_rate).
-        double total_rate = calcTotalCoalRate(Delta);
+        //double total_rate = calcTotalCoalRate(Delta);
+        double total_rate = calcTotalCoalRate();
         
         // Draw coalescence increment delta ~ Exponential(total_rate)
         double delta = (total_rate > 0.0 ? -log(1.0 - _lot->uniform())/total_rate : G::_infinity);
         
-        // If delta > Delta, then a speciation event happened; otherwise a coalescent event happened.
+        // If delta < Delta, then a coalescent event happened; otherwise a speciation event happened.
         bool is_speciation = (delta > Delta);
                 
         // Advance all forests by increment dt

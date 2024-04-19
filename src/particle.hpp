@@ -34,7 +34,9 @@ namespace proj {
             double getPrevLogCoalLike() {return _prev_log_coallike;}
             void setPrevLogCoalLike(double lnL) {_prev_log_coallike = lnL;}
                         
-            double calcTotalCoalRate(double speciation_increment);
+            //double calcTotalCoalRate(double speciation_increment);
+            double calcTotalCoalRate();
+            
             void clearMarkAllForests();
             void revertToMarkSpeciesForest();
             void revertToMarkAllForests();

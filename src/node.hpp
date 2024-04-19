@@ -25,7 +25,20 @@ namespace proj {
                                         ~Node();
 
                     typedef vector<Node *>  ptr_vect_t;
-                    typedef tuple<unsigned, unsigned, G::species_t, Node::ptr_vect_t>  species_tuple_t; // no. lineages, gene locus, spp, vector of node pointers
+#if defined(EST_THETA)
+                    //  0. number of lineages
+                    //  1. gene index
+                    //  2. species within gene
+                    //  3. vector<Node *> lineage roots for gene/species combination
+                    //  4. theta for species
+                    typedef tuple<unsigned, unsigned, G::species_t, Node::ptr_vect_t, double>  species_tuple_t;
+#else
+                    //  0. number of lineages
+                    //  1. gene index
+                    //  2. species within gene
+                    //  3. vector<Node *> lineage roots for gene/species combination
+                    typedef tuple<unsigned, unsigned, G::species_t, Node::ptr_vect_t>  species_tuple_t;
+#endif
         
                     Node *              getParent()                 {return _parent;}
                     const Node *        getParent() const           {return _parent;}

@@ -43,7 +43,8 @@ namespace proj {
 
             string lineagesWithinSpeciesKeyError(G::species_t spp);
 
-            double calcTotalRate(vector<Node::species_tuple_t> & species_tuples, double speciation_increment);
+            //double calcTotalRate(vector<Node::species_tuple_t> & species_tuples, double speciation_increment);
+            double calcTotalRate(vector<Node::species_tuple_t> & species_tuples);
 
             void mergeSpecies(double height, G::species_t left_species, G::species_t right_species, G::species_t anc_species);
             
@@ -81,7 +82,7 @@ namespace proj {
             void stowPartial(Node * nd);
             void stowAllPartials();
             void buildLineagesWithinSpeciesMap();
-            double computeCoalRatesForSpecies(vector<G::species_t> & species, vector<double> & rates);
+            //double computeCoalRatesForSpecies(vector<G::species_t> & species, vector<double> & rates);
             
             static PartialStore::leaf_partials_t _leaf_partials;
             
@@ -89,6 +90,11 @@ namespace proj {
             
             // key is species index, value is vector of Node pointers
             map<G::species_t, Node::ptr_vect_t > _lineages_within_species;
+
+#if defined(EST_THETA)
+            // key is species index, value is species-specific theta
+            map<G::species_t, double > _theta_within_species;
+#endif
             
             Particle * _particle;
             Data::SharedPtr _data;
@@ -318,7 +324,8 @@ namespace proj {
         _gene_index = i;
     }
     
-    inline double GeneForest::calcTotalRate(vector<Node::species_tuple_t> & species_tuples, double speciation_increment) {
+    //inline double GeneForest::calcTotalRate(vector<Node::species_tuple_t> & species_tuples, double speciation_increment) {
+    inline double GeneForest::calcTotalRate(vector<Node::species_tuple_t> & species_tuples) {
         double total_rate = 0.0;
         
         // Build _lineages_within_species, a map that provides a vector
@@ -326,11 +333,20 @@ namespace proj {
         buildLineagesWithinSpeciesMap();
 
         for (auto & kvpair : _lineages_within_species) {
+            // kvpair.first is the species
+            // kvpair.second is a vector of lineages within that species
             // Get number of lineages in this species
             unsigned n = (unsigned)kvpair.second.size();
             if (n > 1) {
+#if defined(EST_THETA)
+                G::species_t spp = kvpair.first;
+                double species_specific_theta = _theta_within_species.at(spp);
+                total_rate += 1.0*n*(n-1)/species_specific_theta;
+                Node::species_tuple_t x = make_tuple(n, _gene_index, kvpair.first, kvpair.second, species_specific_theta);
+#else
                 total_rate += 1.0*n*(n-1)/G::_theta;
                 Node::species_tuple_t x = make_tuple(n, _gene_index, kvpair.first, kvpair.second);
+#endif
                 species_tuples.push_back(x);
             }
         }
@@ -737,13 +753,25 @@ namespace proj {
 
     inline void GeneForest::buildLineagesWithinSpeciesMap() {
         // Assumes every node in _lineages is correctly assigned to a species
-        
+#if defined(EST_THETA)
+        _theta_within_species.clear();
+        _lineages_within_species.clear();
+        for (auto nd : _lineages) {
+            // Add nd to the vector of nodes belonging to this species
+            G::species_t spp = nd->getSpecies();
+            _lineages_within_species[spp].push_back(nd);
+            assert(_particle);
+            SpeciesForest & sf = _particle->getSpeciesForest();
+            _theta_within_species[spp] = sf.thetaForSpecies(spp);
+        }
+#else
         _lineages_within_species.clear();
         for (auto nd : _lineages) {
             // Add nd to the vector of nodes belonging to this species
             G::species_t spp = nd->getSpecies();
             _lineages_within_species[spp].push_back(nd);
         }
+#endif
     }
     
     inline void GeneForest::simulateGeneTree(unsigned gene) {
@@ -761,30 +789,30 @@ namespace proj {
         }
     }
     
-    inline double GeneForest::computeCoalRatesForSpecies(vector<G::species_t> & species, vector<double> & rates) {
-        unsigned i = 0;
-        for (auto & x : _lineages_within_species) {
-            // Key is the species s (a set containing one or more integer values)
-            G::species_t s = x.first;
-            assert(species.size() > i);
-            species[i] = s;
-            
-            // Value is vector of node pointers belonging to species s
-            unsigned n = (unsigned)x.second.size();
-            assert(n > 0);
-            
-            // Rate of coalescence in species s is n choose 2 divided by theta/2
-            // or, equivalently, n*(n-1)/theta
-            double coal_rate = float(n)*(n-1)/G::_theta;
-            rates[i] = coal_rate;
-            
-            ++i;
-        }
-
-        // The total coalescence rate is the sum of individual species-specific rates
-        double total_rate = accumulate(rates.begin(), rates.end(), 0.0);
-        return total_rate;
-    }
+    //inline double GeneForest::computeCoalRatesForSpecies(vector<G::species_t> & species, //vector<double> & rates) {
+    //    unsigned i = 0;
+    //    for (auto & x : _lineages_within_species) {
+    //        // Key is the species s (a set containing one or more integer values)
+    //        G::species_t s = x.first;
+    //        assert(species.size() > i);
+    //        species[i] = s;
+    //
+    //        // Value is vector of node pointers belonging to species s
+    //        unsigned n = (unsigned)x.second.size();
+    //        assert(n > 0);
+    //
+    //        // Rate of coalescence in species s is n choose 2 divided by theta/2
+    //        // or, equivalently, n*(n-1)/theta
+    //        double coal_rate = float(n)*(n-1)/G::_theta;
+    //        rates[i] = coal_rate;
+    //
+    //        ++i;
+    //    }
+    //
+    //    // The total coalescence rate is the sum of individual species-specific rates
+    //    double total_rate = accumulate(rates.begin(), rates.end(), 0.0);
+    //    return total_rate;
+    //}
     
     inline void GeneForest::setPriorPost(bool use_prior_post) {
         _prior_post = use_prior_post;
