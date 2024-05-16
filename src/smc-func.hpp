@@ -111,12 +111,15 @@ namespace proj {
         // gene trees and the species tree
         _nsteps = G::_ngenes*(G::_ntaxa - 1);
         
-        output(format("\nSMC (level 1) will require %d steps.\n") % _nsteps, 2);
-
+        unsigned verbosity = (_mode == SPECIES_AND_GENE ? 2 : 3);
+        if (_mode == SPECIES_AND_GENE) {
+            output(format("\nSMC (level 1) will require %d steps.\n") % _nsteps, verbosity);
+        }
+        
 #if defined(LOG_MEMORY)
-        output(format("\n%12s %12s %12s %12s %24s %12s %12s %12s %12s\n") % "Step" % "ESS" % "minlogwt" % "maxlogwt" % "logml" % "in-use" % "stored" % "secs" % "wait", 2);
+        output(format("\n%12s %12s %12s %12s %24s %12s %12s %12s %12s\n") % "Step" % "ESS" % "minlogwt" % "maxlogwt" % "logml" % "in-use" % "stored" % "secs" % "wait", verbosity);
 #else
-        output(format("\n%12s %12s %12s %12s %24s %12s %12s\n") % "Step" % "ESS" % "minlogwt" % "maxlogwt" % "logml" % "secs" % "wait", 2);
+        output(format("\n%12s %12s %12s %12s %24s %12s %12s\n") % "Step" % "ESS" % "minlogwt" % "maxlogwt" % "logml" % "secs" % "wait", verbosity);
 #endif
     
     }
@@ -173,14 +176,15 @@ namespace proj {
             unsigned steps_to_go = _nsteps - (step + 1);
             double wait = avg_per_step*steps_to_go;
                     
+        unsigned verbosity = (_mode == SPECIES_AND_GENE ? 2 : 3);
 #if defined(LOG_MEMORY)
             //npartials = ps.getNumberConstructed();
             npartials_inuse = ps.getInUse();
             npartials_stored = ps.getStored();
             
-            output(format("%12d %12.3f %12.3f %12.3f %24.6f %12d %12d %12.3f %12.3f\n") % (step+1) % ess % minlogw % maxlogw % _log_marg_like % npartials_inuse % npartials_stored % secs % wait, 2);
+            output(format("%12d %12.3f %12.3f %12.3f %24.6f %12d %12d %12.3f %12.3f\n") % (step+1) % ess % minlogw % maxlogw % _log_marg_like % npartials_inuse % npartials_stored % secs % wait, verbosity);
 #else
-            output(format("%12d %12.3f %12.3f %12.3f %24.6f %12.3f %12.3f\n") % (step+1) % ess % minlogw % maxlogw % _log_marg_like % secs % wait, 2);
+            output(format("%12d %12.3f %12.3f %12.3f %24.6f %12.3f %12.3f\n") % (step+1) % ess % minlogw % maxlogw % _log_marg_like % secs % wait, verbosity);
 #endif
         }
         

@@ -1101,6 +1101,10 @@ namespace proj {
             _species_forest.speciationEvent(_lot, left_spp, right_spp, anc_spp, /*mark*/!make_permanent);
             double species_forest_height = _species_forest.getHeight();
                                     
+#if defined(EST_THETA)
+            _species_forest.drawThetaForSpecies(anc_spp);
+#endif
+
             // Advise all gene trees of the change in the species tree
             // Nodes that are reassigned save their previous state
             // to allow reversion

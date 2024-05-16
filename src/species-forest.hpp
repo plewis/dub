@@ -19,6 +19,7 @@ namespace proj {
             
 #if defined(EST_THETA)
             void drawLineageSpecificThetas();
+            void drawThetaForSpecies(G::species_t s);
             void drawThetaMean(double exponential_prior_rate);
             void setThetaMean(double thetamean) {_theta_mean = thetamean;}
             double getThetaMean() const {return _theta_mean;}
@@ -80,13 +81,20 @@ namespace proj {
         _theta_map.clear();
         for (auto nd : _lineages) {
             G::species_t s = nd->_species;
-            if (G::_theta_mean_fixed > 0.0 && G::_theta_mean_frozen)
-                _theta_map[s] = G::_theta_mean_fixed;
-            else {
-                double b = (G::_invgamma_shape - 1.0)*_theta_mean;
-                _theta_map[s] = G::inverseGammaVariate(G::_invgamma_shape, b);
-            }
+            drawThetaForSpecies(s);
         }
+    }
+    
+    inline void SpeciesForest::drawThetaForSpecies(G::species_t s) {
+        assert(_theta_map.count(s) == 0);
+        double theta_variate = 0.0;
+        if (G::_theta_mean_fixed > 0.0 && G::_theta_mean_frozen)
+            theta_variate = G::_theta_mean_fixed;
+        else {
+            double b = (G::_invgamma_shape - 1.0)*_theta_mean;
+            theta_variate = G::inverseGammaVariate(G::_invgamma_shape, b);
+        }
+        _theta_map[s] = theta_variate;
     }
     
     inline void SpeciesForest::drawThetaMean(double exponential_prior_rate) {
@@ -497,6 +505,7 @@ namespace proj {
                 
                 unsigned n = (unsigned)_theta_map.erase(s);
                 assert(n > 0);
+                assert(_theta_map.count(s) == 0);
                 
                 // //temporary!
                 // cerr << n << " element(s) erased" << endl;
@@ -574,11 +583,16 @@ namespace proj {
 
         // Get species for the new ancestral node
         anc_spp = anc_node->getSpecies();
-        
-#if defined(EST_THETA)
-        assert(_theta_map.count(anc_spp) == 0);
-        _theta_map[anc_spp] = G::inverseGammaVariate(G::_invgamma_shape, _theta_mean);
-#endif
+
+// This function is only called when SMC is in conditional mode, which means
+// we never need to draw any values of theta as they are integrated out of the
+// coalescence likelihood
+// #if defined(EST_THETA)
+//         if (_theta_map.count(anc_spp) != 0) {
+//             cerr << "_theta_map.count for species " << anc_spp << " is " << _theta_map.count(anc_spp) << endl;
+//         }
+//         _theta_map[anc_spp] = G::inverseGammaVariate(G::_invgamma_shape,  _theta_mean);
+// #endif
         
         // Update _lineages vector
         removeTwoAddOne(_lineages, first_node, second_node, anc_node);

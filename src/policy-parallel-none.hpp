@@ -20,8 +20,8 @@ namespace proj {
         // filtering and the instructions needed to recreate the advance (in case the particle
         // has a log weight high enough to allow it to survive filtering).
         
-        unsigned i = 0;
-        unsigned j = 0;
+        unsigned i = 0; // index of proposal
+        unsigned j = 0; // index of parent particle
         for (auto & p : smc._particle_list) {
             if (smc.isConditionalMode()) {
                 // Compute _prev_log_likelihood

@@ -194,7 +194,7 @@ namespace proj {
         ("lambda",  value(&G::_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
 #if defined(EST_THETA)
         ("invgammashape", value(&G::_invgamma_shape)->default_value(2.0), "shape parameter of inverse gamma prior distribution used for species-specific theta values (default 2.0)")
-        ("freezethetamean",  value(&G::_theta_mean_frozen)->default_value(false), "if true, every species uses fixedthetamean (ignored if fixedthetamean is not specified or negative); if false, theta for any given species is drawn from InverseGamma(invgammashape, fixedthetamean) (default false)")
+        ("freezethetamean",  value(&G::_theta_mean_frozen)->default_value(false), "if true, every species uses fixedthetamean (ignored if fixedthetamean is negative); if false, theta for any given species is drawn from InverseGamma(invgammashape, fixedthetamean) (default false)")
         ("fixedthetamean",  value(&G::_theta_mean_fixed)->default_value(-1.0), "mean theta will be fixed to this value if specified; if not specified, theta mean will vary among particles (default -1.0, and negative value indicates \"not specified\")")
 #else
         ("theta",  value(&G::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
@@ -981,6 +981,8 @@ namespace proj {
                 smc.summarize();
                 
                 if (G::_nparticles2 > 0) {
+                    output("\nWorking on 2nd-level SMC...\n", 2);
+                    
                     // Second-level particle filtering
                     list<Particle> & first_level_particles = smc.getParticles();
                     SMC ensemble;
@@ -1007,7 +1009,7 @@ namespace proj {
                         
                         unsigned n = p.getCount();
                         for (unsigned j = 0; j < n; j++) {
-                            output(format("Working on 2nd-level SMC %d...\n") % which_second_level, 3);
+                            output(format("Working on 2nd-level SMC %d of %d...\n") % (which_second_level+1) % G::_nparticles, 3);
                             SMC smc2;
                             smc2.setMode(SMC::SPECIES_GIVEN_GENE);
                             smc2.setNParticles(G::_nparticles2);
