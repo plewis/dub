@@ -116,6 +116,8 @@ namespace proj {
             output(format("\nSMC (level 1) will require %d steps.\n") % _nsteps, verbosity);
         }
         
+        G::showSettings();
+        
 #if defined(LOG_MEMORY)
         output(format("\n%12s %12s %12s %12s %24s %12s %12s %12s %12s\n") % "Step" % "ESS" % "minlogwt" % "maxlogwt" % "logml" % "in-use" % "stored" % "secs" % "wait", verbosity);
 #else
@@ -243,14 +245,12 @@ namespace proj {
         string prefix = "1st";
         if (isConditionalMode())
             prefix = "2nd";
-            
-        unsigned treefile_compression = 0;
-        
+                    
         output(format("log(marginal likelihood) = %.6f\n") % _log_marg_like, 1);
         output("\nSpecies trees saved to file \"final-species-trees.tre\"\n", 1);
         
         string sfn = str(format("%s-final-species-trees.tre") % prefix);
-        saveAllSpeciesTrees(sfn, _particle_list, treefile_compression);
+        saveAllSpeciesTrees(sfn, _particle_list, G::_treefile_compression);
         
 #if defined(EST_THETA)
         output(format("theta (posterior mean) = %.6f\n") % calcPosteriorMeanTheta(), 1);
@@ -287,7 +287,7 @@ namespace proj {
                 output(format("Gene trees for locus %d saved to file \"final-gene%d-trees.tre\"\n") % (g+1) % (g+1), 1);
                 
                 string fn = str(format("%s-final-gene%d-trees.tre") % prefix % (g+1));
-                saveAllGeneTrees(g, fn, _particle_list, treefile_compression);
+                saveAllGeneTrees(g, fn, _particle_list, G::_treefile_compression);
             }
         }
         

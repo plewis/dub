@@ -139,6 +139,8 @@ namespace proj {
     }
     
     inline double Particle::calcLogCoalescentLikelihood(vector<Forest::coalinfo_t> & coalinfo_vect, bool integrate_out_thetas, bool verbose) {
+        //cerr << "*** inside Particle::calcLogCoalescentLikelihood ***" << endl;
+        
         //MARK: calcLogCoalescentLikelihood
         // This function assumes gene forests are complete gene trees (not partial states) and
         // that preorders and heights have been precalculated.

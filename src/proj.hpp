@@ -81,7 +81,6 @@ namespace proj {
             unsigned                     buildSpeciesMap(bool taxa_from_data);
             void                         outputGeneTreesToFile(string fn,
                                             const vector<string> & newicks) const;
-            void                         showSettings() const;
             
             string                       _data_file_name;
             string                       _start_mode;
@@ -192,6 +191,7 @@ namespace proj {
         ("priorpost", value(&G::_prior_post)->default_value(false), "use prior-post approach to choose coalescence joins (default is prior-prior)")
         ("phi",  value(&G::_phi)->default_value(1.0), "power to which particle weight is raised")
         ("lambda",  value(&G::_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
+        ("compression",  value(&G::_treefile_compression)->default_value(0), "0 = no compression; 1 = intermediate compression; 2 = only unique trees saved")
 #if defined(EST_THETA)
         ("invgammashape", value(&G::_invgamma_shape)->default_value(2.0), "shape parameter of inverse gamma prior distribution used for species-specific theta values (default 2.0)")
         ("freezethetamean",  value(&G::_theta_mean_frozen)->default_value(false), "if true, every species uses fixedthetamean (ignored if fixedthetamean is negative); if false, theta for any given species is drawn from InverseGamma(invgammashape, fixedthetamean) (default false)")
@@ -485,28 +485,6 @@ namespace proj {
         streef.close();
     }
     
-    inline void Proj::showSettings() const {
-        output(format("Speciation rate (lambda): %.9f\n") % G::_lambda, 2);
-#if defined(EST_THETA)
-        if (G::_theta_mean_fixed > 0.0) {
-            if (G::_theta_mean_frozen) {
-                output(format("Mutation-scaled pop. size (theta) mean (theta) fixed to the value %.9f for all species\n") % G::_theta_mean_fixed, 2);
-            }
-            else {
-                output(format("Mutation-scaled pop. size (theta) mean (theta) fixed to the value %.9f but theta varies among species\n") % G::_theta_mean_fixed, 2);
-            }
-        }
-        else {
-            output(format("Mutation-scaled pop. size (theta) proposal mean (theta): %.9f\n") % G::_theta_proposal_mean, 2);
-            output(format("Mutation-scaled pop. size (theta) prior mean (theta): %.9f\n") % G::_theta_prior_mean, 2);
-        }
-#else
-        output(format("Coalescent parameter (theta): %.9f\n") % G::_theta, 2);
-#endif
-        output(format("Number of particles: %d") % G::_nparticles, 2);
-        output(format("Number of species particles: %d") % G::_nparticles2, 2);
-    }
-        
     inline string Proj::inventName(unsigned k, bool lower_case) {
         // If   0 <= k < 26, returns A, B, ..., Z,
         // If  26 <= k < 702, returns AA, AB, ..., ZZ,

@@ -95,6 +95,11 @@ namespace proj {
             theta_variate = G::inverseGammaVariate(G::_invgamma_shape, b);
         }
         _theta_map[s] = theta_variate;
+        
+        // //temporary!
+        // ofstream tmpf("thetas.txt", ios::app);
+        // tmpf << theta_variate << endl;
+        // tmpf.close();
     }
     
     inline void SpeciesForest::drawThetaMean(double exponential_prior_rate) {

@@ -1,5 +1,7 @@
 #pragma once
 
+extern void output(string msg, unsigned level);
+extern void output(format & fmt, unsigned level);
 extern proj::Lot rng;
 
 namespace proj {
@@ -9,6 +11,8 @@ namespace proj {
         
         static string                   _species_tree_ref_file_name;
         static string                   _gene_trees_ref_file_name;
+        
+        static unsigned                 _treefile_compression;
         
         static bool                     _debugging;
 
@@ -55,6 +59,7 @@ namespace proj {
         static unsigned                 _nparticles;
         static unsigned                 _nparticles2;
 
+        static void     showSettings();
         static double   inverseGammaVariate(double shape, double rate);
         static void     getAllParamNames(vector<string> & names);
         static void     generateUpdateSeeds(vector<unsigned> & seeds);
@@ -70,6 +75,27 @@ namespace proj {
         static set<unsigned> speciesToUnsignedSet(G::species_t species);
     };
     
+    inline void G::showSettings() {
+        output(format("Speciation rate (lambda): %.9f\n") % G::_lambda, 2);
+#if defined(EST_THETA)
+        if (G::_theta_mean_fixed > 0.0) {
+            if (G::_theta_mean_frozen) {
+                output(format("Mutation-scaled pop. size (theta) mean fixed to the value %.9f for all species\n") % G::_theta_mean_fixed, 2);
+            }
+            else {
+                output(format("Mutation-scaled pop. size (theta) mean fixed to the value %.9f but theta for each species drawn from an Inverse Gamma distribution with shape %.9f\n") % G::_theta_mean_fixed % G::_invgamma_shape, 2);
+            }
+        }
+        else {
+           output(format("Mutation-scaled pop. size (theta) mean drawn from an Exponential distribution\n with mean %.9f and theta for each species drawn from an Inverse Gamma distribution\n with that mean and shape %.9f\n") % _theta_proposal_mean % G::_invgamma_shape, 2);
+        }
+#else
+        output(format("Coalescent parameter (theta): %.9f\n") % G::_theta, 2);
+#endif
+        output(format("Number of 1st-level particles: %d") % G::_nparticles, 2);
+        output(format("Number of 2nd-level particles: %d") % G::_nparticles2, 2);
+    }
+
     inline double G::inverseGammaVariate(double shape, double rate) {
         double gamma_variate = rng.gamma(shape, 1.0/rate);
         double invgamma_variate = 1.0/gamma_variate;

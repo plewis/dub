@@ -141,6 +141,19 @@ mutex                               G::_debug_mutex;
 //vector<unsigned>                    G::_thread_last_gene;
 #endif
 
+// Let Nup be the number of unique particles
+// Let Np be the nominal number of particles (i.e. count = 1 for each particle)
+// Nup < Np if count > 1 for some particles
+// 0: Save all species trees even if they are identical to others
+//    File will contain Np species trees
+// 1: Save species tree from each unique particle and, for each, show that particle's count
+//    File will contain Nup species trees
+// 2: Save unique species trees along with their frequency in the sample
+//    Is this effectively the same as compression level 1?
+//    Creates map in which species tree newicks are keys and cumulative count is value,
+//    but will there ever be exactly the same newick in different particles?
+unsigned                            G::_treefile_compression = 0;
+
 unsigned                            G::_verbosity          = 3;
 
 unsigned                            G::_nstates            = 4;
