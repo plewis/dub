@@ -19,6 +19,7 @@ namespace proj {
             
             unsigned            getNParticles() {return _nparticles;}
             list<Particle> &    getParticles()  {return _particle_list;}
+            const list<Particle> & getParticlesConst() const {return _particle_list;}
             
             void setMode(mode_type_t m)     {_mode = m;}
             void setNParticles(unsigned n)  {_nparticles = n;}

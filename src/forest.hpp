@@ -5,7 +5,8 @@ extern proj::PartialStore ps;
 
 class Particle;
 
-extern proj::Lot rng;
+//POLWAS extern proj::Lot rng;
+extern proj::Lot::SharedPtr rng;
 
 namespace proj {
 
@@ -54,7 +55,7 @@ namespace proj {
             virtual void        addCoalInfoElem(const Node *, vector<coalinfo_t> & recipient) = 0;
             virtual void        saveCoalInfo(vector<coalinfo_t> & coalinfo_vect, bool cap = false) const = 0;
             
-            static void         debugShowCoalInfo(string title, vector<coalinfo_t> & coalinfo_vect);
+            static void         debugShowCoalInfo(string title, vector<coalinfo_t> & coalinfo_vect, string fn = "");
             static pair<double,double> calcTreeDistances(Forest & ref, Forest & test);
             static bool         subsumed(G::species_t test_species, G::species_t subtending_species);
 
@@ -1157,24 +1158,47 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
         output("\n", 2);
     }
 
-    inline void Forest::debugShowCoalInfo(string title, vector<Forest::coalinfo_t> & coalinfo_vect) {
-        output(format("\n%s:\n") % title, 1);
-        output(format("%12s %12s %s\n") % "height" % "gene" % "child spp", 1);
-        for (auto cinfo : coalinfo_vect) {
-            double                                   h = get<0>(cinfo);
-            unsigned                       gene_plus_1 = get<1>(cinfo);
-            vector<G::species_t> &         spp = get<2>(cinfo);
-            //G::species_t sleft       = get<2>(cinfo);
-            //G::species_t sright      = get<3>(cinfo);
-            
-            ostringstream oss;
-            copy(spp.begin(), spp.end(), ostream_iterator<G::species_t>(oss, " "));
-            if (gene_plus_1 == 0)
-                output(format("%12.5f %12s %12s\n") % h % "(0)" % oss.str(), 1);
-            else
-                output(format("%12.5f %12d %12s\n") % h % gene_plus_1 % oss.str(), 1);
+    inline void Forest::debugShowCoalInfo(string title, vector<Forest::coalinfo_t> & coalinfo_vect, string fn) {
+        if (fn.size() > 0) {
+            ofstream tmpf(fn);
+            tmpf << str(format("\n%s:\n") % title);
+            tmpf << str(format("%12s %12s %s\n") % "height" % "gene" % "child spp");
+            for (auto cinfo : coalinfo_vect) {
+                double                                   h = get<0>(cinfo);
+                unsigned                       gene_plus_1 = get<1>(cinfo);
+                vector<G::species_t> &         spp = get<2>(cinfo);
+                //G::species_t sleft       = get<2>(cinfo);
+                //G::species_t sright      = get<3>(cinfo);
+                
+                ostringstream oss;
+                copy(spp.begin(), spp.end(), ostream_iterator<G::species_t>(oss, " "));
+                if (gene_plus_1 == 0)
+                    tmpf << str(format("%12.5f %12s %12s\n") % h % "(0)" % oss.str());
+                else
+                    tmpf << str(format("%12.5f %12d %12s\n") % h % gene_plus_1 % oss.str());
+            }
+            tmpf << endl;
+            tmpf.close();
         }
-        output("\n", 1);
+        else {
+            output(format("\n%s:\n") % title, 1);
+            output(format("%12s %12s %s\n") % "height" % "gene" % "child spp", 1);
+            for (auto cinfo : coalinfo_vect) {
+                double                                   h = get<0>(cinfo);
+                unsigned                       gene_plus_1 = get<1>(cinfo);
+                vector<G::species_t> &         spp = get<2>(cinfo);
+                //G::species_t sleft       = get<2>(cinfo);
+                //G::species_t sright      = get<3>(cinfo);
+                
+                ostringstream oss;
+                copy(spp.begin(), spp.end(), ostream_iterator<G::species_t>(oss, " "));
+                if (gene_plus_1 == 0)
+                    output(format("%12.5f %12s %12s\n") % h % "(0)" % oss.str(), 1);
+                else
+                    output(format("%12.5f %12d %12s\n") % h % gene_plus_1 % oss.str(), 1);
+            }
+            output("\n", 1);
+        }
     }
     
     inline void Forest::operator=(const Forest & other) {

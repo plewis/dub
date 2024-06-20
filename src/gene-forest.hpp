@@ -1,6 +1,7 @@
 #pragma once
 
-extern proj::Lot rng;
+//POLWAS extern proj::Lot rng;
+extern proj::Lot::SharedPtr rng;
 extern proj::PartialStore ps;
 
 namespace proj {
@@ -744,6 +745,12 @@ namespace proj {
                 
                 log_like += log(site_like)*counts[pp];
             }
+
+#if defined(DEBUG_CHECK_LOGWEIGHT)
+            ofstream tmpf(G::_debugging_text, ios::out | ios::app);
+            tmpf << str(format("*** %d: %s <-- lnL = %.9f (cum = %.9f)") % _gene_index % G::memoryAddressAsString(nd) % log_like % total_log_likelihood) << endl;
+            tmpf.close();
+#endif
             total_log_likelihood += log_like;
             tmp++;
         }

@@ -23,6 +23,7 @@ namespace proj {
         unsigned i = 0; // index of proposal
         unsigned j = 0; // index of parent particle
         for (auto & p : smc._particle_list) {
+#if defined(CHECK_SECOND_LEVEL_PREV_LOG_LIKELIHOOD)
             if (smc.isConditionalMode()) {
                 // Compute _prev_log_likelihood
                 double check_prev_log_coallike = p.getPrevLogCoalLike();
@@ -42,6 +43,7 @@ namespace proj {
                 
                 p.setPrevLogCoalLike(log_coallike);
             }
+#endif
 
             // n is the number of copies of particle p
             unsigned n = p.getCount();
@@ -81,6 +83,11 @@ namespace proj {
                     //p.debugShowMarkVariables(str(format("particleLoop before proposeSpeciation: i = %d, j = %d, n = %d") % i % j % n));
                     proposed = p.proposeSpeciation(update_seeds[i], step, i, /*make_permanent*/false);
                     //p.debugShowMarkVariables("particleLoop after proposeSpeciation");
+
+                    // //temporary!
+                    // ofstream doof("speciations.txt", ios::out | ios::app);
+                    // doof << str(format("*** proposeSpeciation(%6d, %6d, %6d, false) --> logw = // %15.9f,     n = %6d\n") % update_seeds[i] % step % i % proposed.first // % n);
+                    // doof.close();
                 }
                 else {
                     throw XProj(format("Unknown SMC mode encountered (%d) in ParallelPolicyNone<T>::particleLoop function") % smc._mode);

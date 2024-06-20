@@ -34,7 +34,8 @@ extern void output(string msg, unsigned level);
 extern void output(format & fmt, unsigned level);
 extern proj::PartialStore ps;
 extern proj::StopWatch stopwatch;
-extern proj::Lot rng;
+//POLWAS extern proj::Lot rng;
+extern proj::Lot::SharedPtr rng;
 
 namespace proj {
 
@@ -54,6 +55,7 @@ namespace proj {
             void                         run();
             
             void                         memoryReport(ofstream & memf) const;
+            void                         debugCheckEnsemble(const SMC & ensemble) const;
             
         private:
         
@@ -74,7 +76,10 @@ namespace proj {
             void                         outputTrees(SpeciesForest & sf, vector<GeneForest> & gfvect);
             void                         outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric, const vector<string> & newick_gene_trees_numeric);
             void                         calcCoalLikeForSpecified();
+            void                         testSecondLevelSMC();
             void                         chibSim(/*const Particle & test_particle*/);
+            
+            void                         selectParticlesToKeep(list<Particle> & first_level_particles, vector<unsigned> & kept);
 
             void                         readData();
             void                         setRelativeRates();
@@ -175,7 +180,7 @@ namespace proj {
         ("datafile",  value(&_data_file_name), "name of a data file in NEXUS format")
         ("speciestreeref",  value(&G::_species_tree_ref_file_name), "name of a tree file containing a single reference species tree")
         ("genetreeref",  value(&G::_gene_trees_ref_file_name), "name of a tree file containing a reference gene tree for each locus")
-        ("startmode", value(&_start_mode), "if 'sim', simulate gene trees, species tree, and data; if 'smc', estimate from supplied datafile; if 'chib', computes prior probability of species species and gene tree topologies; if 'spec', computes coalescent likelihood for specified speciestreeref and genetreeref")
+        ("startmode", value(&_start_mode), "if 'sim', simulate gene trees, species tree, and data; if 'smc', estimate from supplied datafile; if 'chib', computes prior probability of species species and gene tree topologies; if 'spec', computes coalescent likelihood for specified speciestreeref and genetreeref; if '2ndlevel', tests second-level SMC from gene trees supplied by genetreeref")
         ("chibreps", value(&_chib_nreps)->default_value(1000), "number of simulation replicates (default 1000) used in computing log prior probability of species and gene tree topologies (only used if startmode is \"chib\")")
         ("niter", value(&_niter), "number of iterations, where one iteration involves SMC of gene trees give species tree combined with an SMC of species tree given gene trees")
         ("subset",  value(&partition_subsets), "a string defining a partition subset, e.g. 'first:1-1234\3' or 'default[codon:standard]:1-3702'")
@@ -186,6 +191,7 @@ namespace proj {
         ("nspecies",  value(&_nsimspecies)->default_value(1), "number of species (only used if simulate specified)")
         ("ntaxaperspecies",  value(&_nsimtaxaperspecies), "number of taxa sampled per species (only used if simulate specified); should be _nimspecies of these entries, one for each species simulated")
         ("nparticles",  value(&G::_nparticles)->default_value(500), "number of particles in a population for joint estimation")
+        ("nkept",  value(&G::_nkept)->default_value(100), "number of particles from joint smc kept for conditional smc")
         ("nspeciesparticles",  value(&G::_nparticles2)->default_value(1000), "number of particles in a population for species tree only estimation")
         ("nthreads",  value(&G::_nthreads)->default_value(3), "number of threads (each thread will handle nparticles/nthreads particle updates)")
         ("priorpost", value(&G::_prior_post)->default_value(false), "use prior-post approach to choose coalescence joins (default is prior-prior)")
@@ -258,6 +264,14 @@ namespace proj {
         if (vm.count("priorpost") > 0) {
             if (G::_prior_post && _start_mode == "sim") {
                 throw XProj("Cannot choose simulate for startmode and yes for prior_post at the same time");
+            }
+        }
+        
+        // If user specified --nkept on command line, check to ensure
+        // that nkept <= nparticles.
+        if (vm.count("nkept") > 0) {
+            if (G::_nkept > G::_nparticles) {
+                throw XProj("nkept cannot be greater than nparticles");
             }
         }
         
@@ -389,11 +403,13 @@ namespace proj {
 
         output("\nMapping taxon names to species index:\n", 2);
         unsigned ntax = (unsigned)G::_taxon_names.size();
+        assert(ntax > 0);
         if (taxa_from_data) {
             // Assume taxon names are already stored in _data object and no
             // species names have yet been stored
             G::_species_names.clear();
             const Data::taxon_names_t & tnames = _data->getTaxonNames();
+            assert(tnames.size() > 0);
             ntax = (unsigned)tnames.size();
             for (auto & tname : tnames) {
                 string species_name = Node::taxonNameToSpeciesName(tname);
@@ -424,7 +440,6 @@ namespace proj {
             // Now build G::_taxon_to_species from G::_taxon_names and species_name_to_index
             for (auto & tname : G::_taxon_names) {
                 string species_name = Node::taxonNameToSpeciesName(tname);
-                output(format("  %s --> %s\n") % tname % species_name, 2);
                 unsigned species_index = 0;
                 if (species_name_to_index.count(species_name) == 0) {
                     // species_name not found
@@ -434,6 +449,7 @@ namespace proj {
                     // species_name found
                     species_index = species_name_to_index[species_name];
                 }
+                output(format("  %s --> %s (%d)\n") % tname % species_name % species_index, 2);
                 G::_taxon_to_species[tname] = species_index;
             }
         }
@@ -729,7 +745,8 @@ namespace proj {
         // Build species tree and gene trees jointly
         Particle particle;
         particle.setData(_data);
-        particle.setSeed(rng.randint(1,9999));
+        //POLWAS particle.setSeed(rng.randint(1,9999));
+        particle.setSeed(rng->randint(1,9999));
         simulateTrees(particle);
         
         SpeciesForest      & species_forest = particle.getSpeciesForest();
@@ -802,7 +819,7 @@ namespace proj {
         }
     }
 
-    inline void Proj::calcCoalLikeForSpecified() {        
+    inline void Proj::calcCoalLikeForSpecified() {
         // Read in the reference species tree
         G::_nexus_taxon_map.clear();
         map<unsigned,unsigned> species_taxon_map;
@@ -840,11 +857,241 @@ namespace proj {
             gfref[g].setGeneIndex(g);
             gfref[g++].buildFromNewick(newick);
         }
-        
 
         vector<Forest::coalinfo_t> coalinfo_vect;
         particle.calcLogCoalescentLikelihood(coalinfo_vect,
             /*integrate_out_thetas*/true, /*verbose*/true);
+    }
+
+    inline void Proj::testSecondLevelSMC() {
+        // Read data (only taxon names are used)
+        readData();
+        G::_ngenes = _data->getNumSubsets();
+        assert(G::_ngenes > 0);
+
+        // Copy taxon names to global variable _taxon_names
+        G::_ntaxa = _data->getNumTaxa();
+        _data->copyTaxonNames(G::_taxon_names);
+        
+        // Populate G::_species_names using taxon names from data file
+        G::_species_names.clear();
+        for (auto tname : G::_taxon_names) {
+            string species_name = Node::taxonNameToSpeciesName(tname);
+            if (find(G::_species_names.begin(), G::_species_names.end(), species_name) == G::_species_names.end()) {
+                // Species_name not found in G::_species_names
+                G::_species_names.push_back(species_name);
+            }
+        }
+
+        // Read in the reference species tree
+        G::_nexus_taxon_map.clear();
+        map<unsigned,unsigned> species_taxon_map;
+        vector<string> species_tree_names;
+        vector<string> species_newicks;
+        // if G::_species_names is empty, readTreeFile will populate it using the taxa block
+        Forest::readTreefile(G::_species_tree_ref_file_name, /*skip*/0, G::_species_names, species_taxon_map, species_tree_names, species_newicks);
+        G::_nspecies = (unsigned)G::_species_names.size();
+                
+        // Read in the reference gene trees
+        map<unsigned,unsigned> gene_taxon_map;
+        vector<string> gene_tree_names;
+        vector<string> gene_newicks;
+        // if G::_taxon_names is empty, readTreeFile will populate it using the taxa block
+        GeneForest::readTreefile(G::_gene_trees_ref_file_name, /*skip*/0, G::_taxon_names, gene_taxon_map, gene_tree_names, gene_newicks);
+        G::_ntaxa = (unsigned)G::_taxon_names.size();
+        
+        // Populates G::_taxon_to_species
+        // Assumes G::_taxon_names and G::_species_names are already populated
+        buildSpeciesMap(/*taxa_from_data*/false);
+        
+        // Create a particle in which to store gene trees
+        Particle particle;
+                
+        // Build the species tree
+        SpeciesForest & sppref = particle.getSpeciesForest();
+        G::_nexus_taxon_map = species_taxon_map;
+        sppref.buildFromNewick(species_newicks[0]);
+
+        // Build the gene trees
+        G::_ngenes = (unsigned)gene_newicks.size();
+        vector<GeneForest> & gfref = particle.getGeneForests();
+        gfref.resize(gene_newicks.size());
+        unsigned g = 0;
+        G::_nexus_taxon_map = gene_taxon_map;
+        for (auto newick : gene_newicks) {
+            gfref[g].setParticle(&particle);
+            gfref[g].setGeneIndex(g);
+            gfref[g++].buildFromNewick(newick);
+        }
+        
+        // Build coal info vectors
+        sppref.buildCoalInfoVect();
+        //vector<GeneForest> & gtvect = particle.getGeneForests();
+        for (auto & gt : gfref) {
+            gt.buildCoalInfoVect();
+        }
+        
+        particle.setThetas();
+        
+        //temporary!
+        // Calculate log-coalescent-likelihood for true species tree
+        vector<Forest::coalinfo_t> coalinfo_vect;
+        particle.recordAllForests(coalinfo_vect);
+        double log_coallike = particle.calcLogCoalescentLikelihood(coalinfo_vect,  /*integrate_out_thetas*/false, /*verbose*/true);
+        output(format("log-coallike = %.9f (true species tree)\n") % log_coallike, 2);
+        
+        // Calculate Jones 2017) log-coalescent-likelihood for true species tree
+        //coalinfo_vect.clear();
+        //particle.recordAllForests(coalinfo_vect);
+        //double log_coallike_jones = particle.calcLogCoalescentLikelihood(coalinfo_vect,  /*integrate_out_thetas*/true, /*verbose*/true);
+        //output(format("log-coallike-jones = %.9f (true species tree)\n") % log_coallike_jones, 2);
+        
+        //temporary!
+        G::_speclog.clear();
+
+        SMC smc2;
+        smc2.setMode(SMC::SPECIES_GIVEN_GENE);
+        smc2.setNParticles(G::_nparticles2);
+        smc2.initFromParticle(particle);
+        smc2.run();
+        smc2.summarize();
+        
+        //temporary!
+        // Save proposal distributions at each step for plotting in R
+        unsigned nsteps = (unsigned)G::_speclog.size();
+        vector<string> tmp;
+        vector<string> ablines;
+        vector<string> joincolors;
+        vector<double> logweights;
+        vector<double> increments;
+        vector<double> maxheights;
+        vector<double> forestheights;
+        vector<double> upperbounds;
+        typedef tuple<double, double, double, double, double, string> list_t;
+        vector<list_t> list;
+        map<set<G::species_t>, unsigned> precombos;
+        map<set<G::species_t>, unsigned> postcombos;
+        for (unsigned step = 0; step < nsteps; step++) {
+            logweights.clear();
+            increments.clear();
+            maxheights.clear();
+            forestheights.clear();
+            upperbounds.clear();
+            joincolors.clear();
+            ablines.clear();
+            precombos.clear();
+            postcombos.clear();
+            
+            ofstream tmpf(str(format("step-%d.R") % step));
+            
+            tmpf << "cwd = system('cd \"$( dirname \"$0\" )\" && pwd', intern = TRUE)\n";
+            tmpf << "setwd(cwd)\n";
+            tmpf << str(format("pdf(\"plot-%d.pdf\")\n") % step);
+            
+            vector<G::SpecLog> & v = G::_speclog.at(step);
+                        
+            unsigned prefilter_count = 0;
+            unsigned postfilter_count = 0;
+            for (auto x : v) {
+                if (x._filtered) {
+                    postfilter_count += x._freq;
+                }
+                else {
+                    prefilter_count += 1;
+                }
+            }
+            tmpf << "# step = " << step << "\n";
+            tmpf << "# pre-filtering  = " << prefilter_count << "\n";
+            tmpf << "# post-filtering = " << postfilter_count << "\n";
+            
+            // Save log weights
+            tmp.clear();
+            for (auto x : v) {
+                if (!x._filtered) {
+                    tmp.push_back(str(format("%.9f") % x._logw));
+                    logweights.push_back(x._logw);
+                }
+            }
+            tmpf << "logw <- c(" << boost::algorithm::join(tmp, ",") << ")\n";
+            
+            // Save log increments
+            tmp.clear();
+            for (auto x : v) {
+                if (!x._filtered) {
+                    tmp.push_back(str(format("%.9f") % x._incr));
+                    increments.push_back(x._incr);
+                    joincolors.push_back(x.calcColor());
+                    set<G::species_t> s = {x._left, x._right};
+                    precombos[s] += 1;
+                }
+                else {
+                    assert(x._freq > 0);
+                    set<G::species_t> s = {x._left, x._right};
+                    postcombos[s] += x._freq;
+                    ablines.push_back(str(format("abline(v=%.9f, col=%s)\n") % x._incr % x.calcColor()));
+                }
+            }
+            tmpf << "incr <- c(" << boost::algorithm::join(tmp, ",") << ")\n";
+            tmpf << "cols <- c(" << boost::algorithm::join(joincolors, ",") << ")\n";
+            
+            // Save maxh
+            tmp.clear();
+            for (auto x : v) {
+                if (!x._filtered) {
+                    tmp.push_back(str(format("%.9f") % x._maxh));
+                    maxheights.push_back(x._maxh);
+                    forestheights.push_back(x._height);
+                    upperbounds.push_back(x._maxh - x._height);
+                }
+            }
+            tmpf << "maxh <- c(" << boost::algorithm::join(tmp, ",") << ")\n";
+            
+            tmpf << "plot(incr, logw, type=\"p\", pch=19, col=cols)\n";
+            for (auto abline : ablines) {
+                tmpf << abline;
+            }
+            
+            tmpf << "\n# pre-combos:\n";
+            for (auto c : precombos) {
+                auto s = c.first;
+                unsigned count = c.second;
+                tmpf << "# " << count << ": ";
+                for (auto z : s) {
+                    tmpf << z << " ";
+                }
+                tmpf << "\n";
+            }
+            
+            tmpf << "\n# post-combos:\n";
+            for (auto c : postcombos) {
+                auto s = c.first;
+                unsigned count = c.second;
+                tmpf << "# " << count << ": ";
+                for (auto z : s) {
+                    tmpf << z << " ";
+                }
+                tmpf << "\n";
+            }
+            
+            tmpf << "\n# (logw, incr, maxh, height, bound, color) from highest to lowest log-weight:\n";
+            unsigned n = (unsigned)logweights.size();
+            assert(n == increments.size());
+            assert(n == maxheights.size());
+            assert(n == forestheights.size());
+            assert(n == upperbounds.size());
+            assert(n == joincolors.size());
+            list.clear();
+            for (unsigned i = 0; i < n; i++) {
+                list.push_back(make_tuple(logweights[i], increments[i], maxheights[i], forestheights[i], upperbounds[i], joincolors[i]));
+            }
+            sort(list.begin(), list.end(), greater<list_t>());
+            for (auto l : list) {
+                tmpf << "# " << get<0>(l) << ", " << get<1>(l) << ", " << get<2>(l) << ", " << get<3>(l) << ", " << get<4>(l) << ", " << get<5>(l) << ", " <<"\n";
+            }
+
+            tmpf << "dev.off()\n";
+            tmpf.close();
+        }
     }
 
     inline void Proj::chibSim(/*const Particle & test_particle*/) {
@@ -860,7 +1107,8 @@ namespace proj {
             // i = 1: seed between 2001 and 3000
             // ...
             // i = 999: seed between 1000001 and 1001000
-            particle.setSeed((i+1)*nreps + rng.randint(1,nreps));
+            //POLWAS particle.setSeed((i+1)*nreps + rng.randint(1,nreps));
+            particle.setSeed((i+1)*nreps + rng->randint(1,nreps));
             simulateTrees(particle);
             SpeciesForest      & sf = particle.getSpeciesForest();
             vector<GeneForest> & gfvect   = particle.getGeneForests();
@@ -882,6 +1130,35 @@ namespace proj {
         }
         output(format("Log(prob. topol.lo) = %.9f") % logp,1);
     }
+    
+    inline void Proj::selectParticlesToKeep(list<Particle> & first_level_particles, vector<unsigned> & kept) {
+        assert(kept.size() == first_level_particles.size());
+        assert(G::_nkept <= G::_nparticles);
+        if (G::_nkept == G::_nparticles) {
+            // No need to select, just keep every particle
+            unsigned which = 0;
+            for (auto & p : first_level_particles) {
+                unsigned n = p.getCount();
+                kept[which++] = n;
+            }
+        }
+        else {
+            double n = (double)G::_nparticles;
+            
+            // Choose _nkept particles
+            vector<double> prob;
+            for (auto & p : first_level_particles) {
+                prob.push_back(1.0*p.getCount()/n);
+            }
+            double sum_probs = accumulate(prob.begin(), prob.end(), 0.0);
+            assert(fabs(sum_probs - 1.0) < 0.0001);
+            
+            for (unsigned k = 0; k < G::_nkept; ++k) {
+                unsigned which = G::multinomialDraw(rng, prob);
+                kept[which]++;
+            }
+        }
+    }
 
     inline void Proj::run() {
     
@@ -897,7 +1174,8 @@ namespace proj {
         output(format("Current working directory: %s\n") % current_path(), 2);
         
         try {
-            rng.setSeed(_rnseed);
+            //POLWAS rng.setSeed(_rnseed);
+            rng->setSeed(_rnseed);
             
             if (_start_mode == "sim") {
                 simulateData(/*chib*/false);
@@ -907,10 +1185,19 @@ namespace proj {
                 // and gene tree topologies for purposes of using Chib's method
                 chibSim();
             }
-            else if (_start_mode == "spec")
+            else if (_start_mode == "spec") {
                 // Estimate coalescent log likelihood for specified species tree
                 // and gene trees
                 calcCoalLikeForSpecified();
+            }
+            else if (_start_mode == "2ndlevel") {
+                if (G::_theta_mean_fixed < 0.0) {
+                    throw XProj("Must specify fixedthetamean if startmode is 2ndlevel");
+                }
+        
+                // Test 2nd-level SMC using specified gene trees
+                testSecondLevelSMC();
+            }
             else {
                 if (_start_mode != "smc")
                     throw XProj("startmode must be either \"sim\", \"smc\", or \"chib\"");
@@ -959,45 +1246,49 @@ namespace proj {
                 smc.summarize();
                 
                 if (G::_nparticles2 > 0) {
-                    output("\nWorking on 2nd-level SMC...\n", 2);
+                    output(format("Performing 2nd-level SMC on %d 1st-level particles...\n") % G::_nkept, 2);
+                    
+                    list<Particle> & first_level_particles = smc.getParticles();
+
+                    // Choose G::_nkept 1st-level particles for use in 2nd level
+                    vector<unsigned> kept(first_level_particles.size(), 0);
+                    selectParticlesToKeep(first_level_particles, kept);
                     
                     // Second-level particle filtering
-                    list<Particle> & first_level_particles = smc.getParticles();
                     SMC ensemble;
                     ensemble.setMode(SMC::SPECIES_GIVEN_GENE);
                     unsigned which_first_level = 0;
+                    unsigned total_first_level = 0;
                     unsigned which_second_level = 0;
-                    for (auto p : first_level_particles) {
-                    
-                        // //temporary!
-                        // vector<Forest::coalinfo_t> tmp_coalinfo_vect;
-                        
-                        // Rebuild coal info vectors, stripping effect of previous species tree
-                        vector<GeneForest> & gtvect = p.getGeneForests();
-                        for (auto & gt : gtvect) {
-                            gt.buildCoalInfoVect();
+                    for (auto & p : first_level_particles) {
+                        unsigned n = kept[which_first_level]; //p.getCount();
+                                                
+                        if (n > 0) {
+                            // Rebuild coal info vectors, stripping effect of previous species tree
+                            vector<GeneForest> & gtvect = p.getGeneForests();
+                            for (auto & gt : gtvect) {
+                                gt.buildCoalInfoVect();
+                            }
+                                                    
+                            for (unsigned j = 0; j < n; j++) {
                             
-                            // //temporary!
-                            // gt.saveCoalInfo(tmp_coalinfo_vect);
-                        }
-                        
-                        // //temporary!
-                        // sort(tmp_coalinfo_vect.begin(), tmp_coalinfo_vect.end());
-                        // Forest::debugShowCoalInfo("===== coalinfo =====", tmp_coalinfo_vect);
-                        
-                        unsigned n = p.getCount();
-                        for (unsigned j = 0; j < n; j++) {
-                            output(format("Working on 2nd-level SMC %d of %d...\n") % (which_second_level+1) % G::_nparticles, 3);
-                            SMC smc2;
-                            smc2.setMode(SMC::SPECIES_GIVEN_GENE);
-                            smc2.setNParticles(G::_nparticles2);
-                            smc2.initFromParticle(p);
-                            smc2.run();
-                            smc2.dumpParticles(ensemble);
-                            which_second_level++;
+                                ++total_first_level;
+                                if (total_first_level % 10 == 0)
+                                    output(format("  working on 1st-level %d...\n") % total_first_level, 2);
+                                    
+                                SMC smc2;
+                                smc2.setMode(SMC::SPECIES_GIVEN_GENE);
+                                smc2.setNParticles(G::_nparticles2);
+                                smc2.initFromParticle(p);
+                                smc2.run();
+                                smc2.dumpParticles(ensemble);
+                                //debugCheckEnsemble(ensemble);
+                                which_second_level++;
+                            }
                         }
                         which_first_level++;
                     }
+                    //debugCheckEnsemble(ensemble);
                     ensemble.summarize();
                 }
             }
@@ -1007,6 +1298,25 @@ namespace proj {
         }
         
         output("\nFinished!\n", 2);
+    }
+    
+    void Proj::debugCheckEnsemble(const SMC & ensemble) const {
+        // Check to make sure all particles in ensemble have gene trees
+        output("Checking ensemble:\n",2);
+        const list<Particle> & plist = ensemble.getParticlesConst();
+        unsigned which = 0;
+        for (auto & p : plist) {
+            which++;
+            unsigned c = p.getCount();
+            const vector<GeneForest> * gf = p.getGeneTreesConst();
+            if (gf) {
+                unsigned n = (unsigned)(gf->size());
+                output(format("  particle %d (count %d) has %d gene trees\n") % which % c % n,2);
+            }
+            else {
+                output(format("  particle %d (count = %d) has NO gene trees\n") % which % c,2);
+            }
+        }
     }
     
     void Proj::memoryReport(ofstream & memf) const {

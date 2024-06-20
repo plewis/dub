@@ -2,12 +2,15 @@
 
 extern void output(string msg, unsigned level);
 extern void output(format & fmt, unsigned level);
-extern proj::Lot rng;
+//POLWAS extern proj::Lot rng;
+extern proj::Lot::SharedPtr rng;
 
 namespace proj {
 
     struct G {
         typedef unsigned long           species_t;
+        
+        static string                   _debugging_text;
         
         static string                   _species_tree_ref_file_name;
         static string                   _gene_trees_ref_file_name;
@@ -15,6 +18,57 @@ namespace proj {
         static unsigned                 _treefile_compression;
         
         static bool                     _debugging;
+        
+        //temporary!
+        struct SpecLog {
+            species_t _left;
+            species_t _right;
+            species_t _anc;
+            double    _maxh;
+            double    _incr;
+            double    _height;
+            double    _logw;
+            unsigned  _seed;
+            unsigned  _freq;
+            bool      _filtered;
+
+            SpecLog() :
+                _left((species_t)0),
+                _right((species_t)0),
+                _anc((species_t)0),
+                _maxh(0.0),
+                _incr(0.0),
+                _height(0.0),
+                _logw(0.0),
+                _seed(0),
+                _freq(0),
+                _filtered(false) {}
+                
+            string calcColor() {
+                if ((_left == 4 && _right == 8) || (_left == 8 && _right == 4)) {
+                    return "\"blue\"";
+                }
+                else if ((_left == 1 && _right == 12) || (_left == 12 && _right == 1)) {
+                    return "\"red\"";
+                }
+                else if ((_left == 2 && _right == 13) || (_left == 13 && _right == 2)) {
+                    return "\"green\"";
+                }
+                else if ((_left == 13 && _right == 16) || (_left == 16 && _right == 13)) {
+                    return "\"magenta\"";
+                }
+                else if ((_left == 2 && _right == 16) || (_left == 16 && _right == 2)) {
+                    return "\"orange\"";
+                }
+                else if ((_left == 15 && _right == 16) || (_left == 16 && _right == 15)) {
+                    return "\"purple]\"";
+                }
+                else {
+                    return "\"black\"";
+                }
+            }
+        };
+        static map<unsigned, vector<SpecLog> >   _speclog;
 
         static unsigned                 _nthreads;
         
@@ -57,10 +111,11 @@ namespace proj {
         static double                   _negative_infinity;
         
         static unsigned                 _nparticles;
+        static unsigned                 _nkept;
         static unsigned                 _nparticles2;
 
         static void     showSettings();
-        static double   inverseGammaVariate(double shape, double rate);
+        static double   inverseGammaVariate(double shape, double rate, Lot::SharedPtr lot);
         static void     getAllParamNames(vector<string> & names);
         static void     generateUpdateSeeds(vector<unsigned> & seeds);
         static double   calcLogSum(const vector<double> & log_values);
@@ -93,11 +148,12 @@ namespace proj {
         output(format("Coalescent parameter (theta): %.9f\n") % G::_theta, 2);
 #endif
         output(format("Number of 1st-level particles: %d") % G::_nparticles, 2);
+        output(format("Number of 1st-level particles kept: %d") % G::_nkept, 2);
         output(format("Number of 2nd-level particles: %d") % G::_nparticles2, 2);
     }
 
-    inline double G::inverseGammaVariate(double shape, double rate) {
-        double gamma_variate = rng.gamma(shape, 1.0/rate);
+    inline double G::inverseGammaVariate(double shape, double rate, Lot::SharedPtr lot) {
+        double gamma_variate = lot->gamma(shape, 1.0/rate);
         double invgamma_variate = 1.0/gamma_variate;
         return invgamma_variate;
     }
@@ -119,7 +175,8 @@ namespace proj {
     inline void G::generateUpdateSeeds(vector<unsigned> & seeds) {
         unsigned psuffix = 1;
         for (auto & s : seeds) {
-            s = rng.randint(1,9999) + psuffix;
+            //POLWAS s = rng.randint(1,9999) + psuffix;
+            s = rng->randint(1,9999) + psuffix;
             psuffix += 2;    // pure superstition (I always use odd seeds)
         }
     }

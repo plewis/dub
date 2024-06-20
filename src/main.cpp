@@ -113,7 +113,8 @@ using namespace proj;
     ofstream memfile;
 #endif
 
-Lot                                 rng;
+//POLWAS Lot                                 rng;
+Lot::SharedPtr                      rng(new Lot());
 StopWatch                           stopwatch;
 PartialStore                        ps;
 
@@ -130,7 +131,8 @@ unsigned                            Partial::_nstates           = 4;
 string                              G::_species_tree_ref_file_name = "";
 string                              G::_gene_trees_ref_file_name = "";
 
-bool                                G::_debugging       = false;
+string                              G::_debugging_text          = "doof.txt";
+bool                                G::_debugging               = false;
 
 unsigned                            G::_nthreads        = 1;
 #if defined(USING_MULTITHREADING)
@@ -163,7 +165,7 @@ vector<string>                      G::_taxon_names;
 map<string, unsigned>               G::_taxon_to_species;
 
 unsigned                            G::_nspecies           = 0;
-G::species_t                G::_species_mask       = (G::species_t)0;
+G::species_t                        G::_species_mask       = (G::species_t)0;
 vector<string>                      G::_species_names;
 map<unsigned,unsigned>              G::_nexus_taxon_map;
 
@@ -189,7 +191,11 @@ double                              G::_lambda_prior_mean   = 1.0;
 double                              G::_small_enough         = 0.00001;
 
 unsigned                            G::_nparticles           = 500;
+unsigned                            G::_nkept                = 500;
 unsigned                            G::_nparticles2          = 1000;
+
+//temporary!
+map<unsigned, vector<G::SpecLog> >  G::_speclog;
 
 static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in order to use infinity()");
 double                              G::_infinity = numeric_limits<double>::infinity();

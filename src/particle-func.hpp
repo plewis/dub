@@ -121,11 +121,18 @@ namespace proj {
     //    }
     //};
     
-    inline void Particle::recordAllForests(vector<Forest::coalinfo_t> & coalinfo_vect) {
+    inline void Particle::recordAllForests(vector<Forest::coalinfo_t> & coalinfo_vect) const {
         // Record gene trees
         for (unsigned g = 0; g < G::_ngenes; g++) {
-            GeneForest & gf = (*_gene_trees)[g];
-            gf.saveCoalInfo(coalinfo_vect);
+            if (_gene_trees) {
+                const GeneForest & gf = (*_gene_trees)[g];
+                gf.saveCoalInfo(coalinfo_vect);
+            }
+            else {
+                const GeneForest & gf = _gene_forests[g];
+                assert(gf.getNumLineages() == 1);
+                gf.saveCoalInfo(coalinfo_vect);
+            }
         }
         sort(coalinfo_vect.begin(), coalinfo_vect.end());
 
@@ -136,9 +143,13 @@ namespace proj {
         
         // Modify coalescent elements according to species tree
         _species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect);
+        
+        //temporary! @@@ remove this comment once prevLogCoalLike issue resolved @@@
+        coalinfo_vect.insert(coalinfo_vect.begin(), sppinfo_vect.begin(), sppinfo_vect.end());
+        sort(coalinfo_vect.begin(), coalinfo_vect.end());
     }
     
-    inline double Particle::calcLogCoalescentLikelihood(vector<Forest::coalinfo_t> & coalinfo_vect, bool integrate_out_thetas, bool verbose) {
+    inline double Particle::calcLogCoalescentLikelihood(vector<Forest::coalinfo_t> & coalinfo_vect, bool integrate_out_thetas, bool verbose) const {
         //cerr << "*** inside Particle::calcLogCoalescentLikelihood ***" << endl;
         
         //MARK: calcLogCoalescentLikelihood
@@ -226,7 +237,16 @@ namespace proj {
         
         if (verbose) {
             output("\nParticle::calcLogCoalescentLikelihood:\n", 1);
-            output(format("%12s %12s %24s %12s %12s %12s %12s\n") % "height" % "gene" % "spp" % "n_jbk" % "c_jbk" % "log(r_b)" % "q_b", 1);
+            output("Key:\n", 1);
+            output("  height:   height above leaf-level of this coalescence or speciation event\n", 1);
+            output("  gene:     0 if speciation event, gene index for coalescence events\n", 1);
+            output("  spp:      species of the two lineages involved in a coalescence/speciation event\n", 1);
+            output("  b:        the species tree branch (i.e. species) to which this event contributes\n", 1);
+            output("  n_jbk:    the number of coalescences for branch b\n", 1);
+            output("  c_jbk:    the sojourn time prior to coalescence k\n", 1);
+            output("  log(r_b): the log of 4/pj, where pj is the ploidy of gene j\n", 1);
+            output("  q_b:      the cumulative number of coalescences over all genes for branch b\n", 1);
+            output(format("%12s %12s %24s %12s %12s %12s %12s %12s\n") % "height" % "gene" % "spp" % "b" % "n_jbk" % "c_jbk" % "log(r_b)" % "q_b", 1);
         }
 
         // Walk down coalinfo_vect, accumulating Graham Jones r_b, q_b, and gamma_b
@@ -287,7 +307,7 @@ namespace proj {
                 bavail.insert(banc);
 
                 if (verbose) {
-                    output(format("%12.5f %12d %24s %12s %12s %12s %12s\n") % height % 0 % oss.str() % "-" % "-" % "-" % "-", 1);
+                    output(format("%12.5f %12d %24s %12s %12s %12s %12s %12s\n") % height % 0 % banc % oss.str() % "-" % "-" % "-" % "-", 1);
                 }
             }
             else {
@@ -314,13 +334,13 @@ namespace proj {
                 n_jb[gene][b]--;
 
                 if (verbose) {
-                    output(format("%12.5f %12d %24s %12d %12.5f %12.5f %12d\n") % height % gene_plus_one % oss.str() % n_jbk % c_jbk % gamma_b[b] % q_b[b], 1);
+                    output(format("%12.5f %12d %24s %12d %12d %12.5f %12.5f %12d\n") % height % gene_plus_one % oss.str() % b % n_jbk % c_jbk % gamma_b[b] % q_b[b], 1);
                 }
             }
         }
 
         if (verbose) {
-            output(format("\n%12s %12s %12s %12s %12s\n") % "b" % "q_b" % "log(r_b)" % "gamma_b" % "logL", 1);
+            output(format("\n%12s %12s %12s %12s %12s %12s\n") % "b" % "q_b" % "log(r_b)" % "gamma_b" % "theta_b" % "logL", 1);
         }
     
         double log_likelihood = 0.0;
@@ -332,6 +352,7 @@ namespace proj {
 #else
             double beta = G::_theta;
 #endif
+            assert(beta > 0.0);
             double B = (double)branches.size();
             log_likelihood  = B*alpha*log(beta);
             log_likelihood -= B*boost::math::lgamma(alpha);
@@ -341,7 +362,7 @@ namespace proj {
                 log_likelihood += boost::math::lgamma(alpha + q_b[b]);
                 
                 if (verbose) {
-                    output(format("%12d %12d %12.5f %12.5f %12.5f\n") % b % q_b[b] % log_r_b[b] % gamma_b[b] % log_likelihood, 1);
+                    output(format("%12d %12d %12.5f %12.5f %12.5f %12.5f\n") % b % q_b[b] % log_r_b[b] % gamma_b[b] % beta % log_likelihood, 1);
                 }
             }
 
@@ -357,6 +378,7 @@ namespace proj {
 #else
             double theta_b = G::_theta;
 #endif
+            assert(theta_b > 0.0);
             double sum_log_rb = 0.0;
             double sum_gamma_b = 0.0;
             unsigned sum_qb = 0;
@@ -367,7 +389,7 @@ namespace proj {
                 log_likelihood += log_r_b[b] - gamma_b[b]/theta_b - q_b[b]*log(theta_b);
                 
                 if (verbose) {
-                    output(format("%12d %12d %12.5f %12.5f %12.5f\n") % b % q_b[b] % log_r_b[b] % gamma_b[b] % log_likelihood, 1);
+                    output(format("%12d %12d %12.5f %12.5f %12.5f %12.5f\n") % b % q_b[b] % log_r_b[b] % gamma_b[b] % theta_b % log_likelihood, 1);
                 }
             }
             
@@ -601,9 +623,13 @@ namespace proj {
         
         // Sort coalinfo_vect from smallest to largest height
         sort(coalinfo_vect.begin(), coalinfo_vect.end());
+
+        //temporary!
+        G::SpecLog speclog_element;
+        speclog_element._seed = seed;
         
         double max_height = get<0>((*coalinfo_vect.rbegin()));
-
+        
         if (step > 0) {
             // Create speciation event
             G::species_t left_spp, right_spp, anc_spp;
@@ -618,12 +644,67 @@ namespace proj {
 
             // Adjust elements of coalinfo_vect affected by species tree joins
             _species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect);
+
+            //temporary!
+            speclog_element._left = left_spp;
+            speclog_element._right = right_spp;
+            speclog_element._anc = anc_spp;
         }
         
         // Draw a speciation increment dt.
-        double h = findHeightNextCoalescentEvent(_species_forest.getHeight(), coalinfo_vect);
+        double forest_height = _species_forest.getHeight();
+        speclog_element._height = forest_height;
+        double h = findHeightNextCoalescentEvent(forest_height, coalinfo_vect);
         assert(h < max_height);
-        double log_weight_factor = chooseTruncatedSpeciesForestIncrement(h, /*mark*/!make_permanent);
+        
+        pair<double,double> tmp = chooseTruncatedSpeciesForestIncrement(h, /*mark*/!make_permanent);
+        double log_weight_factor = tmp.first;
+        double increment = tmp.second;
+        
+//        //temporary!
+//        // gene   join    upper  current
+//        //    0  ACD+B 0.363369  0.0743424
+//        //    1  ACD+B 0.364692  0.0743424
+//        //    2  ACD+B 0.371029  0.0743424
+//        //    3  ACD+B 0.336916  0.0743424
+//        //    4  ACD+B 0.292280  0.0743424
+//        //    5  ACD+B 0.311285  0.0743424
+//        //    6  ACD+E 0.411408  0.0743424
+//        //    7  ACD+B 0.291720  0.0743424 <--
+//        //    8  ACD+B 0.349102  0.0743424
+//        //    9  ACD+B 0.299997  0.0743424
+//        if (step == 2 && h > 0.29) {
+//            double upper_bound = h - forest_height;
+//            cerr << "on step 2" << endl;
+//            cerr << "h             = " << h << endl;
+//            cerr << "forest_height = " << forest_height << endl;
+//            cerr << "upper bound   = " << upper_bound << endl;
+//            ofstream doof("doofus.txt");
+//            doof << "increment\n";
+//            double min_incr = upper_bound;
+//            double max_incr = 0.0;
+//            double mean_incr = 0.0;
+//            for (unsigned i = 0; i < 10000; i++) {
+//                auto incr_rate_cum = _species_forest.drawTruncatedIncrement(_lot, upper_bound);
+//                double incr = get<0>(incr_rate_cum);
+//                if (incr < min_incr)
+//                    min_incr = incr;
+//                if (incr > max_incr)
+//                    max_incr = incr;
+//                mean_incr += incr;
+//                doof << incr << "\n";
+//            }
+//            mean_incr /= 10000.0;
+//            cerr << "min_incr     = " << min_incr << endl;
+//            cerr << "max_incr     = " << max_incr << endl;
+//            cerr << "mean_incr    = " << mean_incr << endl;
+//            
+//            doof.close();
+//        }
+                
+        //temporary!
+        speclog_element._maxh = h;
+        speclog_element._incr = increment;
 
         unsigned num_species_tree_lineages = _species_forest.getNumLineages();
         if (num_species_tree_lineages == 2) {
@@ -640,14 +721,12 @@ namespace proj {
 
             // Adjust elements of coalinfo_vect affected by species tree joins
             _species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect);
-            
-            // // Advise all gene trees of the change in the species tree
-            // // Nodes that are reassigned save their previous state
-            // // to allow reversion
-            //double species_forest_height = _species_forest.getHeight();
-            //for (auto & gene_forest : _gene_forests) {
-            //    gene_forest.mergeSpecies(species_forest_height, left_spp, right_spp, anc_spp);
-            //}
+
+            // //temporary!
+            // if (!make_permanent) {
+            //     output(format("final join %d + %d = %d\n") % left_spp % right_spp % anc_spp, 2);
+            //     Forest::debugShowCoalInfo("===== coalinfo final =====", coalinfo_vect, // str(format("coalinfo-final-%d.txt") % step));
+            // }
         }
 
         _last_event = Particle::LAST_EVENT_SPECIATION;
@@ -663,8 +742,9 @@ namespace proj {
         // Adjust elements of coalinfo_vect affected by species tree joins
         _species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect);
 
-        // //temporary!
-        //Forest::debugShowCoalInfo("===== Particle::proposeSpeciation (after) =====", coalinfo_vect);
+        // Add speciations into coalinfo_vect
+        coalinfo_vect.insert(coalinfo_vect.begin(), sppinfo_vect.begin(), sppinfo_vect.end());
+        sort(coalinfo_vect.begin(), coalinfo_vect.end());
 
         // Compute coalescent likelihood and log weight
         //double prev_log_coallike = _prev_log_coallike;
@@ -672,47 +752,72 @@ namespace proj {
         double log_weight = log_coallike - _prev_log_coallike + log_weight_factor;
 
         if (make_permanent) {
-            _prev_log_coallike = log_coallike;
+            setPrevLogCoalLike(log_coallike);
             finalizeProposalAllForests();
+            
+            //temporary!
+            speclog_element._logw = log_weight;
+            speclog_element._filtered = true;
+            G::_speclog[step].push_back(speclog_element);
         }
         else {
             revertToMarkAllForests();
+            
+            //temporary!
+            speclog_element._logw = log_weight;
+            speclog_element._filtered = false;
+            G::_speclog[step].push_back(speclog_element);
         }
 
         return make_pair(log_weight, num_species_tree_lineages);
+    }
+    
+    inline double Particle::setThetas() {
+        double log_weight_modifier = 0.0;
+        if (G::_theta_mean_fixed > 0.0) {
+            _species_forest.setThetaMean(G::_theta_mean_fixed);
+        }
+        else {
+            // Draw mean theta from Exponential(r) proposal distribution,
+            // where r = 1/G::_theta_proposal_mean
+            _species_forest.drawThetaMean(1.0/G::_theta_proposal_mean, _lot);
+            
+            // Calculate weight modifier that takes account of the fact
+            // that the theta mean proposal distribution differs from its
+            // prior distribution
+            double prior_rate    = 1.0/G::_theta_prior_mean;
+            double proposal_rate = 1.0/G::_theta_proposal_mean;
+            log_weight_modifier = log(prior_rate) - log(proposal_rate) - (prior_rate - proposal_rate)*_species_forest.getThetaMean();
+        }
+        
+        // Draw values of theta for each leaf species from
+        // an InverseGamma(2, _theta_mean) distribution
+        // (unless G::_theta_mean_fixed was specified and
+        // G::_theta_mean_frozen is true, in which case
+        // make every species have the same theta value
+        // (equal to G::_theta_mean_fixed)
+        _species_forest.drawLineageSpecificThetas(_lot);
+        
+        return log_weight_modifier;
     }
     
     inline pair<double, unsigned> Particle::proposeCoalescence(unsigned seed, unsigned step, unsigned pindex, bool compute_partial, bool make_permanent) {
         //MARK: Particle::proposeCoalescence
         setSeed(seed);
         
+#if defined(DEBUG_CHECK_LOGWEIGHT)
+        double prev_log_likelihood = 0.0;
+        if (make_permanent) {
+            G::_debugging_text = "tmp0.txt";
+            prev_log_likelihood = calcLogLikelihood();
+        }
+#endif
+        
         //clearMarkAllForests();
 #if defined(EST_THETA)
         double log_weight_modifier = 0.0;
         if (step == 0) {
-            if (G::_theta_mean_fixed > 0.0) {
-                _species_forest.setThetaMean(G::_theta_mean_fixed);
-            }
-            else {
-                // Draw mean theta from Exponential(r) proposal distribution,
-                // where r = 1/G::_theta_proposal_mean
-                _species_forest.drawThetaMean(1.0/G::_theta_proposal_mean);
-                
-                // Calculate weight modifier that takes account of the fact
-                // that the theta mean proposal distribution differs from its
-                // prior distribution
-                double prior_rate    = 1.0/G::_theta_prior_mean;
-                double proposal_rate = 1.0/G::_theta_proposal_mean;
-                log_weight_modifier = log(prior_rate) - log(proposal_rate) - (prior_rate - proposal_rate)*_species_forest.getThetaMean();
-            }
-            
-            // Draw values of theta for each leaf species from
-            // an InverseGamma(2, _theta_mean) distribution
-            // (unless G::_theta_mean_fixed was specified and
-            // G::_theta_mean_frozen is true, in which case
-            // make every species have the same theta value
-            // (equal to G::_theta_mean_fixed)
-            _species_forest.drawLineageSpecificThetas();
+            log_weight_modifier = setThetas();
         }
 #endif
         
@@ -721,6 +826,8 @@ namespace proj {
             advance(step, pindex, compute_partial, make_permanent);
         }
         
+        double log_weight = log_weight_modifier + getLogWeight();
+
         unsigned num_species_tree_lineages = _species_forest.getNumLineages();
         
         if (make_permanent)
@@ -728,7 +835,17 @@ namespace proj {
         else
             revertToMarkAllForests();
 
-        double log_weight = log_weight_modifier + getLogWeight();
+#if defined(DEBUG_CHECK_LOGWEIGHT)
+        if (make_permanent) {
+            G::_debugging_text = "tmp1.txt";
+            double curr_log_likelihood = calcLogLikelihood();
+            double check_log_weight = curr_log_likelihood - prev_log_likelihood + log_weight_modifier;
+            if (fabs(check_log_weight - log_weight) > 0.0001) {
+                throw XProj(format("Oops: check_log_weight is %.9f but log_weight is %.9f (difference is %.9f)") % check_log_weight % log_weight % (check_log_weight - log_weight));
+            };
+        }
+#endif
+        
         return make_pair(log_weight, num_species_tree_lineages);
     }
     
@@ -774,6 +891,7 @@ namespace proj {
     }
     
     inline double Particle::priorPrior(unsigned step, unsigned pindex, double total_rate, bool compute_partial) {
+        //MARK: priorPrior
         double log_weight = 0.0;
         
         // _species_tuples has already been filled
@@ -1104,7 +1222,7 @@ namespace proj {
             double species_forest_height = _species_forest.getHeight();
                                     
 #if defined(EST_THETA)
-            _species_forest.drawThetaForSpecies(anc_spp);
+            double q = _species_forest.drawThetaForSpecies(anc_spp, _lot);
 #endif
 
             // Advise all gene trees of the change in the species tree
@@ -1156,7 +1274,7 @@ namespace proj {
     inline SpeciesForest & Particle::getSpeciesForest() {
         return _species_forest;
     }
-    
+        
     inline const SpeciesForest & Particle::getSpeciesForestConst() const {
         return _species_forest;
     }
@@ -1231,7 +1349,7 @@ namespace proj {
         _smc = other._smc;
         
         if (other._gene_trees) {
-            // Copy pointer to complete gene trees
+            // Copy pointer to vector of complete gene trees
             _gene_trees = other._gene_trees;
         }
         else {
@@ -1270,14 +1388,14 @@ namespace proj {
         copyParticleFrom(other);
     }
         
-    inline double Particle::chooseTruncatedSpeciesForestIncrement(double truncate_at, bool mark) {
+    inline pair<double,double> Particle::chooseTruncatedSpeciesForestIncrement(double truncate_at, bool mark) {
         double upper_bound = truncate_at - _species_forest.getHeight();
-        auto incr_rate = _species_forest.drawTruncatedIncrement(_lot, truncate_at);
-        double incr = incr_rate.first;
-        double rate = incr_rate.second;
+        auto incr_rate_cum = _species_forest.drawTruncatedIncrement(_lot, upper_bound);
+        double incr = get<0>(incr_rate_cum);
+        double rate = get<1>(incr_rate_cum);
         assert(rate > 0.0);
         _species_forest.advanceAllLineagesBy(incr, mark);
-        double log_factor = log(1.0 - exp(-rate*upper_bound));
-        return log_factor;
+        double log_factor = get<2>(incr_rate_cum);
+        return make_pair(log_factor,incr);
     }
 }

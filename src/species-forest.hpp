@@ -18,18 +18,20 @@ namespace proj {
             Node * findSpecies(G::species_t spp);
             
 #if defined(EST_THETA)
-            void drawLineageSpecificThetas();
-            void drawThetaForSpecies(G::species_t s);
-            void drawThetaMean(double exponential_prior_rate);
+            void drawLineageSpecificThetas(Lot::SharedPtr lot);
+            double drawThetaForSpecies(G::species_t s, Lot::SharedPtr lot);
+            void drawThetaMean(double exponential_prior_rate, Lot::SharedPtr lot);
             void setThetaMean(double thetamean) {_theta_mean = thetamean;}
             double getThetaMean() const {return _theta_mean;}
             double thetaForSpecies(G::species_t s) const;
+            map<G::species_t, double> & getThetaMap();
+            const map<G::species_t, double> & getThetaMapConst() const;
 #endif
             
             void setJointEstimation(bool is_joint_estimation) {_joint_estimation = is_joint_estimation;}
                         
-            void fixupCoalInfo(vector<coalinfo_t> & coalinfo_vect, vector<coalinfo_t> & sppinfo_vect);
-            pair<double,double> drawTruncatedIncrement(Lot::SharedPtr lot, double truncate_at);
+            void fixupCoalInfo(vector<coalinfo_t> & coalinfo_vect, vector<coalinfo_t> & sppinfo_vect) const;
+            tuple<double,double,double> drawTruncatedIncrement(Lot::SharedPtr lot, double truncate_at);
             pair<double,double> drawIncrement(Lot::SharedPtr lot);
             double calcLogSpeciesTreeDensity(double lambda) const;
 
@@ -46,6 +48,7 @@ namespace proj {
             void recordCoalInfoAndClearMark();
             void addCoalInfoElem(const Node * nd, vector<coalinfo_t> & recipient);
             
+            void buildCoalInfoVect();
             void saveCoalInfo(vector<Forest::coalinfo_t> & coalinfo_vect, bool cap = false) const;
             void recordHeights(vector<double> & height_vect) const;
             
@@ -76,38 +79,34 @@ namespace proj {
     }
 
 #if defined(EST_THETA)
-    inline void SpeciesForest::drawLineageSpecificThetas() {
+    inline void SpeciesForest::drawLineageSpecificThetas(Lot::SharedPtr lot) {
         // Draw a theta value for each leaf species
         _theta_map.clear();
         for (auto nd : _lineages) {
             G::species_t s = nd->_species;
-            drawThetaForSpecies(s);
+            drawThetaForSpecies(s, lot);
         }
     }
     
-    inline void SpeciesForest::drawThetaForSpecies(G::species_t s) {
+    inline double SpeciesForest::drawThetaForSpecies(G::species_t s, Lot::SharedPtr lot) {
         assert(_theta_map.count(s) == 0);
         double theta_variate = 0.0;
         if (G::_theta_mean_fixed > 0.0 && G::_theta_mean_frozen)
             theta_variate = G::_theta_mean_fixed;
         else {
             double b = (G::_invgamma_shape - 1.0)*_theta_mean;
-            theta_variate = G::inverseGammaVariate(G::_invgamma_shape, b);
+            theta_variate = G::inverseGammaVariate(G::_invgamma_shape, b, lot);
         }
         _theta_map[s] = theta_variate;
-        
-        // //temporary!
-        // ofstream tmpf("thetas.txt", ios::app);
-        // tmpf << theta_variate << endl;
-        // tmpf.close();
+        return theta_variate;
     }
     
-    inline void SpeciesForest::drawThetaMean(double exponential_prior_rate) {
+    inline void SpeciesForest::drawThetaMean(double exponential_prior_rate, Lot::SharedPtr lot) {
         // Should only be called for trivial forests
         assert(_lineages.size() == G::_nspecies);
         
         // Draw _theta_mean from Exponential prior
-        _theta_mean = -log(1.0 - rng.uniform())/exponential_prior_rate;
+        _theta_mean = -log(1.0 - lot->uniform())/exponential_prior_rate;
     }
 #endif
 
@@ -203,6 +202,14 @@ namespace proj {
         }
         return _theta_map.at(s);
     }
+    
+    inline map<G::species_t, double> & SpeciesForest::getThetaMap() {
+        return _theta_map;
+    }
+    
+    inline const map<G::species_t, double> & SpeciesForest::getThetaMapConst() const {
+        return _theta_map;
+    }
 #endif
 
     inline Node * SpeciesForest::findSpecies(G::species_t spp) {
@@ -217,18 +224,18 @@ namespace proj {
         return the_node;
     }
 
-    inline pair<double,double> SpeciesForest::drawTruncatedIncrement(Lot::SharedPtr lot, double truncate_at) {
-        // Draw from exponential distribution truncted at the specified value
-        double upper_bound = truncate_at - _forest_height;
+    inline tuple<double,double,double> SpeciesForest::drawTruncatedIncrement(Lot::SharedPtr lot, double truncate_at) {
+        // Draw from exponential distribution truncated at the specified value
         unsigned n = (unsigned)_lineages.size();
         double incr = G::_infinity;
         double rate = 0.0;
+        double cum_prob_upper_bound = 1.0;
         if (n > 1) {
             rate = G::_lambda*n;
-            double cum_prob_upper_bound = 1.0 - exp(-rate*upper_bound);
+            double cum_prob_upper_bound = 1.0 - exp(-rate*truncate_at);
             incr = -log(1.0 - cum_prob_upper_bound*lot->uniform())/rate;
         }
-        return make_pair(incr, rate);
+        return make_tuple(incr, rate, cum_prob_upper_bound);
     }
     
     inline pair<double,double> SpeciesForest::drawIncrement(Lot::SharedPtr lot) {
@@ -309,7 +316,7 @@ namespace proj {
         return log_prob_density;
     }
     
-    inline void SpeciesForest::fixupCoalInfo(vector<coalinfo_t> & coalinfo_vect, vector<coalinfo_t> & sppinfo_vect) {
+    inline void SpeciesForest::fixupCoalInfo(vector<coalinfo_t> & coalinfo_vect, vector<coalinfo_t> & sppinfo_vect) const {
         // No fixing up to do if there are no species tree joins
         if (sppinfo_vect.empty())
             return;
@@ -494,9 +501,7 @@ namespace proj {
             
 #if defined(EST_THETA)
             if (_joint_estimation) {
-                // If not joint estimation, then we are integrating out
-                // species-specific theta values, but if is joint estimation,
-                // then each proposed ancestral species has its own theta
+                // Each proposed ancestral species has its own theta
                 // Erase theta corresponding to ancestral species
                 G::species_t s = anc->getSpecies();
                 
@@ -682,7 +687,7 @@ namespace proj {
         }
     }
     
-    void SpeciesForest::recordHeights(vector<double> & height_vect) const {
+    inline void SpeciesForest::recordHeights(vector<double> & height_vect) const {
         // Appends to height_vect; clear before calling if desired
         // Assumes heights and preorders are up-to-date; call
         //   heightsInternalsPreorders() beforehand to ensure this
@@ -697,4 +702,31 @@ namespace proj {
             }
         }
     }
+    
+    inline void SpeciesForest::buildCoalInfoVect() {
+        //TODO: GeneForest has same function: move to base class Forest?
+        // Should only be called for complete species trees
+        assert(_lineages.size() == 1);
+
+        _coalinfo.clear();
+        for (auto & preorder : _preorders) {
+            for (auto nd : boost::adaptors::reverse(preorder)) {
+                if (nd->_left_child) {
+                    // nd is an internal node
+                    assert(nd->_height != G::_infinity);
+                    assert(nd->_left_child->_right_sib);
+                    assert(nd->_left_child->_right_sib->_right_sib == nullptr);
+                    nd->_species = (nd->_left_child->_species | nd->_left_child->_right_sib->_species);
+                    nd->emptyPrevSpeciesStack();
+                    addCoalInfoElem(nd, _coalinfo);
+                }
+                else {
+                    // nd is a leaf node
+                    unsigned spp_index = G::_taxon_to_species[nd->_name];
+                    nd->_species = (G::species_t)1 << spp_index;
+                }
+            }
+        }
+    }
+    
 }

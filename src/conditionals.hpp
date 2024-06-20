@@ -10,6 +10,14 @@
 // Comment out for release version
 //#define DEBUG_SECOND_LEVEL
 
+// Comment out for release version
+// If defined, recalculates coalescent likelihood before proposing
+// new increment/join to be sure _prev_log_coallike is correct
+//#define CHECK_SECOND_LEVEL_PREV_LOG_LIKELIHOOD
+
+// Uncomment to sanity check log weight for particle after Particle::proposeCoalescence
+//#define DEBUG_CHECK_LOGWEIGHT
+
 // Uncomment to let each primary particle have its own mean theta
 // Secondary particles use their inherited mean theta to
 // integrate out individual species thetas using Jones (2017)

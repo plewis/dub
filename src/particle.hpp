@@ -16,6 +16,8 @@ namespace proj {
             
             void setSMC(SMC * smc);
             
+            double setThetas();
+            
             void resetSpeciesForest();
             void resetGeneForests(bool compute_partials);
             
@@ -26,10 +28,10 @@ namespace proj {
             void threadComputePartials(unsigned first, unsigned last);
             void computeAllPartials();
             
-            void recordAllForests(vector<Forest::coalinfo_t> & coalinfo_vect);
+            void recordAllForests(vector<Forest::coalinfo_t> & coalinfo_vect) const;
             
             double calcLogLikelihood();
-            double calcLogCoalescentLikelihood(vector<Forest::coalinfo_t> & coalinfo_vect, bool integrate_out_thetas, bool verbose);
+            double calcLogCoalescentLikelihood(vector<Forest::coalinfo_t> & coalinfo_vect, bool integrate_out_thetas, bool verbose) const;
             
             double getPrevLogCoalLike() {return _prev_log_coallike;}
             void setPrevLogCoalLike(double lnL) {_prev_log_coallike = lnL;}
@@ -84,6 +86,7 @@ namespace proj {
             
             void refreshHeightsInternalsPreorders();
 
+            void                  setSpeciesTree(string species_tree_newick);
             void                  copySpeciesForestFrom(SpeciesForest & sf);
             SpeciesForest       & getSpeciesForest();
             const SpeciesForest & getSpeciesForestConst() const;
@@ -91,14 +94,15 @@ namespace proj {
             vector<GeneForest>       & getGeneForests();
             const vector<GeneForest> & getGeneForestsConst() const;
             
-            vector<GeneForest> * getGeneTrees() const {return _gene_trees;}
+            vector<GeneForest> * getGeneTrees() {return _gene_trees;}
+            const vector<GeneForest> * getGeneTreesConst() const {return _gene_trees;}
             
             GeneForest       & getGeneForest(unsigned gene);
             const GeneForest & getGeneForest(unsigned gene) const;
             
             void setGeneTrees(vector<GeneForest> & gtvect);
             //void forgetSpeciesTreeAbove(double height);
-            double chooseTruncatedSpeciesForestIncrement(double truncate_at, bool mark);
+            pair<double,double> chooseTruncatedSpeciesForestIncrement(double truncate_at, bool mark);
             
             void debugShowMarkVariables(string title) const;
             unsigned debugCountNumCoalEvents() const;
@@ -167,10 +171,15 @@ namespace proj {
             
             // Even though a shared pointer, _lot is a private random number
             // generator not shared with any other particle and has nothing to
-            // to do with the global Lot object rng defined in main.cpp
+            // to do with the global Lot shared_ptr rng defined in main.cpp
             mutable Lot::SharedPtr  _lot;
     };
 
+    void Particle::setSpeciesTree(string species_tree_newick) {
+        _species_forest.clear();
+        _species_forest.buildFromNewick(species_tree_newick);
+    }
+    
     void Particle::copySpeciesForestFrom(SpeciesForest & sf) {
         _species_forest = sf;
     }
