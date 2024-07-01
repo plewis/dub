@@ -1,7 +1,7 @@
 #pragma once
 
-extern void output(string msg, unsigned level);
-extern void output(format & fmt, unsigned level);
+extern void output(string msg, proj::G::verbosity_t verb);
+extern void output(format & fmt, proj::G::verbosity_t verb);
 
 #if defined(USING_SIGNPOSTS)
 extern os_log_t log_handle;
@@ -15,9 +15,6 @@ namespace proj {
     class Data {
         
         friend class Proj;
-        friend class Forest;
-        friend class GeneForest;
-        friend class Particle;
         
         public:
             typedef vector<string>                        taxon_names_t;
@@ -59,6 +56,7 @@ namespace proj {
             npatterns_vect_t                            calcNumPatternsVect() const;
             unsigned                                    getNumPatternsInSubset(unsigned subset) const;
             unsigned                                    getNumStatesForSubset(unsigned subset) const;
+            unsigned                                    getTotalNumberOfSites() const;
             unsigned                                    calcSeqLen() const;
             unsigned                                    calcSeqLenInSubset(unsigned subset) const;
             const data_matrix_t &                       getDataMatrix() const;
@@ -198,11 +196,17 @@ namespace proj {
         return (unsigned)_taxon_names.size();
     }    
 
-    inline unsigned Data::calcSeqLen() const {    
-        return accumulate(_pattern_counts.begin(), _pattern_counts.end(), 0);
-    }    
+    inline unsigned Data::getTotalNumberOfSites() const {
+        return _cum_nchar;
+    }
 
-    inline unsigned Data::calcSeqLenInSubset(unsigned subset) const {    
+    inline unsigned Data::calcSeqLen() const {
+        unsigned total_sites = accumulate(_pattern_counts.begin(), _pattern_counts.end(), 0);
+        assert(total_sites == _cum_nchar);
+        return total_sites;
+    }
+
+    inline unsigned Data::calcSeqLenInSubset(unsigned subset) const {
         begin_end_pair_t s = getSubsetBeginEnd(subset);
         return accumulate(_pattern_counts.begin() + s.first, _pattern_counts.begin() + s.second, 0);
     }    
@@ -593,7 +597,7 @@ namespace proj {
 
         // Compress _data_matrix so that it holds only unique patterns (counts stored in _pattern_counts)
         if (_data_matrix.empty()) {
-            output(format("No data were stored from the file \"%s\"\n") % filename, 2);
+            output(format("No data were stored from the file \"%s\"\n") % filename, G::VSTANDARD);
             clear();
         }
         else {
@@ -707,5 +711,4 @@ namespace proj {
         memf << str(format("\n  Total megabytes: %.5f\n") % (1.0*total_nbytes/1048576));
         
     }
-    
 }

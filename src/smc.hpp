@@ -2,77 +2,204 @@
 
 namespace proj {
 
-    class Particle;
-
-    class SMC : public ParallelPolicyNone<SMC> {
-        friend class ParallelPolicyNone<SMC>;
+    class SMC {
         public:
-                                SMC()  {clear();}
-            virtual             ~SMC() {}
+            SMC() {}
+            ~SMC() {}
             
-            enum mode_type_t {
-                SPECIES_AND_GENE = 0,
-                SPECIES_GIVEN_GENE = 1
-            };
-            bool isJointMode() const {return _mode == SPECIES_AND_GENE;}
-            bool isConditionalMode() const {return _mode == SPECIES_GIVEN_GENE;}
-            
-            unsigned            getNParticles() {return _nparticles;}
-            list<Particle> &    getParticles()  {return _particle_list;}
-            const list<Particle> & getParticlesConst() const {return _particle_list;}
-            
-            void setMode(mode_type_t m)     {_mode = m;}
-            void setNParticles(unsigned n)  {_nparticles = n;}
-            void setData(Data::SharedPtr d) {_data = d;}
-            void init();
-            void initFromParticle(Particle & p);
             void run();
-            double filterParticles(unsigned step, list<Particle> & particle_list, vector<double> & log_weights, vector<unsigned> & counts, vector<unsigned> & rnseeds);
-            double calcLogSpeciesTreePrior(vector<Forest::coalinfo_t> & coalinfo_vect, bool include_join_probs) const;
-            void pruneParticles(list<Particle> & particle_list);
-            void findNonZeroCountsInRange(vector<unsigned> & nonzeros, const vector<unsigned> & counts, unsigned begin_index, unsigned end_index) const;
-            double computeEffectiveSampleSize(const vector<double> & probs) const;
-            bool compareToReferenceTrees(list<Particle> particle_list, map<string, tuple<unsigned, double, double, double, double> > & m);
-            void outputAnnotatedNexusTreefile(string fn, const vector<tuple<unsigned, double, string, string, string> > & treeinfo) const;
-            void saveAllSpeciesTrees(string fn, const list<Particle> & particle_list, unsigned compression_level = 2);
-            void saveAllGeneTrees(unsigned gene, string fn, const list<Particle> & particle_list, unsigned compression_level = 2);
-            //void                         saveUniqueSpeciesTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts);
-#if defined(EST_THETA)
-            void debugSaveThetas(unsigned step) const;
-            double calcPosteriorMeanTheta() const;
-#endif
-            void summarize();
-            void dumpParticles(SMC & ensemble);
-            void clear();
-            unsigned countDistinctGeneTreeTopologies();
-            void saveParamsForLoRaD(string prefix);
             
-            typedef shared_ptr<SMC> SharedPtr;
+            const SParticle & getSpeciesTreeConst(unsigned b) const;
+            const GParticle & getGeneTreeConst(unsigned b, unsigned g, unsigned i) const;
+            
+            void saveSpeciesTrees(vector<string> & newicks) const;
+            void saveGeneTrees(unsigned b, unsigned g, vector<string> & newicks) const;
+            void saveLogMargLike(vector<double> & log_marg_like) const;
+            void saveLogLikesForLocus(unsigned b, unsigned g, vector<double> & log_likes) const;
+            void saveLogLikes(unsigned b, vector< vector<double> > & log_likes_for_locus) const;
             
         private:
+            void filterBundles(unsigned step);
         
-            Data::SharedPtr              _data;
-            unsigned                     _mode;
-            unsigned                     _nparticles;
-            vector<unsigned>             _counts;
-            vector<unsigned>             _update_seeds;
-            
-#if defined(EST_THETA)
-            mutable vector<vector<double> > _debug_theta_distr;
-#endif
-
-            unsigned                     _nsteps;
-            double                       _starting_log_likelihood;
-
-            list<Particle>               _particle_list;
-            double                       _log_marg_like;
-            vector<double>               _log_weights;
-            //vector<unsigned>             _proposed_gene;
-            //vector<G::species_t>         _proposed_spp;
-            //vector<unsigned>             _proposed_first;
-            //vector<unsigned>             _proposed_second;
-            //vector<unsigned>             _proposed_species_tree_lineages;
-            
+            vector<Bundle>           _bundle;
     };
+    
+    inline const SParticle & SMC::getSpeciesTreeConst(unsigned b) const {
+        assert(b < _bundle.size());
+        return _bundle[b].getSpeciesTreeConst();
+    }
+    
+    inline const GParticle & SMC::getGeneTreeConst(unsigned b, unsigned g, unsigned i) const {
+        assert(b < _bundle.size());
+        assert(g < G::_nloci);
+        assert(i < G::_ngparticles);
+        return _bundle[b].getGeneTreeConst(g, i);
+    }
+    
+    inline void SMC::saveSpeciesTrees(vector<string> & newicks) const {
+        newicks.resize(G::_nsparticles);
+        for (unsigned i = 0; i < G::_nsparticles; i++) {
+            newicks[i] = _bundle[i].getSpeciesTreeConst().makeNewick(9, true);
+        }
+    }
+    
+    inline void SMC::saveGeneTrees(unsigned b, unsigned g, vector<string> & newicks) const {
+        newicks.resize(G::_ngparticles);
+        for (unsigned i = 0; i < G::_ngparticles; i++) {
+            newicks[i] = _bundle[b].getGeneTreeConst(g, i).makeNewick(9, true);
+        }
+    }
+    
+    inline void SMC::saveLogMargLike(vector<double> & log_marg_like) const {
+        log_marg_like.resize(G::_nsparticles);
+        for (unsigned i = 0; i < G::_nsparticles; i++) {
+            log_marg_like[i] = _bundle[i].getLogMargLike();
+        }
+    }
+    
+    inline void SMC::saveLogLikesForLocus(unsigned b, unsigned g, vector<double> & log_likes) const {
+        _bundle[b].getLogLikesForLocus(g, log_likes);
+    }
+
+    inline void SMC::saveLogLikes(unsigned b, vector< vector<double> > & log_likes_for_locus) const {
+        log_likes_for_locus.resize(G::_nloci);
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            _bundle[b].getLogLikes(log_likes_for_locus);
+        }
+    }
+    
+    inline void SMC::filterBundles(unsigned step) {
+        output("Filtering bundles...\n", G::VDEBUG);
+
+        // Copy log weights for all bundles to prob vector
+        vector<double> probs(G::_nsparticles, 0.0);
+        for (G::_bundle = 0; G::_bundle < G::_nsparticles; G::_bundle++) {
+            probs[G::_bundle] = _bundle[G::_bundle].getLogWeight();
+        }
+
+        // Normalize log_weights to create discrete probability distribution
+        double log_sum_weights = G::calcLogSum(probs);
+        transform(probs.begin(), probs.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
         
+        //temporary!
+        output("\nBundle probabilities:\n", G::VTEMP);
+        for (auto p : probs) {
+            output(format("%6.3f ") % p, G::VTEMP);
+        }
+        output("\n", G::VTEMP);
+
+        // Compute cumulative probabilities
+        partial_sum(probs.begin(), probs.end(), probs.begin());
+
+        // Initialize vector of counts storing number of darts hitting each particle
+        vector<unsigned> counts(G::_nsparticles, 0);
+
+        // Throw _nparticles darts
+        for (unsigned i = 0; i < G::_nsparticles; ++i) {
+            double u = rng->uniform();
+            auto it = find_if(probs.begin(), probs.end(), [u](double cump){return cump > u;});
+            assert(it != probs.end());
+            unsigned which = (unsigned)distance(probs.begin(), it);
+            counts[which]++;
+        }
+
+        //temporary!
+        output("\nBundle counts:\n", G::VTEMP);
+        for (auto c : counts) {
+            output(format("%6d ") % c, G::VTEMP);
+        }
+        output("\n", G::VTEMP);
+
+        // Copy particles
+
+        // Locate first donor
+        unsigned donor = 0;
+        while (counts[donor] < 2) {
+            donor++;
+        }
+
+        // Locate first recipient
+        unsigned recipient = 0;
+        while (counts[recipient] != 0) {
+            recipient++;
+        }
+
+        // Count number of cells with zero count that can serve as copy recipients
+        unsigned nzeros = 0;
+        for (unsigned i = 0; i < G::_nsparticles; i++) {
+            if (counts[i] == 0)
+                nzeros++;
+        }
+
+        while (nzeros > 0) {
+            assert(donor < G::_nsparticles);
+            assert(recipient < G::_nsparticles);
+
+            // Copy donor to recipient
+            _bundle[recipient] = _bundle[donor];
+
+            counts[donor]--;
+            counts[recipient]++;
+            nzeros--;
+
+            if (counts[donor] == 1) {
+                // Move donor to next slot with count > 1
+                donor++;
+                while (donor < G::_nsparticles && counts[donor] < 2) {
+                    donor++;
+                }
+            }
+
+            // Move recipient to next slot with count equal to 0
+            recipient++;
+            while (recipient < G::_nsparticles && counts[recipient] > 0) {
+                recipient++;
+            }
+        }
+
+    }
+    
+    inline void SMC::run() {
+        // Sanity checks
+        assert(G::_nsparticles > 0);
+        assert(G::_ngparticles > 0);
+        assert(G::_nloci > 0);
+
+        // Create vector of G::_nsparticles Bundle objects
+        _bundle.resize(G::_nsparticles);
+        for (unsigned i = 0; i < G::_nsparticles; i++) {
+            _bundle[i].setBundleIndex(i);
+        }
+        
+        // *****************
+        // *** Main loop ***
+        // *****************
+        
+        // Each gene tree requires ntaxa-1 steps to be complete
+        unsigned nsteps = (unsigned)G::_ntaxa - 1;
+        
+        output("\n", G::VSTANDARD);
+        for (G::_step = 0; G::_step < nsteps; G::_step++) {
+            output(format("Step %d of %d\n") % (G::_step + 1) % nsteps, G::VSTANDARD);
+            for (G::_bundle = 0; G::_bundle < G::_nsparticles; G::_bundle++) {
+                output(format("  Bundle %d\n") % G::_bundle, G::VDEBUG);
+                _bundle[G::_bundle].advanceAllGeneTrees();
+                _bundle[G::_bundle].filterAllGeneTrees(G::_step);
+            }
+            filterBundles(G::_step);
+        }
+        
+        double best_log_marg_like = G::_negative_infinity;
+        string best_species_tree = "";
+        for (G::_bundle = 0; G::_bundle < G::_nsparticles; G::_bundle++) {
+            //_bundle[G::_bundle].saveJavascript(str(format("newicks-%d") % G::_bundle));
+            double log_marg_like = _bundle[G::_bundle].report();
+            if (log_marg_like > best_log_marg_like) {
+                best_log_marg_like = log_marg_like;
+                best_species_tree = _bundle[G::_bundle].getSpeciesTreeConst().makeNewick(5, true);
+            }
+        }
+        output(format("\nBest log marginal likelihood: %.5f\n") % best_log_marg_like, G::VSTANDARD);
+        output(format("Best species tree: %s\n") % best_species_tree, G::VSTANDARD);
+    }
 }

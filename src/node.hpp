@@ -2,23 +2,15 @@
 
 namespace proj {
 
-    class TreeManip;
-    class Likelihood;
-    class Updater;
-    class Forest;
-    class GeneForest;
-    class SpeciesForest;
     class Particle;
+    class GParticle;
+    class SParticle;
 
     class Node {
 
-        friend class TreeManip;
-        friend class Likelihood;
-        friend class Updater;
-        friend class Forest;
-        friend class GeneForest;
-        friend class SpeciesForest;
         friend class Particle;
+        friend class GParticle;
+        friend class SParticle;
 
         public:
                                         Node();
@@ -49,9 +41,11 @@ namespace proj {
                     Node *              getRightSib()               {return _right_sib;}
                     const Node *        getRightSib() const         {return _right_sib;}
 
+                    void                setName(string nm)          {_name = nm;}
                     string              getName()                   {return _name;}
                     const string        getName() const             {return _name;}
 
+                    void                setNumber(int num)          {_number = num;}
                     int                 getNumber() const           {return _number;}
                     Split               getSplit()                  {return _split;}
         
@@ -80,6 +74,9 @@ namespace proj {
 
                     double              getEdgeLength() const       {return _edge_length;}
                     void                setEdgeLength(double v);
+                    
+                    PartialStore::partial_t   getPartial() {return _partial;}
+                    void                      setPartial(PartialStore::partial_t p) {_partial = p;}
                     
                     const G::species_t &    getSpecies() const {return _species;}
                     G::species_t &          getSpecies() {return _species;}

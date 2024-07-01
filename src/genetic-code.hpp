@@ -1,7 +1,7 @@
 #pragma once
 
-extern void output(string msg, unsigned level);
-extern void output(format & fmt, unsigned level);
+extern void output(string msg, proj::G::verbosity_t verb);
+extern void output(format & fmt, proj::G::verbosity_t verb);
 
 namespace proj {
 
@@ -157,11 +157,11 @@ namespace proj {
     inline void GeneticCode::ensureGeneticCodeNameIsValid(const string & name) {
         if (!isRecognizedGeneticCodeName(name)) {
             auto valid_genetic_code_names = getRecognizedGeneticCodeNames();
-            output("Recognized genetic codes:\n", 2);
+            output("Recognized genetic codes:\n", G::VSTANDARD);
             for (string name : valid_genetic_code_names) {
-                output(format("  %s\n") % name, 2);
+                output(format("  %s\n") % name, G::VSTANDARD);
             }
-            output("\n", 2);
+            output("\n", G::VSTANDARD);
             throw XProj(format("%s is not a recognized genetic code") % name);
         }
     }
