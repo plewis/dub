@@ -13,7 +13,7 @@ namespace proj {
     // Particle encapsulates generic particle data and methods
     class Particle {
         public:
-            Particle() : _nleaves(0), _index(0), _height(0.0), _next_node(0) {}
+            Particle() : _is_species_tree(false), _nleaves(0), _index(0), _height(0.0), _next_node_number(0) {}
             ~Particle() {}
             
             void clear();
@@ -42,6 +42,7 @@ namespace proj {
             static pair<double,double> calcTreeDistances(const Particle & ref, const Particle & test);
             
             // Virtuals
+            virtual void recordJoinInfo(vector<G::join_info_t> & join_info) const;
             virtual void operator=(const Particle & other);
 
             // Pure virtuals
@@ -59,7 +60,9 @@ namespace proj {
             unsigned                _nleaves;
             unsigned                _index;
             double                  _height;
-            unsigned                _next_node;
+            bool                    _is_species_tree;
+            unsigned                _next_node_number;
+            vector<unsigned>        _returned_node_numbers;
     };
     
     inline void Particle::clear() {
@@ -68,7 +71,8 @@ namespace proj {
         _nleaves = 0;
         _index = 0;
         _height = 0.0;
-        _next_node = 0;
+        _next_node_number = 0;
+        _is_species_tree = false;
     }
  
     inline void Particle::extendAllLineagesBy(double incr) {
@@ -191,9 +195,9 @@ namespace proj {
         
         try {
             // Root node is the first one in the _nodes array
-            assert(_next_node == 0);
-            Node * nd   = &_nodes[_next_node];
-            Node * root = &_nodes[_next_node++];
+            assert(_next_node_number == 0);
+            Node * nd   = &_nodes[_next_node_number];
+            Node * root = &_nodes[_next_node_number++];
             
             // The _lineages vector will have just one entry because
             // this will be a complete tree
@@ -362,7 +366,7 @@ namespace proj {
                         }
 
                         // Create the sibling
-                        nd->_right_sib = &_nodes[_next_node++];
+                        nd->_right_sib = &_nodes[_next_node_number++];
                         nd->_right_sib->_parent = nd->_parent;
                         nd = nd->_right_sib;
                         previous = Prev_Tok_Comma;
@@ -376,7 +380,7 @@ namespace proj {
 
                         // Create new node above and to the left of the current node
                         assert(!nd->_left_child);
-                        nd->_left_child = &_nodes[_next_node++];
+                        nd->_left_child = &_nodes[_next_node_number++];
                         nd->_left_child->_parent = nd;
                         nd = nd->_left_child;
                         previous = Prev_Tok_LParen;
@@ -593,10 +597,40 @@ namespace proj {
         return next;
     }
 
+    inline void Particle::recordJoinInfo(vector<G::join_info_t> & join_info) const {
+        // Visit all internal nodes, for each recording the tuple:
+        // height, is_species_tree, left child's species, right child's species.
+        join_info.clear();
+
+        // Build preorders vector
+        vector<Node::ptr_vect_t> preorders;
+        buildPreordersVector(preorders);
+        
+        for (auto & preorder : preorders) {
+            for (auto nd : preorder) {
+                if (nd->getLeftChild()) {
+                    // internal node
+                    join_info.push_back({
+                        nd->getHeight(),
+                        _is_species_tree,
+                        nd->getLeftChild()->getSpecies(),
+                        nd->getLeftChild()->getRightSib()->getSpecies()
+                    });
+                }
+            }
+        }
+                
+        // Sort by increasing height above leaf level
+        sort(join_info.begin(), join_info.end());
+    }
+    
     inline void Particle::operator=(const Particle & other) {
         _height                     = other._height;
-        _next_node                  = other._next_node;
+        _next_node_number           = other._next_node_number;
         _index                      = other._index;
+        _nleaves                    = other._nleaves;
+        _is_species_tree            = other._is_species_tree;
+        _returned_node_numbers      = other._returned_node_numbers;
         
         // Create node map: if _nodes[3]._number = 2, then node_map[2] = 3 (i.e. node number 2 is at index 3 in _nodes vector)
         map<unsigned, unsigned> node_map;

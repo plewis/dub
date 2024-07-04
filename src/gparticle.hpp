@@ -118,8 +118,10 @@ namespace proj {
             _nodes[i].setPartial(GParticle::_leaf_partials[_locus_index][i]);
             G::setSpeciesBit(_lineages[i]->getSpecies(), G::_taxon_to_species[nm], /*init_to_zero_first*/true);
         }
-        _next_node = G::_ntaxa;
+        _next_node_number = G::_ntaxa;
+        _returned_node_numbers.clear();
         _nleaves = G::_ntaxa;
+        _is_species_tree = false;
         refreshSplits();
     }
     
@@ -135,8 +137,10 @@ namespace proj {
         }
 
         // Calculate total rate based on theta and numbers of lineages in each species
+        output("\n", G::VTEMP);
         double total_rate = 0.0;
         for (auto & p : species_counts) {
+            output(format("~~> species %d contains %d lineages\n") % p.first % p.second, G::VTEMP);
             unsigned       n = p.second;
             double rate = 1.0*n*(n-1)/G::_theta;
             total_rate += rate;
@@ -149,6 +153,7 @@ namespace proj {
             // coalescence is possible in at least one species
             incr = rng->gamma(1.0, 1.0/total_rate);
         }
+        output(format("~~> total rate = %g, increment = %g\n") % total_rate % incr, G::VTEMP);
 
         return make_pair(incr, total_rate);
     }
@@ -182,15 +187,27 @@ namespace proj {
         assert(it != species_nodevector.end());
         vector<Node *> & choices = it->second;
         
+        G::species_t chosen_species = it->first;
+        output(format("joined two lineages in species %d\n") % chosen_species, G::VTEMP);
+
         // Choose two lineages within species spp to join
         pair<unsigned, unsigned> p = rng->nchoose2((unsigned)choices.size());
         Node * lchild = choices[p.first];
         Node * rchild = choices[p.second];
 
         // Grab next node to use as ancestor
-        assert(_nodes.size() > _next_node);
-        Node * anc = &_nodes[_next_node];
-        anc->setNumber(_next_node++);
+        unsigned node_number = _next_node_number;
+        size_t n = _returned_node_numbers.size();
+        if (n > 0) {
+            node_number = _returned_node_numbers[n-1];
+            _returned_node_numbers.pop_back();
+        }
+        else {
+            _next_node_number++;
+        }
+        assert(_nodes.size() > node_number);
+        Node * anc = &_nodes[node_number];
+        anc->setNumber(node_number);
         
         makeAnc(anc, lchild, rchild);
 
@@ -201,42 +218,49 @@ namespace proj {
 
     inline void GParticle::coalesce() {
         assert(_species_tree);
-        vector<G::speciation_info_t> spec_rec;
-        _species_tree->recordSpeciationInfo(spec_rec);
+        vector<G::join_info_t> spec_rec;
+        _species_tree->recordJoinInfo(spec_rec);
         
         bool done = false;
         while (!done) {
             // Determine the height of the next species tree join
-            G::speciation_info_t ceiling = _species_tree->heightOfNextNodeAbove(_height, spec_rec);
+            G::join_info_t ceiling = _species_tree->heightOfNextNodeAbove(_height, spec_rec);
             double upper_bound = get<0>(ceiling);
             auto incr_rate = drawIncrement();
             
             if (_height + incr_rate.first < upper_bound) {
-                // Add coalescence event and we're done
+                // Increment does not take us to the next speciation event, so
+                // add a coalescence event and we're done
+                output(format("DONE! height + incr = %g < %g = upper_bound\n") % (_height + incr_rate.first) % upper_bound, G::VTEMP);
                 extendAllLineagesBy(incr_rate.first);
                 joinRandomPair();
                 done = true;
             }
             else {
-                // Advance all lineages to upper_bound and try again
+                // Increment takes us beyond the next speciation event, so
+                // advance all lineages to upper_bound and try again
+                output(format("height + incr = %g > %g = upper_bound\n") % (_height + incr_rate.first) % upper_bound, G::VTEMP);
                 extendAllLineagesBy(upper_bound - _height);
                 
-                G::species_t spp = get<1>(ceiling) | get<2>(ceiling);
+                G::species_t spp = get<2>(ceiling) | get<3>(ceiling);
                 if (spp == G::_species_zero) {
                     // Species tree needs to be extended before continuing
                     _species_tree->joinThenIncrement();
                     
-                    // Refresh speciation info 
-                    _species_tree->recordSpeciationInfo(spec_rec);
+                    // //temporary!
+                    // cerr << "coal-induced: " << _species_tree->makeNewick(7, true) << endl;
+                    
+                    // Refresh speciation info
+                    _species_tree->recordJoinInfo(spec_rec);
                     
                     // Penultimate entry in spec_rec should now have height _height
                     // and has info about which species were joined
                     unsigned n = (unsigned)spec_rec.size();
                     assert(n > 1);
-                    G::speciation_info_t latest_join = spec_rec[n - 2];
+                    G::join_info_t latest_join = spec_rec[n - 2];
                     assert(fabs(get<0>(latest_join) - _height) < G::_small_enough);
-                    G::species_t lspp = get<1>(latest_join);
-                    G::species_t rspp = get<2>(latest_join);
+                    G::species_t lspp = get<2>(latest_join);
+                    G::species_t rspp = get<3>(latest_join);
                     
                     // Every lineage in species lspp or rspp should now be
                     // in species lspp | rspp
@@ -250,8 +274,8 @@ namespace proj {
                 else {
                     // Species tree does not need to be extended, and ceiling
                     // contains info about species that should be merged
-                    G::species_t lspp = get<1>(ceiling);
-                    G::species_t rspp = get<2>(ceiling);
+                    G::species_t lspp = get<2>(ceiling);
+                    G::species_t rspp = get<3>(ceiling);
                     
                     // Every lineage in species lspp or rspp should now be
                     // in species lspp | rspp

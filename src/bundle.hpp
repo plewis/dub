@@ -23,6 +23,8 @@ namespace proj {
             void setBundleIndex(unsigned i) {_bundle_index = i; _species_tree.setIndex(i);}
             unsigned getBundleIndex() const {return _bundle_index;};
             
+            unsigned getNumSpeciesTreeLineages() const {return (unsigned)_species_tree._lineages.size();};
+
             double getLogMargLike() const;
             double getPrevLogMargLike() const;
             double getLogWeight() const;
@@ -43,6 +45,8 @@ namespace proj {
             void advanceAllGeneTrees();
             void filterAllGeneTrees(unsigned step);
             void randomizeEvaluationOrder();
+            void shrinkWrapSpeciesTree();
+            void debugSanityCheck() const;
             
             double report() const;
                         
@@ -88,6 +92,54 @@ namespace proj {
             output(format("%12.5f = starting log-likelihood for locus %d\n") %  _log_marg_like[g] % g, G::VDEBUG);
         }
         output(format("%12.5f = starting total log-likelihood\n") %  total_log_like, G::VDEBUG);
+    }
+    
+    inline void Bundle::shrinkWrapSpeciesTree() {
+        // Remove deepest joins in species tree if they have height
+        // greater than the deepest coalescent event in any gene
+        // tree at any locus
+        
+        // Find deepest gene tree
+        double deepest_gene_tree = 0.0;
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            for (unsigned i = 0; i < G::_ngparticles; i++) {
+                double h = _locus_vect[g][i]._height;
+                if (h > deepest_gene_tree)
+                    deepest_gene_tree = h;
+            }
+        }
+        
+        // Search for and remove any nodes in the species
+        // tree older than deepest_gene_tree
+        _species_tree.trimToHeight(deepest_gene_tree);
+    }
+    
+    inline void Bundle::debugSanityCheck() const {
+        // Throws exception if any gene tree violates gene flow barriers determined by species tree
+        vector<G::join_info_t> spec_info;
+        vector<G::join_info_t> coal_info;
+        _species_tree.recordJoinInfo(spec_info);
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            for (unsigned i = 0; i < G::_ngparticles; i++) {
+                output(format("\nlocus %d, particle %d:\n") % g % i, G::VTEMP);
+                coal_info.clear();
+                _locus_vect[g][i].recordJoinInfo(coal_info);
+                coal_info.insert(coal_info.end(), spec_info.begin(), spec_info.end());
+                sort(coal_info.begin(), coal_info.end());
+                
+                for (auto & t : coal_info) {
+                    double h = get<0>(t);
+                    bool is_spp_tree = get<1>(t);
+                    G::species_t sppL = get<2>(t);
+                    G::species_t sppR = get<3>(t);
+                    output(format("%12.7f %6s %12d %12d %12d\n") % h % (is_spp_tree ? "spp" : "coal") % (sppL|sppR) % sppL % sppR, G::VTEMP);
+                    if (sppL != sppR && !is_spp_tree) {
+                        throw XProj(format("Coalescent event joined different species (%d, %d) at height %g in locus %d, particle %d") % sppL % sppR % h % g % i);
+                    }
+                }
+            }
+        }
+        
     }
     
     inline double Bundle::getLogWeight() const {
@@ -180,15 +232,9 @@ namespace proj {
         for (auto p : _eval_order) {
             G::_locus = p.first;
             G::_particle = p.second;
+            output(format("\nWorking on particle %d from locus %d...") % G::_particle % G::_locus, G::VTEMP);
             _locus_vect[G::_locus][G::_particle].coalesce();
         }
-        //for (G::_locus = 0; G::_locus < G::_nloci; G::_locus++) {
-        //    output(format("    Gene %d\n") % G::_locus, G::VDEBUG);
-        //    for (G::_particle = 0; G::_particle < G::_ngparticles; G::_particle++) {
-        //        output(format("      Particle %d\n") % G::_particle, G::VDEBUG);
-        //        (*_locus_vect)[G::_locus][G::_particle].coalesce();
-        //    }
-        //}
     }
     
     inline void Bundle::filterAllGeneTrees(unsigned step) {
@@ -296,11 +342,19 @@ namespace proj {
         jsf << "};\n\n";
 
         jsf << "let gene_newicks = [\n";
-        
+
         for (unsigned l = 0; l < G::_nloci; l++) {
+            // Map counts (values) onto gene tree newicks (keys)
+            map<string, unsigned> m;
             for (unsigned p = 0; p < G::_ngparticles; p++) {
-                jsf << str(format("  {name:\"gene-%d-%d\",  relrate:1.0, newick:\"%s\"},\n") % (l+1) % (p+1) % _locus_vect[l][p].makeNewick(5, false));
+                string newick = _locus_vect[l][p].makeNewick(9, false);
+                m[newick] += 1;
             }
+            
+            // Save newick with highest count
+            auto it = max_element(m.begin(), m.end(),
+                [](const pair<string,unsigned> & a, const pair<string,unsigned> & b) {return b.second > a.second;});
+                jsf << str(format("  {name:\"gene-%d\",  relrate:1.0, color:\"black\", newick:\"%s\"},\n") % (l+1) % it->first);
         }
         
         jsf << "];\n";

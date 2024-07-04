@@ -93,6 +93,8 @@ string                              G::_species_tree_ref_file_name = "";
 string                              G::_gene_trees_ref_file_name = "";
 map<unsigned,unsigned>              G::_nexus_taxon_map;
 
+double                              G::_log_marg_like      = 0.0;
+
 unsigned                            G::_step               = 0;
 unsigned                            G::_bundle             = 0;
 unsigned                            G::_locus              = 0;
@@ -118,7 +120,8 @@ unsigned                            G::_ngparticles        = 0;
 double                              G::_theta              = 0.01;
 double                              G::_lambda             = 1.0;
 
-double                              G::_small_enough       = 1e-12; //0.00001;
+double                              G::_epsilon            = 1e-8;
+double                              G::_small_enough       = 1e-12;
 
 static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in order to use infinity()");
 double                              G::_infinity = numeric_limits<double>::infinity();
@@ -127,6 +130,16 @@ double                              G::_negative_infinity = -numeric_limits<doub
 PartialStore::leaf_partials_t       GParticle::_leaf_partials;
 
 const double                        Node::_smallest_edge_length = 1.0e-12;
+
+#if defined(LOG_MEMORY)
+vector<unsigned>                    Partial::_nconstructed;
+vector<unsigned>                    Partial::_ndestroyed;
+vector<unsigned>                    Partial::_max_in_use;
+vector<unsigned long>               Partial::_bytes_per_partial;
+unsigned long                       Partial::_total_max_in_use  = 0;
+unsigned long                       Partial::_total_max_bytes   = 0;
+unsigned                            Partial::_nstates           = 4;
+#endif
 
 string                              Proj::_program_name         = "smc5";
 unsigned                            Proj::_major_version        = 1;
@@ -178,5 +191,14 @@ int main(int argc, const char * argv[]) {
         normal_termination = false;
     }
     
+#if defined(LOG_MEMORY)
+    if (normal_termination) {
+        ofstream memfile("allocs.txt");
+        proj.memoryReport(memfile);
+        ps.memoryReport(memfile);
+        memfile.close();
+    }
+#endif
+
     return 0;
 }

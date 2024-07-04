@@ -33,6 +33,10 @@ namespace proj {
             void                         processCommandLineOptions(int argc, const char * argv[]);
             void                         run();
                         
+#if defined(LOG_MEMORY)
+            void                         memoryReport(ofstream & memf) const;
+#endif
+            
         private:
         
             static string                inventName(unsigned k, bool lower_case);
@@ -48,7 +52,7 @@ namespace proj {
             void                         debugShowStringVector(string title, const vector<string> & svect, G::verbosity_t verb) const;
             void                         compareWithReferenceTrees(const SMC & smc) const;
             void                         readData();
-            
+
             string                       _data_file_name;
             string                       _start_mode;
                         
@@ -475,7 +479,7 @@ namespace proj {
 
             // Save newick tree descriptions for every bundle's species tree
             vector<string> newicks;
-            smc.saveSpeciesTrees(newicks);
+            smc.saveSpeciesTrees(newicks, /*compress*/false);
             assert(nbundles == newicks.size());
 
             for (unsigned b = 0; b < nbundles; b++) {
@@ -591,7 +595,7 @@ namespace proj {
                 for (unsigned b = 0; b < G::_nsparticles; b++) {
                     // Save newick tree descriptions for every bundle's gene trees for locus g
                     vector<string> newicks;
-                    smc.saveGeneTrees(b, g, newicks);
+                    smc.saveGeneTreeBundleLocus(b, g, newicks, /*compress*/false);
                     assert(G::_ngparticles == newicks.size());
                     
                     vector<double> log_likes;
@@ -712,6 +716,12 @@ namespace proj {
             SMC smc;
             smc.run();
             
+            smc.saveSpeciesTreesToFile("species-tree.tre", /*compress*/true);
+            
+            for (unsigned l = 0; l < G::_nloci; l++) {
+                smc.saveGeneTreeLocusToFile(str(format("gene-trees-locus-%d.tre") % l), l, /*compress*/true);
+            }
+            
             compareWithReferenceTrees(smc);
         }
         catch (XProj & x) {
@@ -720,5 +730,20 @@ namespace proj {
         
         output("\nFinished!\n", G::VSTANDARD);
     }
+
+#if defined(LOG_MEMORY)
+    inline void Proj::memoryReport(ofstream & memf) const {
+        memf << "\nMemory report:\n\n";
+        memf << str(format("  Size of int:           %d\n") % sizeof(int));
+        memf << str(format("  Size of char:          %d\n") % sizeof(char));
+        memf << str(format("  Size of double:        %d\n") % sizeof(double));
+        memf << str(format("  Size of unsigned:      %d\n") % sizeof(unsigned));
+        memf << str(format("  Size of unsigned long: %d\n") % sizeof(unsigned long));
+        memf << str(format("  Size of Node *:        %d\n") % sizeof(Node *));
+        memf << str(format("  Number of species tree particles: %d\n") % G::_nsparticles);
+        memf << str(format("  Number of gene tree particles: %d\n") % (G::_nsparticles*G::_nloci*G::_ngparticles));
+        ::data->memoryReport(memf);
+    }
+#endif
 
 }

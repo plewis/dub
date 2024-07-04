@@ -9,12 +9,12 @@ namespace proj {
         typedef unsigned long           species_t;
                 
         // Tuple: node height, left child species, right child species
-        typedef tuple<double, species_t, species_t>   speciation_info_t;
+        typedef tuple<double, bool, species_t, species_t>   join_info_t;
                         
         // Verbosity is a bitset enum corresponding to the kinds of output desired
         enum verbosity_t {
             VSTANDARD = 0x01,    // show standard informational and progress output
-            VDEBUG    = 0x02,     // show debugging output
+            VDEBUG    = 0x02,    // show debugging output
             VTEMP     = 0x04     // show temporary debugging output
         };
         static verbosity_t              _verbosity;
@@ -23,6 +23,7 @@ namespace proj {
         static string                   _gene_trees_ref_file_name;
         static map<unsigned,unsigned>   _nexus_taxon_map;
 
+        static double                   _log_marg_like;
 
         static unsigned                 _step;
         static unsigned                 _bundle;
@@ -47,6 +48,7 @@ namespace proj {
         static double                   _theta;
         static double                   _lambda;
         
+        static double                   _epsilon;
         static double                   _small_enough;
         static double                   _infinity;
         static double                   _negative_infinity;
