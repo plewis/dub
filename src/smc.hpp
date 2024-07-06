@@ -385,9 +385,6 @@ namespace proj {
                 best_bundle = G::_bundle;
                 best_log_marg_like = log_marg_like;
                 best_species_tree = _bundle[G::_bundle].getSpeciesTreeConst().makeNewick(5, true);
-                
-                // ///temporary!
-                //_bundle[G::_bundle].getSpeciesTreeConst().sanityCheck(0, G::_bundle);
             }
         }
         
@@ -427,18 +424,6 @@ namespace proj {
         // *** Main loop ***
         // *****************
         
-        // //temporary!
-        // ofstream tmpf1("after-trimming.tre");
-        // tmpf1 << "#nexus\n\n";
-        // tmpf1 << "begin trees;\n";
-        // tmpf1.close();
-        //
-        // //temporary!
-        // ofstream tmpf2("after-trimming.tre");
-        // tmpf2 << "#nexus\n\n";
-        // tmpf2 << "begin trees;\n";
-        // tmpf2.close();
-        
         // Each gene tree requires ntaxa-1 steps to be complete
         unsigned nsteps = (unsigned)G::_ntaxa - 1;
         
@@ -450,35 +435,16 @@ namespace proj {
             output(format("Step %d of %d\n") % (G::_step + 1) % nsteps, G::VSTANDARD);
             
             for (G::_bundle = 0; G::_bundle < G::_nsparticles; G::_bundle++) {
-                output(format("  Bundle %d\n") % G::_bundle, G::VDEBUG);
-                
-                // //temporary!
-                // _bundle[G::_bundle].getSpeciesTreeConst().sanityCheck(G::_step, G::_bundle);
-                // cerr << "before: " << _bundle[G::_bundle].getSpeciesTreeConst().makeNewick(7,true) << endl;
-                
+                output(format("  Bundle %d\n") % G::_bundle, G::VTEMP);
                 _bundle[G::_bundle].advanceAllGeneTrees();
-                
-                // //temporary!
-                // cerr << "after: " << _bundle[G::_bundle].getSpeciesTreeConst().makeNewick(7,true) << endl;
-                
                 _bundle[G::_bundle].filterAllGeneTrees(G::_step);
                 _bundle[G::_bundle].shrinkWrapSpeciesTree();
+#if defined(MEMORY_FRUGAL)
+                _bundle[G::_bundle].returnUnusedPartials();
+#endif
             }
             filterBundles(G::_step);
-            
-            // //temporary!
-            // sanityCheckBundles();
         }
-        
-        //  //temporary!
-        //  ofstream tmpf3("after-trimming.tre", ios::out | ios::app);
-        //  tmpf3 << "end;\n";
-        //  tmpf3.close();
-        
-        // //temporary!
-        // ofstream tmpf4("after-trimming.tre", ios::out | ios::app);
-        // tmpf4 << "end;\n";
-        // tmpf4.close();
         
         unsigned best_bundle = saveBestSpeciesTree();
         _bundle[best_bundle].saveJavascript("newicks-best");

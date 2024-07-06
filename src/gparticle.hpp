@@ -34,6 +34,9 @@ namespace proj {
             double calcTransitionProbability(unsigned from, unsigned to, double edge_length, double relrate);
             double calcPartialArray(Node * new_nd);
             void coalesce();
+            
+            void deleteStowedPartials();
+            void enumerateUnusedPartials(vector<map<string, int> > & unused, map<string, PartialStore::partial_t> & key) const;
 
             // Overrides of base class abstract virtual functions
             pair<double, double> drawIncrement();
@@ -137,10 +140,10 @@ namespace proj {
         }
 
         // Calculate total rate based on theta and numbers of lineages in each species
-        output("\n", G::VTEMP);
+        output("\n", G::VDEBUG);
         double total_rate = 0.0;
         for (auto & p : species_counts) {
-            output(format("~~> species %d contains %d lineages\n") % p.first % p.second, G::VTEMP);
+            output(format("~~> species %d contains %d lineages\n") % p.first % p.second, G::VDEBUG);
             unsigned       n = p.second;
             double rate = 1.0*n*(n-1)/G::_theta;
             total_rate += rate;
@@ -153,7 +156,7 @@ namespace proj {
             // coalescence is possible in at least one species
             incr = rng->gamma(1.0, 1.0/total_rate);
         }
-        output(format("~~> total rate = %g, increment = %g\n") % total_rate % incr, G::VTEMP);
+        output(format("~~> total rate = %g, increment = %g\n") % total_rate % incr, G::VDEBUG);
 
         return make_pair(incr, total_rate);
     }
@@ -188,7 +191,7 @@ namespace proj {
         vector<Node *> & choices = it->second;
         
         G::species_t chosen_species = it->first;
-        output(format("joined two lineages in species %d\n") % chosen_species, G::VTEMP);
+        output(format("joined two lineages in species %d\n") % chosen_species, G::VDEBUG);
 
         // Choose two lineages within species spp to join
         pair<unsigned, unsigned> p = rng->nchoose2((unsigned)choices.size());
@@ -231,7 +234,7 @@ namespace proj {
             if (_height + incr_rate.first < upper_bound) {
                 // Increment does not take us to the next speciation event, so
                 // add a coalescence event and we're done
-                output(format("DONE! height + incr = %g < %g = upper_bound\n") % (_height + incr_rate.first) % upper_bound, G::VTEMP);
+                output(format("DONE! height + incr = %g < %g = upper_bound\n") % (_height + incr_rate.first) % upper_bound, G::VDEBUG);
                 extendAllLineagesBy(incr_rate.first);
                 joinRandomPair();
                 done = true;
@@ -239,16 +242,13 @@ namespace proj {
             else {
                 // Increment takes us beyond the next speciation event, so
                 // advance all lineages to upper_bound and try again
-                output(format("height + incr = %g > %g = upper_bound\n") % (_height + incr_rate.first) % upper_bound, G::VTEMP);
+                output(format("height + incr = %g > %g = upper_bound\n") % (_height + incr_rate.first) % upper_bound, G::VDEBUG);
                 extendAllLineagesBy(upper_bound - _height);
                 
                 G::species_t spp = get<2>(ceiling) | get<3>(ceiling);
                 if (spp == G::_species_zero) {
                     // Species tree needs to be extended before continuing
                     _species_tree->joinThenIncrement();
-                    
-                    // //temporary!
-                    // cerr << "coal-induced: " << _species_tree->makeNewick(7, true) << endl;
                     
                     // Refresh speciation info
                     _species_tree->recordJoinInfo(spec_rec);
@@ -430,6 +430,11 @@ namespace proj {
         unsigned npatterns = ::data->getNumPatternsInSubset(_locus_index);
         for (Node * child = new_nd->_left_child; child; child = child->_right_sib) {
             assert(child->_partial);
+            
+#if defined(MEMORY_FRUGAL)
+            assert(!child->_partial->_in_storage);
+#endif
+            
             auto & child_partial_array = child->_partial->_v;
 
             for (unsigned p = 0; p < npatterns; p++) {
@@ -514,6 +519,50 @@ namespace proj {
             }
         }
     }
+
+#if defined(MEMORY_FRUGAL)
+    inline void GParticle::deleteStowedPartials() {
+        vector<Node::ptr_vect_t> preorders;
+        buildPreordersVector(preorders);
         
+        for (auto & pre : preorders) {
+            for (auto nd : pre) {
+                if (nd->_partial && nd->_partial->_in_storage) {
+                    nd->_partial.reset();
+                }
+            }
+        }
+    }
+    
+    inline void GParticle::enumerateUnusedPartials(vector<map<string, int> > & unused, map<string, PartialStore::partial_t> & key) const {
+        // Set count for any root or leaf node partials to -1.
+        // Increment count for partials above the root node of each lineage
+        // as long as count is not -1.
+        vector<Node::ptr_vect_t> preorders;
+        buildPreordersVector(preorders);
+        
+        for (auto & pre : preorders) {
+            for (auto nd : pre) {
+                if (nd->_partial) {
+                    string addr = G::memoryAddressAsString(nd->_partial.get());
+                    key[addr] = nd->_partial;
+                    bool is_root = !nd->_parent;
+                    bool is_leaf = !nd->_left_child;
+                    if (is_root || is_leaf) {
+                        unused[_locus_index][addr] = -1;
+                    }
+                    else {
+                        bool is_internal = nd->_left_child;
+                        assert(is_internal);
+                        bool taboo = unused[_locus_index][addr] < 0;
+                        if (is_internal && !taboo)
+                            unused[_locus_index][addr]++;
+                    }
+                }
+            }
+        }
+    }
+#endif
+
 }
 

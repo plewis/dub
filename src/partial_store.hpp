@@ -8,6 +8,10 @@ namespace proj {
         unsigned        _g; // the gene
         vector<double>  _v; // the partial array: length = _nstates*<no. patterns>
         
+#if defined(MEMORY_FRUGAL)
+        bool            _in_storage;
+#endif
+        
 #if defined(LOG_MEMORY)
         static vector<unsigned> _nconstructed;  // no. partials allocated for each gene
         static vector<unsigned> _ndestroyed;    // no. partials destroyed for each gene
@@ -22,6 +26,10 @@ namespace proj {
     inline Partial::Partial(unsigned g, unsigned n) {
         _g = g;
         _v.resize(n);
+
+#if defined(MEMORY_FRUGAL)
+        _in_storage = true;
+#endif
 
 #if defined(LOG_MEMORY)
         assert(g < _nconstructed.size());
@@ -160,6 +168,11 @@ namespace proj {
             partial = _storage[gene].at(n-1);
             _storage[gene].pop_back();
         }
+
+#if defined(MEMORY_FRUGAL)
+        partial->_in_storage = false;
+#endif
+
         return partial;
     }
     
@@ -171,6 +184,11 @@ namespace proj {
         // Store the partial for later
         assert(partial->_v.size() == _nelements[gene]);
         partial->_v.assign(_nelements[gene], 0.0);
+
+#if defined(MEMORY_FRUGAL)
+        partial->_in_storage = true;
+#endif
+        
         _storage[gene].push_back(partial);
     }
     

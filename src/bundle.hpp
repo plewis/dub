@@ -48,6 +48,10 @@ namespace proj {
             void shrinkWrapSpeciesTree();
             void debugSanityCheck() const;
             
+#if defined(MEMORY_FRUGAL)
+            void returnUnusedPartials();
+#endif
+
             double report() const;
                         
         protected:
@@ -121,7 +125,7 @@ namespace proj {
         _species_tree.recordJoinInfo(spec_info);
         for (unsigned g = 0; g < G::_nloci; g++) {
             for (unsigned i = 0; i < G::_ngparticles; i++) {
-                output(format("\nlocus %d, particle %d:\n") % g % i, G::VTEMP);
+                output(format("\nlocus %d, particle %d:\n") % g % i, G::VDEBUG);
                 coal_info.clear();
                 _locus_vect[g][i].recordJoinInfo(coal_info);
                 coal_info.insert(coal_info.end(), spec_info.begin(), spec_info.end());
@@ -132,14 +136,13 @@ namespace proj {
                     bool is_spp_tree = get<1>(t);
                     G::species_t sppL = get<2>(t);
                     G::species_t sppR = get<3>(t);
-                    output(format("%12.7f %6s %12d %12d %12d\n") % h % (is_spp_tree ? "spp" : "coal") % (sppL|sppR) % sppL % sppR, G::VTEMP);
+                    output(format("%12.7f %6s %12d %12d %12d\n") % h % (is_spp_tree ? "spp" : "coal") % (sppL|sppR) % sppL % sppR, G::VDEBUG);
                     if (sppL != sppR && !is_spp_tree) {
                         throw XProj(format("Coalescent event joined different species (%d, %d) at height %g in locus %d, particle %d") % sppL % sppR % h % g % i);
                     }
                 }
             }
         }
-        
     }
     
     inline double Bundle::getLogWeight() const {
@@ -232,7 +235,6 @@ namespace proj {
         for (auto p : _eval_order) {
             G::_locus = p.first;
             G::_particle = p.second;
-            output(format("\nWorking on particle %d from locus %d...") % G::_particle % G::_locus, G::VTEMP);
             _locus_vect[G::_locus][G::_particle].coalesce();
         }
     }
@@ -246,11 +248,12 @@ namespace proj {
             vector<double> probs(G::_ngparticles, 0.0);
             for (G::_particle = 0; G::_particle < G::_ngparticles; G::_particle++) {
                 probs[G::_particle] = _locus_vect[G::_locus][G::_particle].getLogWeight();
-                //output(format(" %6d %12.5f\n") % G::_particle % probs[G::_particle], G::VDEBUG);
+                output(format(" %6d %12.5f\n") % G::_particle % probs[G::_particle], G::VTEMP);
             }
 
             // Normalize log_weights to create discrete probability distribution
             double log_sum_weights = G::calcLogSum(probs);
+            assert(!isnan(log_sum_weights));
             transform(probs.begin(), probs.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
 
             // Compute component of the log marginal likelihood due to this step
@@ -378,5 +381,49 @@ namespace proj {
             }
         }
     }
+    
+#if defined(MEMORY_FRUGAL)
+    inline void Bundle::returnUnusedPartials() {
+        // Determine which partials can be deleted
+        vector<map<string, int> > unused(G::_nloci);
+        map<string, PartialStore::partial_t> key;
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            for (unsigned i = 0; i < G::_ngparticles; i++) {
+                _locus_vect[g][i].enumerateUnusedPartials(unused, key);
+            }
+        }
+
+        // If unused[locus][partial] > -1, stow partial
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            for (auto & mpair : unused[g]) {
+                PartialStore::partial_t     p = key[mpair.first];
+                int                     count = mpair.second;
+                if (count > -1) {
+                    if (!p->_in_storage) {
+                        ps.putPartial(g, p);
+                    }
+                }
+            }
+        }
+
+        // Delete partials that have been stowed
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            for (unsigned i = 0; i < G::_ngparticles; i++) {
+                _locus_vect[g][i].deleteStowedPartials();
+            }
+        }
+        
+        // output("\nKey to partials:\n", G::VTEMP);
+        // for (auto & kv : key) {
+        //     string k = kv.first;
+        //     PartialStore::partial_t & p = kv.second;
+        //     long u = p.use_count() - 1;
+        //     output(format("%20s %12d\n") % k % u, G::VTEMP);
+        // }
+        // output("\n", G::VTEMP);
+        
+    }
+#endif
+    
 }
 

@@ -733,15 +733,29 @@ namespace proj {
 
 #if defined(LOG_MEMORY)
     inline void Proj::memoryReport(ofstream & memf) const {
+        unsigned sizeofNodePtr = sizeof(Node *);
+        unsigned sizeofNode = sizeof(Node);
+        unsigned sizeofSParticle = sizeof(SParticle);
+        unsigned sizeofGParticle = sizeof(GParticle);
+        double Smem = sizeofSParticle*(sizeofNode*(2*G::_nspecies-1) + sizeofNodePtr*G::_nspecies);
+        double Gmem = sizeofGParticle*(sizeofNode*(2*G::_ntaxa-1) + sizeofNodePtr*G::_ntaxa);
         memf << "\nMemory report:\n\n";
-        memf << str(format("  Size of int:           %d\n") % sizeof(int));
-        memf << str(format("  Size of char:          %d\n") % sizeof(char));
-        memf << str(format("  Size of double:        %d\n") % sizeof(double));
-        memf << str(format("  Size of unsigned:      %d\n") % sizeof(unsigned));
-        memf << str(format("  Size of unsigned long: %d\n") % sizeof(unsigned long));
-        memf << str(format("  Size of Node *:        %d\n") % sizeof(Node *));
-        memf << str(format("  Number of species tree particles: %d\n") % G::_nsparticles);
-        memf << str(format("  Number of gene tree particles: %d\n") % (G::_nsparticles*G::_nloci*G::_ngparticles));
+        memf << str(format("  Size of int:                %d\n") % sizeof(int));
+        memf << str(format("  Size of char:               %d\n") % sizeof(char));
+        memf << str(format("  Size of double:             %d\n") % sizeof(double));
+        memf << str(format("  Size of unsigned:           %d\n") % sizeof(unsigned));
+        memf << str(format("  Size of unsigned long:      %d\n") % sizeof(unsigned long));
+        memf << str(format("  Size of Node:               %d\n") % sizeofNode);
+        memf << str(format("  Size of SParticle:          %d\n") % sizeofSParticle);
+        memf << str(format("  Size of GParticle:          %d\n") % sizeofGParticle);
+        memf << str(format("  Size of Node *:             %d\n") % sizeof(Node *));
+        memf << str(format("  No. species:                %d\n") % G::_nspecies);
+        memf << str(format("  No. taxa:                   %d\n") % G::_ntaxa);
+        memf << str(format("  No. loci:                   %d\n") % G::_nloci);
+        memf << str(format("  No. species tree particles: %d\n") % G::_nsparticles);
+        memf << str(format("  No. gene tree particles:    %d\n") % (G::_nsparticles*G::_nloci*G::_ngparticles));
+        memf << str(format("  SParticle memory used:      %.1f MB\n") % (Smem*G::_nsparticles/1048576));
+        memf << str(format("  GParticle memory used:      %.1f GB\n") % (Gmem*G::_nsparticles*G::_nloci*G::_ngparticles/1073741824));
         ::data->memoryReport(memf);
     }
 #endif

@@ -85,7 +85,7 @@ namespace proj {
         // Connect chosen lineages to ancestor
         makeAnc(anc, lchild, rchild);
         
-        output(format("joining species %d and %d to form %d\n") % lchild->_species % rchild->_species % anc->_species, G::VTEMP);
+        output(format("joining species %d and %d to form %d\n") % lchild->_species % rchild->_species % anc->_species, G::VDEBUG);
     }
 
     inline pair<double, double> SParticle::drawIncrement() {
@@ -150,12 +150,6 @@ namespace proj {
     }
 
     inline void SParticle::trimToHeight(double h0) {
-        // //temporary!
-        // unsigned step = G::_step;
-        // ofstream tmpf1("before-trimming.tre", ios::out | ios::app);
-        // tmpf1 << "  tree t" << step << " = [&R]" << makeNewick(9, true) << ";\n";
-        // tmpf1.close();
-
         //  Assume there are 3 lineages in the species tree
         //  After filtering gene trees from all loci, the
         //  height of the deepest coalescent event in any
@@ -252,11 +246,6 @@ namespace proj {
         
         // Adjust species tree height
         _height = h0 + incr;
-                
-        // //temporary!
-        // ofstream tmpf2("after-trimming.tre", ios::out | ios::app);
-        // tmpf2 << "  tree t" << step << " = [&R]" << makeNewick(9, true) << ";\n";
-        // tmpf2.close();
     }
 
     inline void SParticle::recordJoinInfo(vector<G::join_info_t> & join_info) const {

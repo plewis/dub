@@ -52,7 +52,7 @@ namespace proj {
         static double                   _small_enough;
         static double                   _infinity;
         static double                   _negative_infinity;
-                
+        
         static void     showSettings();
         static double   extractEdgeLen(string edge_length_string);
         static int      extractNodeNumberFromName(string node_name, set<unsigned> & used);
