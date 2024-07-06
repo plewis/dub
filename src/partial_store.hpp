@@ -67,6 +67,7 @@ namespace proj {
             typedef vector<vect_partial_t>       leaf_partials_t;
             typedef vector<vect_partial_t>       storage_t;
             
+            void            clear();
             void            setNGenes(unsigned ngenes);
             partial_t       getPartial(unsigned gene);
             void            putPartial(unsigned gene, partial_t partial);
@@ -91,6 +92,10 @@ namespace proj {
     }
 
     inline PartialStore::~PartialStore() {
+        clear();
+    }
+    
+    inline void PartialStore::clear() {
         _nelements.clear();
         _storage.clear();
     }

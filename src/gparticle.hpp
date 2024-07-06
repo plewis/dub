@@ -48,6 +48,7 @@ namespace proj {
                 return str(format("%.5f") % getLogWeight());
             }
             
+            static void clearLeafPartials();
             static void computeLeafPartials();
             
             void operator=(const GParticle & other);
@@ -290,6 +291,10 @@ namespace proj {
         } // while (!done)
     }
 
+    inline void GParticle::clearLeafPartials() {
+        _leaf_partials.clear();
+    }
+    
     inline void GParticle::computeLeafPartials() {
         assert(::data);
         assert(_leaf_partials.size() == 0);

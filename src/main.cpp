@@ -200,5 +200,8 @@ int main(int argc, const char * argv[]) {
     }
 #endif
 
+    GParticle::clearLeafPartials();
+    ps.clear();
+
     return 0;
 }
