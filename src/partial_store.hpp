@@ -8,7 +8,7 @@ namespace proj {
         unsigned        _g; // the gene
         vector<double>  _v; // the partial array: length = _nstates*<no. patterns>
         
-#if defined(MEMORY_FRUGAL)
+#if defined(STOW_UNUSED_PARTIALS)
         bool            _in_storage;
 #endif
         
@@ -27,7 +27,7 @@ namespace proj {
         _g = g;
         _v.resize(n);
 
-#if defined(MEMORY_FRUGAL)
+#if defined(STOW_UNUSED_PARTIALS)
         _in_storage = true;
 #endif
 
@@ -174,7 +174,7 @@ namespace proj {
             _storage[gene].pop_back();
         }
 
-#if defined(MEMORY_FRUGAL)
+#if defined(STOW_UNUSED_PARTIALS)
         partial->_in_storage = false;
 #endif
 
@@ -190,10 +190,9 @@ namespace proj {
         assert(partial->_v.size() == _nelements[gene]);
         partial->_v.assign(_nelements[gene], 0.0);
 
-#if defined(MEMORY_FRUGAL)
+#if defined(STOW_UNUSED_PARTIALS)
         partial->_in_storage = true;
-#endif
-        
+#endif        
         _storage[gene].push_back(partial);
     }
     

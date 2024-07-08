@@ -20,10 +20,17 @@ namespace proj {
             void operator=(const Bundle & other);
             
             // Getters and setters
-            void setBundleIndex(unsigned i) {_bundle_index = i; _species_tree.setIndex(i);}
+            void setBundleIndex(unsigned i);
             unsigned getBundleIndex() const {return _bundle_index;};
             
             unsigned getNumSpeciesTreeLineages() const {return (unsigned)_species_tree._lineages.size();};
+            
+            GParticle & getGParticle(unsigned locus_index, unsigned particle_index) {
+                return _locus_vect[locus_index][particle_index];
+            }
+            const GParticle & getGParticleConst(unsigned locus_index, unsigned particle_index) {
+                return _locus_vect[locus_index][particle_index];
+            }
 
             double getLogMargLike() const;
             double getPrevLogMargLike() const;
@@ -48,10 +55,6 @@ namespace proj {
             void shrinkWrapSpeciesTree();
             void debugSanityCheck() const;
             
-#if defined(MEMORY_FRUGAL)
-            void returnUnusedPartials();
-#endif
-
             double report() const;
                         
         protected:
@@ -77,6 +80,11 @@ namespace proj {
                 
                 // Each GParticle needs to know which locus it belongs to
                 _locus_vect[g][i].setLocusIndex(g);
+                
+                // Each GParticle needs to know which bundle it belongs to
+                // but currently the bundle itself doean't know its index
+                // so this needs to be set in setBundleIndex
+                _locus_vect[g][i].setBundleIndex(-1);
                 
                 // Each GParticle needs to know its index
                 _locus_vect[g][i].setIndex(i);
@@ -144,7 +152,18 @@ namespace proj {
             }
         }
     }
-    
+
+    inline void Bundle::setBundleIndex(unsigned i) {
+        _bundle_index = i;
+        _species_tree.setIndex(i);
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            for (unsigned k = 0; k < G::_ngparticles; k++) {
+                // Let each GParticle know which bundle it belongs to
+                _locus_vect[g][k].setBundleIndex(i);
+            }
+        }
+    }
+
     inline double Bundle::getLogWeight() const {
         double curr_log_marg_like = getLogMargLike();
         double prev_log_marg_like = getPrevLogMargLike();
@@ -248,7 +267,7 @@ namespace proj {
             vector<double> probs(G::_ngparticles, 0.0);
             for (G::_particle = 0; G::_particle < G::_ngparticles; G::_particle++) {
                 probs[G::_particle] = _locus_vect[G::_locus][G::_particle].getLogWeight();
-                output(format(" %6d %12.5f\n") % G::_particle % probs[G::_particle], G::VTEMP);
+                output(format(" %6d %12.5f\n") % G::_particle % probs[G::_particle], G::VDEBUG);
             }
 
             // Normalize log_weights to create discrete probability distribution
@@ -275,19 +294,6 @@ namespace proj {
                 counts[which]++;
             }
                 
-            // Copy particles
-            // Locate first donor
-            unsigned donor = 0;
-            while (counts[donor] < 2) {
-                donor++;
-            }
-            
-            // Locate first recipient
-            unsigned recipient = 0;
-            while (counts[recipient] != 0) {
-                recipient++;
-            }
-            
             // Count number of cells that need copying to
             unsigned nzeros = 0;
             for (unsigned i = 0; i < G::_ngparticles; i++) {
@@ -295,25 +301,40 @@ namespace proj {
                     nzeros++;
             }
             
-            while (nzeros > 0) {
-                assert(donor < G::_ngparticles);
-                assert(recipient < G::_ngparticles);
-                _locus_vect[G::_locus][recipient] = _locus_vect[G::_locus][donor];
-                counts[donor]--;
-                counts[recipient]++;
-                nzeros--;
-                if (counts[donor] == 1) {
-                    // Move donor to next slot with count > 1
+            if (nzeros > 0) {
+                // Copy particles
+                // Locate first donor
+                unsigned donor = 0;
+                while (counts[donor] < 2) {
                     donor++;
-                    while (donor < G::_ngparticles && counts[donor] < 2) {
-                        donor++;
-                    }
                 }
                 
-                // Move recipient to next slot with count equal to 0
-                recipient++;
-                while (recipient < G::_ngparticles && counts[recipient] > 0) {
+                // Locate first recipient
+                unsigned recipient = 0;
+                while (counts[recipient] != 0) {
                     recipient++;
+                }
+                
+                while (nzeros > 0) {
+                    assert(donor < G::_ngparticles);
+                    assert(recipient < G::_ngparticles);
+                    _locus_vect[G::_locus][recipient] = _locus_vect[G::_locus][donor];
+                    counts[donor]--;
+                    counts[recipient]++;
+                    nzeros--;
+                    if (counts[donor] == 1) {
+                        // Move donor to next slot with count > 1
+                        donor++;
+                        while (donor < G::_ngparticles && counts[donor] < 2) {
+                            donor++;
+                        }
+                    }
+                    
+                    // Move recipient to next slot with count equal to 0
+                    recipient++;
+                    while (recipient < G::_ngparticles && counts[recipient] > 0) {
+                        recipient++;
+                    }
                 }
             }
         }
@@ -381,49 +402,6 @@ namespace proj {
             }
         }
     }
-    
-#if defined(MEMORY_FRUGAL)
-    inline void Bundle::returnUnusedPartials() {
-        // Determine which partials can be deleted
-        vector<map<string, int> > unused(G::_nloci);
-        map<string, PartialStore::partial_t> key;
-        for (unsigned g = 0; g < G::_nloci; g++) {
-            for (unsigned i = 0; i < G::_ngparticles; i++) {
-                _locus_vect[g][i].enumerateUnusedPartials(unused, key);
-            }
-        }
-
-        // If unused[locus][partial] > -1, stow partial
-        for (unsigned g = 0; g < G::_nloci; g++) {
-            for (auto & mpair : unused[g]) {
-                PartialStore::partial_t     p = key[mpair.first];
-                int                     count = mpair.second;
-                if (count > -1) {
-                    if (!p->_in_storage) {
-                        ps.putPartial(g, p);
-                    }
-                }
-            }
-        }
-
-        // Delete partials that have been stowed
-        for (unsigned g = 0; g < G::_nloci; g++) {
-            for (unsigned i = 0; i < G::_ngparticles; i++) {
-                _locus_vect[g][i].deleteStowedPartials();
-            }
-        }
-        
-        // output("\nKey to partials:\n", G::VTEMP);
-        // for (auto & kv : key) {
-        //     string k = kv.first;
-        //     PartialStore::partial_t & p = kv.second;
-        //     long u = p.use_count() - 1;
-        //     output(format("%20s %12d\n") % k % u, G::VTEMP);
-        // }
-        // output("\n", G::VTEMP);
-        
-    }
-#endif
     
 }
 

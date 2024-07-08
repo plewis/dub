@@ -18,7 +18,7 @@ namespace proj {
         friend class Bundle;
         
         public:
-            GParticle() : _locus_index(0), _log_weight(G::_negative_infinity), _species_tree(nullptr) {}
+            GParticle() : _locus_index(-1), _bundle_index(-1), _log_weight(G::_negative_infinity), _species_tree(nullptr) {}
             ~GParticle() {}
             
             // Getters and setters
@@ -27,6 +27,9 @@ namespace proj {
             
             unsigned getLocusIndex() const {return _locus_index;}
             void setLocusIndex(unsigned i) {_locus_index = i;}
+            
+            unsigned getBundleIndex() const {return _bundle_index;}
+            void setBundleIndex(unsigned i) {_bundle_index = i;}
             
             SParticle * getSpeciesTree() {return _species_tree;}
             void setSpeciesTree(SParticle * s) {_species_tree = s;}
@@ -54,7 +57,8 @@ namespace proj {
             void operator=(const GParticle & other);
             
         protected:
-            unsigned     _locus_index;
+            int         _locus_index;
+            int         _bundle_index;
             double       _log_weight;
             SParticle *  _species_tree;
             
@@ -216,7 +220,8 @@ namespace proj {
         makeAnc(anc, lchild, rchild);
 
         // Calculate partial for anc and store _log_weight
-        anc->setPartial(ps.getPartial(_locus_index));
+        PartialStore::partial_t part = ps.getPartial(_locus_index);
+        anc->setPartial(part);
         _log_weight = calcPartialArray(anc);
     }
 
@@ -321,6 +326,7 @@ namespace proj {
 
             for (unsigned t = 0; t < G::_ntaxa; ++t) {
                 PartialStore::partial_t partial_ptr = ps.getPartial(locus);
+                
                 vector<double> & leaf_partial = partial_ptr->_v;
                 
                 // Set each partial according to the observed data for leaf t
@@ -436,8 +442,12 @@ namespace proj {
         for (Node * child = new_nd->_left_child; child; child = child->_right_sib) {
             assert(child->_partial);
             
-#if defined(MEMORY_FRUGAL)
-            assert(!child->_partial->_in_storage);
+#if defined(STOW_UNUSED_PARTIALS)
+            if (child->_partial->_in_storage) {
+                string s = G::memoryAddressAsString(child->_partial.get());
+                output(format("attempting to access stowed partial: %s (locus %d)\n") % s % _locus_index, G::VTEMP);
+                assert(false);
+            }
 #endif
             
             auto & child_partial_array = child->_partial->_v;
@@ -505,7 +515,6 @@ namespace proj {
                 assert(other._nodes[i]._partial->_v.size() == ps.getNElements(_locus_index));
                 
                 // Just copy the shared pointer
-                _nodes[i]._partial.reset();
                 _nodes[i]._partial = other._nodes[i]._partial;
             }
             else if (this_partial_exists && !other_partial_exists) {
@@ -525,7 +534,7 @@ namespace proj {
         }
     }
 
-#if defined(MEMORY_FRUGAL)
+#if defined(STOW_UNUSED_PARTIALS)
     inline void GParticle::deleteStowedPartials() {
         vector<Node::ptr_vect_t> preorders;
         buildPreordersVector(preorders);
@@ -553,17 +562,35 @@ namespace proj {
                     key[addr] = nd->_partial;
                     bool is_root = !nd->_parent;
                     bool is_leaf = !nd->_left_child;
+
+                    // //temporary!
+                    // if (_locus_index == 1 && (G::_step == 6 || G::_step == 7) && // (_bundle_index == 0 || _bundle_index == 1)) {
+                    //     ofstream doof("doofmem.txt", ios::out | ios::app);
+                    //     doof << str(format("%6d %6d %6d %6d %15s %6s %6s %6d %s\n") % // G::_step % _locus_index % _bundle_index % G::_particle % addr % // (is_root ? "yes" : "no") % (is_leaf ? "yes" : "no") % // nd->_partial.use_count() % "");
+                    //     doof.close();
+                    // }
+                        
                     if (is_root || is_leaf) {
                         unused[_locus_index][addr] = -1;
                     }
                     else {
-                        bool is_internal = nd->_left_child;
-                        assert(is_internal);
+                        // If not a root or a leaf, must be an internal
+                        assert(nd->_left_child);
                         bool taboo = unused[_locus_index][addr] < 0;
-                        if (is_internal && !taboo)
+                        if (!taboo)
                             unused[_locus_index][addr]++;
                     }
                 }
+                // else {
+                //     //temporary!
+                //     bool is_root = !nd->_parent;
+                //     bool is_leaf = !nd->_left_child;
+                //     if (_locus_index == 1 && (G::_step == 6 || G::_step == 7) && // (_bundle_index == 0 || _bundle_index == 1)) {
+                //         ofstream doof("doofmem.txt", ios::out | ios::app);
+                //         doof << str(format("%6d %6d %6d %6d %15s %6s %6s %6s %s\n") % // G::_step % _locus_index % _bundle_index % G::_particle % // "(no-partial)" % (is_root ? "yes" : "no") % (is_leaf ? "yes" : // "no") % "0" % "");
+                //         doof.close();
+                //     }
+                // }
             }
         }
     }

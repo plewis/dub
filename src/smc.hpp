@@ -28,6 +28,7 @@ namespace proj {
             void saveLogLikes(unsigned b, vector< vector<double> > & log_likes_for_locus) const;
             
         private:
+            void returnUnusedPartials();
             void filterBundles(unsigned step);
             void sanityCheckBundles() const;
         
@@ -328,51 +329,54 @@ namespace proj {
 
         // Copy particles
 
-        // Locate first donor
-        unsigned donor = 0;
-        while (counts[donor] < 2) {
-            donor++;
-        }
-
-        // Locate first recipient
-        unsigned recipient = 0;
-        while (counts[recipient] != 0) {
-            recipient++;
-        }
-
         // Count number of cells with zero count that can serve as copy recipients
         unsigned nzeros = 0;
         for (unsigned i = 0; i < G::_nsparticles; i++) {
             if (counts[i] == 0)
                 nzeros++;
         }
-
-        while (nzeros > 0) {
-            assert(donor < G::_nsparticles);
-            assert(recipient < G::_nsparticles);
-
-            // Copy donor to recipient
-            _bundle[recipient] = _bundle[donor];
-
-            counts[donor]--;
-            counts[recipient]++;
-            nzeros--;
-
-            if (counts[donor] == 1) {
-                // Move donor to next slot with count > 1
+        
+        if (nzeros > 0) {
+            // Locate first donor
+            unsigned donor = 0;
+            while (counts[donor] < 2) {
                 donor++;
-                while (donor < G::_nsparticles && counts[donor] < 2) {
+                assert(donor < counts.size());
+            }
+
+            // Locate first recipient
+            unsigned recipient = 0;
+            while (counts[recipient] != 0) {
+                recipient++;
+                assert(recipient < counts.size());
+            }
+
+            while (nzeros > 0) {
+                assert(donor < G::_nsparticles);
+                assert(recipient < G::_nsparticles);
+
+                // Copy donor to recipient
+                _bundle[recipient] = _bundle[donor];
+
+                counts[donor]--;
+                counts[recipient]++;
+                nzeros--;
+
+                if (counts[donor] == 1) {
+                    // Move donor to next slot with count > 1
                     donor++;
+                    while (donor < G::_nsparticles && counts[donor] < 2) {
+                        donor++;
+                    }
+                }
+
+                // Move recipient to next slot with count equal to 0
+                recipient++;
+                while (recipient < G::_nsparticles && counts[recipient] > 0) {
+                    recipient++;
                 }
             }
-
-            // Move recipient to next slot with count equal to 0
-            recipient++;
-            while (recipient < G::_nsparticles && counts[recipient] > 0) {
-                recipient++;
-            }
         }
-
     }
     
     inline unsigned SMC::saveBestSpeciesTree() const {
@@ -408,6 +412,43 @@ namespace proj {
         }
     }
     
+#if defined(STOW_UNUSED_PARTIALS)
+    inline void SMC::returnUnusedPartials() {
+        // Determine which partials can be deleted
+        vector<map<string, int> > unused(G::_nloci);
+        map<string, PartialStore::partial_t> key;
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            for (unsigned b = 0; b < G::_nsparticles; b++) {
+                for (unsigned i = 0; i < G::_ngparticles; i++) {
+                    _bundle[b].getGParticleConst(g,i).enumerateUnusedPartials(unused, key);
+                }
+            }
+        }
+
+        // If unused[locus][partial] > -1, stow partial
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            for (auto & mpair : unused[g]) {
+                PartialStore::partial_t     p = key[mpair.first];
+                int                     count = mpair.second;
+                if (count > -1) {
+                    if (!p->_in_storage) {
+                        ps.putPartial(g, p);
+                    }
+                }
+            }
+        }
+
+        // Delete partials that have been stowed
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            for (unsigned b = 0; b < G::_nsparticles; b++) {
+                for (unsigned i = 0; i < G::_ngparticles; i++) {
+                    _bundle[b].getGParticle(g,i).deleteStowedPartials();
+                }
+            }
+        }
+    }
+#endif
+    
     inline void SMC::run() {
         // Sanity checks
         assert(G::_nsparticles > 0);
@@ -435,15 +476,15 @@ namespace proj {
             output(format("Step %d of %d\n") % (G::_step + 1) % nsteps, G::VSTANDARD);
             
             for (G::_bundle = 0; G::_bundle < G::_nsparticles; G::_bundle++) {
-                output(format("  Bundle %d\n") % G::_bundle, G::VTEMP);
+                output(format("  Bundle %d\n") % G::_bundle, G::VDEBUG);
                 _bundle[G::_bundle].advanceAllGeneTrees();
                 _bundle[G::_bundle].filterAllGeneTrees(G::_step);
                 _bundle[G::_bundle].shrinkWrapSpeciesTree();
-#if defined(MEMORY_FRUGAL)
-                _bundle[G::_bundle].returnUnusedPartials();
-#endif
             }
             filterBundles(G::_step);
+#if defined(STOW_UNUSED_PARTIALS)
+            returnUnusedPartials();
+#endif
         }
         
         unsigned best_bundle = saveBestSpeciesTree();
