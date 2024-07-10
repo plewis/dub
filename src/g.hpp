@@ -8,7 +8,7 @@ namespace proj {
         // Species are represented by bits so that unions can represent ancestral species
         typedef unsigned long           species_t;
                 
-        // Tuple: node height, left child species, right child species
+        // Tuple: node height, is_species_tree, left child species, right child species
         typedef tuple<double, bool, species_t, species_t>   join_info_t;
                         
         // Verbosity is a bitset enum corresponding to the kinds of output desired
@@ -19,16 +19,16 @@ namespace proj {
         };
         static verbosity_t              _verbosity;
         
+        static unsigned                 _nthreads;
+#if defined(USING_MULTITHREADING)
+        static mutex                    _mutex;
+#endif
+        
         static string                   _species_tree_ref_file_name;
         static string                   _gene_trees_ref_file_name;
         static map<unsigned,unsigned>   _nexus_taxon_map;
 
         static double                   _log_marg_like;
-
-        static unsigned                 _step;
-        static unsigned                 _bundle;
-        static unsigned                 _locus;
-        static unsigned                 _particle;
         
         static species_t                _species_zero;
 
@@ -42,8 +42,8 @@ namespace proj {
         static unsigned                 _nloci;
         static vector<string>           _locus_names;
         
-        static unsigned                 _nsparticles;
-        static unsigned                 _ngparticles;
+        static unsigned                 _nbundles;
+        static unsigned                 _nparticles;
         
         static double                   _theta;
         static double                   _lambda;
@@ -127,6 +127,7 @@ namespace proj {
     }
     
     inline void G::generateUpdateSeeds(vector<unsigned> & seeds) {
+        // psuffix guarantees all seeds are different
         unsigned psuffix = 1;
         for (auto & s : seeds) {
             s = rng->randint(1,9999) + psuffix;

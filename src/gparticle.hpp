@@ -2,6 +2,8 @@
 
 //extern void output(string msg, proj::G::verbosity_t verb);
 //extern void output(format & fmt, proj::G::verbosity_t level);
+extern void doof(string msg, proj::G::verbosity_t verb);
+extern void doof(format & fmt, proj::G::verbosity_t level);
 extern proj::PartialStore         ps;
 //extern proj::StopWatch            stopwatch;
 //extern proj::Lot::SharedPtr       rng;
@@ -36,14 +38,16 @@ namespace proj {
             
             double calcTransitionProbability(unsigned from, unsigned to, double edge_length, double relrate);
             double calcPartialArray(Node * new_nd);
-            void coalesce();
+            void coalesce(Lot::SharedPtr lot);
             
+#if defined(STOW_UNUSED_PARTIALS)
             void deleteStowedPartials();
-            void enumerateUnusedPartials(vector<map<string, int> > & unused, map<string, PartialStore::partial_t> & key) const;
+            void enumerateUnusedPartials(vector<map<PartialStore::partial_t, int> > & unused) const;
+#endif
 
             // Overrides of base class abstract virtual functions
-            pair<double, double> drawIncrement();
-            void joinRandomPair();
+            pair<double, double> drawIncrement(Lot::SharedPtr lot);
+            void joinRandomPair(Lot::SharedPtr lot);
             double calcLogLikelihood() const;
             void createTrivialForest();
             string info() const {
@@ -133,7 +137,7 @@ namespace proj {
         refreshSplits();
     }
     
-    inline pair<double, double> GParticle::drawIncrement() {
+    inline pair<double, double> GParticle::drawIncrement(Lot::SharedPtr lot) {
         // Choose an increment at random from the Exp(rate) prior
         // where rate is the total rate over all species currently
         // represented among the lineages
@@ -159,14 +163,14 @@ namespace proj {
         if (total_rate > 0.0) {
             // At least one species has more than one lineage, so
             // coalescence is possible in at least one species
-            incr = rng->gamma(1.0, 1.0/total_rate);
+            incr = lot->gamma(1.0, 1.0/total_rate);
         }
         output(format("~~> total rate = %g, increment = %g\n") % total_rate % incr, G::VDEBUG);
 
         return make_pair(incr, total_rate);
     }
 
-    inline void GParticle::joinRandomPair() {
+    inline void GParticle::joinRandomPair(Lot::SharedPtr lot) {
         // Create map in which keys are species and values are vectors of Node *
         //TODO: inefficient, nearly same thing done in drawIncrement
         map<G::species_t, vector<Node *> > species_nodevector;
@@ -189,7 +193,7 @@ namespace proj {
         transform(rates.begin(), rates.end(), rates.begin(), [total_rate](double r){return r/total_rate;});
         
         // Determine species in which coalescence occurred
-        unsigned which = G::multinomialDraw(rng, rates);
+        unsigned which = G::multinomialDraw(lot, rates);
         auto it = species_nodevector.begin();
         advance(it, which);
         assert(it != species_nodevector.end());
@@ -199,7 +203,7 @@ namespace proj {
         output(format("joined two lineages in species %d\n") % chosen_species, G::VDEBUG);
 
         // Choose two lineages within species spp to join
-        pair<unsigned, unsigned> p = rng->nchoose2((unsigned)choices.size());
+        pair<unsigned, unsigned> p = lot->nchoose2((unsigned)choices.size());
         Node * lchild = choices[p.first];
         Node * rchild = choices[p.second];
 
@@ -220,12 +224,12 @@ namespace proj {
         makeAnc(anc, lchild, rchild);
 
         // Calculate partial for anc and store _log_weight
-        PartialStore::partial_t part = ps.getPartial(_locus_index);
+        PartialStore::partial_t part = ps.pullPartial(_locus_index);
         anc->setPartial(part);
         _log_weight = calcPartialArray(anc);
     }
 
-    inline void GParticle::coalesce() {
+    inline void GParticle::coalesce(Lot::SharedPtr lot) {
         assert(_species_tree);
         vector<G::join_info_t> spec_rec;
         _species_tree->recordJoinInfo(spec_rec);
@@ -234,15 +238,18 @@ namespace proj {
         while (!done) {
             // Determine the height of the next species tree join
             G::join_info_t ceiling = _species_tree->heightOfNextNodeAbove(_height, spec_rec);
+            
+            // height (+inf if species tree complete)
             double upper_bound = get<0>(ceiling);
-            auto incr_rate = drawIncrement();
+
+            auto incr_rate = drawIncrement(lot);
             
             if (_height + incr_rate.first < upper_bound) {
                 // Increment does not take us to the next speciation event, so
                 // add a coalescence event and we're done
                 output(format("DONE! height + incr = %g < %g = upper_bound\n") % (_height + incr_rate.first) % upper_bound, G::VDEBUG);
                 extendAllLineagesBy(incr_rate.first);
-                joinRandomPair();
+                joinRandomPair(lot);
                 done = true;
             }
             else {
@@ -254,7 +261,7 @@ namespace proj {
                 G::species_t spp = get<2>(ceiling) | get<3>(ceiling);
                 if (spp == G::_species_zero) {
                     // Species tree needs to be extended before continuing
-                    _species_tree->joinThenIncrement();
+                    _species_tree->joinThenIncrement(lot);
                     
                     // Refresh speciation info
                     _species_tree->recordJoinInfo(spec_rec);
@@ -325,7 +332,7 @@ namespace proj {
             _leaf_partials[locus].resize(G::_ntaxa);
 
             for (unsigned t = 0; t < G::_ntaxa; ++t) {
-                PartialStore::partial_t partial_ptr = ps.getPartial(locus);
+                PartialStore::partial_t partial_ptr = ps.pullPartial(locus);
                 
                 vector<double> & leaf_partial = partial_ptr->_v;
                 
@@ -445,7 +452,7 @@ namespace proj {
 #if defined(STOW_UNUSED_PARTIALS)
             if (child->_partial->_in_storage) {
                 string s = G::memoryAddressAsString(child->_partial.get());
-                output(format("attempting to access stowed partial: %s (locus %d)\n") % s % _locus_index, G::VTEMP);
+                output(format("attempting to access stowed partial: %s (locus %d)\n") % s % _locus_index, G::VSTANDARD);
                 assert(false);
             }
 #endif
@@ -496,11 +503,12 @@ namespace proj {
         
         return curr_loglike - prev_loglike;
     }
-    
+
     inline void GParticle::operator=(const GParticle & other) {
         Particle::operator=(other);
         _locus_index = other._locus_index;
         _log_weight = other._log_weight;
+        // _bundle_index does not need to be copied
         // _species_tree does not need to be copied
 
         // Node _partial data members not copied in base class because partials are
@@ -547,8 +555,10 @@ namespace proj {
             }
         }
     }
+#endif
     
-    inline void GParticle::enumerateUnusedPartials(vector<map<string, int> > & unused, map<string, PartialStore::partial_t> & key) const {
+#if defined(STOW_UNUSED_PARTIALS)
+    inline void GParticle::enumerateUnusedPartials(vector<map<PartialStore::partial_t, int> > & unused) const {
         // Set count for any root or leaf node partials to -1.
         // Increment count for partials above the root node of each lineage
         // as long as count is not -1.
@@ -558,39 +568,21 @@ namespace proj {
         for (auto & pre : preorders) {
             for (auto nd : pre) {
                 if (nd->_partial) {
-                    string addr = G::memoryAddressAsString(nd->_partial.get());
-                    key[addr] = nd->_partial;
                     bool is_root = !nd->_parent;
                     bool is_leaf = !nd->_left_child;
-
-                    // //temporary!
-                    // if (_locus_index == 1 && (G::_step == 6 || G::_step == 7) && // (_bundle_index == 0 || _bundle_index == 1)) {
-                    //     ofstream doof("doofmem.txt", ios::out | ios::app);
-                    //     doof << str(format("%6d %6d %6d %6d %15s %6s %6s %6d %s\n") % // G::_step % _locus_index % _bundle_index % G::_particle % addr % // (is_root ? "yes" : "no") % (is_leaf ? "yes" : "no") % // nd->_partial.use_count() % "");
-                    //     doof.close();
-                    // }
                         
                     if (is_root || is_leaf) {
-                        unused[_locus_index][addr] = -1;
+                        unused[_locus_index][nd->_partial] = -1;
                     }
                     else {
                         // If not a root or a leaf, must be an internal
                         assert(nd->_left_child);
-                        bool taboo = unused[_locus_index][addr] < 0;
-                        if (!taboo)
-                            unused[_locus_index][addr]++;
+                        bool taboo = unused[_locus_index][nd->_partial] < 0;
+                        if (!taboo) {
+                            unused[_locus_index][nd->_partial]++;
+                        }
                     }
                 }
-                // else {
-                //     //temporary!
-                //     bool is_root = !nd->_parent;
-                //     bool is_leaf = !nd->_left_child;
-                //     if (_locus_index == 1 && (G::_step == 6 || G::_step == 7) && // (_bundle_index == 0 || _bundle_index == 1)) {
-                //         ofstream doof("doofmem.txt", ios::out | ios::app);
-                //         doof << str(format("%6d %6d %6d %6d %15s %6s %6s %6s %s\n") % // G::_step % _locus_index % _bundle_index % G::_particle % // "(no-partial)" % (is_root ? "yes" : "no") % (is_leaf ? "yes" : // "no") % "0" % "");
-                //         doof.close();
-                //     }
-                // }
             }
         }
     }

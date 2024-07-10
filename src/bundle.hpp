@@ -2,6 +2,8 @@
 
 //extern void output(string msg, proj::G::verbosity_t verb);
 //extern void output(format & fmt, proj::G::verbosity_t level);
+extern void doof(string msg, proj::G::verbosity_t verb);
+extern void doof(format & fmt, proj::G::verbosity_t level);
 //extern proj::PartialStore         ps;
 //extern proj::StopWatch            stopwatch;
 //extern proj::Lot::SharedPtr       rng;
@@ -22,6 +24,9 @@ namespace proj {
             // Getters and setters
             void setBundleIndex(unsigned i);
             unsigned getBundleIndex() const {return _bundle_index;};
+            
+            Lot::SharedPtr getLot() const {return _lot;}
+            void setSeed(unsigned seed) const {_lot->setSeed(seed);}
             
             unsigned getNumSpeciesTreeLineages() const {return (unsigned)_species_tree._lineages.size();};
             
@@ -48,6 +53,7 @@ namespace proj {
                 return _locus_vect[g][i];
             }
 
+            void initSpeciesTree();
             void saveJavascript(string fnprefix) const;
             void advanceAllGeneTrees();
             void filterAllGeneTrees(unsigned step);
@@ -64,24 +70,32 @@ namespace proj {
             vector<double>                  _log_marg_like;
             vector<double>                  _prev_log_marg_like;
             vector< pair<unsigned, unsigned> > _eval_order;
+
+            // Even though it is a shared pointer, _lot is a private random number
+            // generator not shared with any other bundle and has nothing to
+            // to do with the global Lot shared_ptr rng defined in main.cpp.
+            // Note that _lot is excluded from copying.
+            mutable Lot::SharedPtr  _lot;
     };
     
     inline Bundle::Bundle() {
-        auto spp_incr_rate = _species_tree.drawIncrement();
-        _species_tree.extendAllLineagesBy(spp_incr_rate.first);
+        _lot.reset(new Lot());
+
+        //auto spp_incr_rate = _species_tree.drawIncrement(_lot);
+        //_species_tree.extendAllLineagesBy(spp_incr_rate.first);
         
         // Build vector
         _locus_vect.resize(G::_nloci);
         for (unsigned g = 0; g < G::_nloci; g++) {
-            _locus_vect[g].resize(G::_ngparticles);
-            for (unsigned i = 0; i < G::_ngparticles; i++) {
+            _locus_vect[g].resize(G::_nparticles);
+            for (unsigned i = 0; i < G::_nparticles; i++) {
                 // Each GParticle must have a pointer to the species tree
                 _locus_vect[g][i].setSpeciesTree(&_species_tree);
                 
-                // Each GParticle needs to know which locus it belongs to
+                // Each GParticle needs to know to which locus it belongs
                 _locus_vect[g][i].setLocusIndex(g);
                 
-                // Each GParticle needs to know which bundle it belongs to
+                // Each GParticle needs to know to which bundle it belongs
                 // but currently the bundle itself doean't know its index
                 // so this needs to be set in setBundleIndex
                 _locus_vect[g][i].setBundleIndex(-1);
@@ -114,7 +128,7 @@ namespace proj {
         // Find deepest gene tree
         double deepest_gene_tree = 0.0;
         for (unsigned g = 0; g < G::_nloci; g++) {
-            for (unsigned i = 0; i < G::_ngparticles; i++) {
+            for (unsigned i = 0; i < G::_nparticles; i++) {
                 double h = _locus_vect[g][i]._height;
                 if (h > deepest_gene_tree)
                     deepest_gene_tree = h;
@@ -123,7 +137,13 @@ namespace proj {
         
         // Search for and remove any nodes in the species
         // tree older than deepest_gene_tree
-        _species_tree.trimToHeight(deepest_gene_tree);
+        _species_tree.trimToHeight(deepest_gene_tree, _lot);
+    }
+    
+    inline void Bundle::initSpeciesTree() {
+        assert(_species_tree.getHeight() == 0.0);
+        auto spp_incr_rate = _species_tree.drawIncrement(_lot);
+        _species_tree.extendAllLineagesBy(spp_incr_rate.first);
     }
     
     inline void Bundle::debugSanityCheck() const {
@@ -132,7 +152,7 @@ namespace proj {
         vector<G::join_info_t> coal_info;
         _species_tree.recordJoinInfo(spec_info);
         for (unsigned g = 0; g < G::_nloci; g++) {
-            for (unsigned i = 0; i < G::_ngparticles; i++) {
+            for (unsigned i = 0; i < G::_nparticles; i++) {
                 output(format("\nlocus %d, particle %d:\n") % g % i, G::VDEBUG);
                 coal_info.clear();
                 _locus_vect[g][i].recordJoinInfo(coal_info);
@@ -157,7 +177,7 @@ namespace proj {
         _bundle_index = i;
         _species_tree.setIndex(i);
         for (unsigned g = 0; g < G::_nloci; g++) {
-            for (unsigned k = 0; k < G::_ngparticles; k++) {
+            for (unsigned k = 0; k < G::_nparticles; k++) {
                 // Let each GParticle know which bundle it belongs to
                 _locus_vect[g][k].setBundleIndex(i);
             }
@@ -189,16 +209,16 @@ namespace proj {
     inline void Bundle::getLogLikes(vector< vector<double> > & log_likes) const {
         log_likes.resize(G::_nloci);
         for (unsigned g = 0; g < G::_nloci; g++) {
-            log_likes[g].resize(G::_ngparticles, 0.0);
-            for (unsigned i = 0; i < G::_ngparticles; i++) {
+            log_likes[g].resize(G::_nparticles, 0.0);
+            for (unsigned i = 0; i < G::_nparticles; i++) {
                 log_likes[g][i] = _locus_vect[g][i].calcLogLikelihood();
             }
         }
     }
     
     void Bundle::getLogLikesForLocus(unsigned g, vector<double> & log_likes) const {
-        log_likes.resize(G::_ngparticles, 0.0);
-        for (unsigned i = 0; i < G::_ngparticles; i++) {
+        log_likes.resize(G::_nparticles, 0.0);
+        for (unsigned i = 0; i < G::_nparticles; i++) {
             log_likes[i] = _locus_vect[g][i].calcLogLikelihood();
         }
     }
@@ -210,8 +230,8 @@ namespace proj {
         output(format("%s\n") % _species_tree.info(), G::VSTANDARD);
         output(format("  %s\n") % _species_tree.makeNewick(5, true), G::VSTANDARD);
         for (unsigned g = 0; g < G::_nloci; g++) {
-            for (unsigned i = 0; i < G::_ngparticles; i++) {
-                string delim = (i == G::_ngparticles - 1 ? "\n" : "");
+            for (unsigned i = 0; i < G::_nparticles; i++) {
+                string delim = (i == G::_nparticles - 1 ? "\n" : "");
                 output(format("%12s%s") % _locus_vect[g][i].info() % delim, G::VDEBUG);
             }
         }
@@ -219,7 +239,7 @@ namespace proj {
     }
     
     inline void Bundle::randomizeEvaluationOrder() {
-        unsigned total_eval = G::_nloci*G::_ngparticles;
+        unsigned total_eval = G::_nloci*G::_nparticles;
         
         // Build a list of indices that we will choose from
         // Each time an index is chosen, that element will be removed from the list
@@ -230,10 +250,10 @@ namespace proj {
         }
         
         _eval_order.resize(total_eval);
-        for (G::_locus = 0; G::_locus < G::_nloci; G::_locus++) {
-            for (G::_particle = 0; G::_particle < G::_ngparticles; G::_particle++) {
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            for (unsigned p = 0; p < G::_nparticles; p++) {
                 // Choose index
-                double u = rng->uniform();
+                double u = _lot->uniform();
                 unsigned n = (unsigned)indices.size();
                 unsigned i = (unsigned)floor(u*n);
                 assert(i < indices.size());
@@ -241,7 +261,7 @@ namespace proj {
                 advance(iter, i);
                 unsigned index = *iter;
                 indices.erase(iter);
-                _eval_order[index] = make_pair(G::_locus, G::_particle);
+                _eval_order[index] = make_pair(g, p);
             }
         }
         
@@ -251,23 +271,23 @@ namespace proj {
         randomizeEvaluationOrder();
 
         output(format("Advancing all gene trees for all loci in bundle %d\n") % _bundle_index, G::VDEBUG);
-        for (auto p : _eval_order) {
-            G::_locus = p.first;
-            G::_particle = p.second;
-            _locus_vect[G::_locus][G::_particle].coalesce();
+        for (auto evalpair : _eval_order) {
+            unsigned locus = evalpair.first;
+            unsigned particle = evalpair.second;
+            _locus_vect[locus][particle].coalesce(_lot);
         }
     }
     
     inline void Bundle::filterAllGeneTrees(unsigned step) {
         output(format("Filtering gene trees for all loci in bundle %d\n") % _bundle_index, G::VDEBUG);
-        for (G::_locus = 0; G::_locus < G::_nloci; G::_locus++) {
-            output(format("    Gene %d\n") % G::_locus, G::VDEBUG);
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            output(format("    Gene %d\n") % g, G::VDEBUG);
             
             // Copy log weights for all particles in this locus to prob vector
-            vector<double> probs(G::_ngparticles, 0.0);
-            for (G::_particle = 0; G::_particle < G::_ngparticles; G::_particle++) {
-                probs[G::_particle] = _locus_vect[G::_locus][G::_particle].getLogWeight();
-                output(format(" %6d %12.5f\n") % G::_particle % probs[G::_particle], G::VDEBUG);
+            vector<double> probs(G::_nparticles, 0.0);
+            for (unsigned p = 0; p < G::_nparticles; p++) {
+                probs[p] = _locus_vect[g][p].getLogWeight();
+                output(format(" %6d %12.5f\n") % p % probs[p], G::VDEBUG);
             }
 
             // Normalize log_weights to create discrete probability distribution
@@ -276,18 +296,18 @@ namespace proj {
             transform(probs.begin(), probs.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
 
             // Compute component of the log marginal likelihood due to this step
-            _prev_log_marg_like[G::_locus] = _log_marg_like[G::_locus];
-            _log_marg_like[G::_locus] += log_sum_weights - log(G::_ngparticles);
+            _prev_log_marg_like[g] = _log_marg_like[g];
+            _log_marg_like[g] += log_sum_weights - log(G::_nparticles);
 
             // Compute cumulative probabilities
             partial_sum(probs.begin(), probs.end(), probs.begin());
             
             // Initialize vector of counts storing number of darts hitting each particle
-            vector<unsigned> counts(G::_ngparticles, 0);
+            vector<unsigned> counts(G::_nparticles, 0);
                     
-            // Throw _nparticles darts
-            for (unsigned i = 0; i < G::_ngparticles; ++i) {
-                double u = rng->uniform();
+            // Throw G::_nparticles darts
+            for (unsigned i = 0; i < G::_nparticles; ++i) {
+                double u = _lot->uniform();
                 auto it = find_if(probs.begin(), probs.end(), [u](double cump){return cump > u;});
                 assert(it != probs.end());
                 unsigned which = (unsigned)distance(probs.begin(), it);
@@ -296,7 +316,7 @@ namespace proj {
                 
             // Count number of cells that need copying to
             unsigned nzeros = 0;
-            for (unsigned i = 0; i < G::_ngparticles; i++) {
+            for (unsigned i = 0; i < G::_nparticles; i++) {
                 if (counts[i] == 0)
                     nzeros++;
             }
@@ -316,23 +336,23 @@ namespace proj {
                 }
                 
                 while (nzeros > 0) {
-                    assert(donor < G::_ngparticles);
-                    assert(recipient < G::_ngparticles);
-                    _locus_vect[G::_locus][recipient] = _locus_vect[G::_locus][donor];
+                    assert(donor < G::_nparticles);
+                    assert(recipient < G::_nparticles);
+                    _locus_vect[g][recipient] = _locus_vect[g][donor];
                     counts[donor]--;
                     counts[recipient]++;
                     nzeros--;
                     if (counts[donor] == 1) {
                         // Move donor to next slot with count > 1
                         donor++;
-                        while (donor < G::_ngparticles && counts[donor] < 2) {
+                        while (donor < G::_nparticles && counts[donor] < 2) {
                             donor++;
                         }
                     }
                     
                     // Move recipient to next slot with count equal to 0
                     recipient++;
-                    while (recipient < G::_ngparticles && counts[recipient] > 0) {
+                    while (recipient < G::_nparticles && counts[recipient] > 0) {
                         recipient++;
                     }
                 }
@@ -370,7 +390,7 @@ namespace proj {
         for (unsigned l = 0; l < G::_nloci; l++) {
             // Map counts (values) onto gene tree newicks (keys)
             map<string, unsigned> m;
-            for (unsigned p = 0; p < G::_ngparticles; p++) {
+            for (unsigned p = 0; p < G::_nparticles; p++) {
                 string newick = _locus_vect[l][p].makeNewick(9, false);
                 m[newick] += 1;
             }
@@ -388,6 +408,7 @@ namespace proj {
     inline void Bundle::operator=(const Bundle & other) {
         // _bundle_index should not be copied
         // _eval_order does not need to be copied
+        // _lot should NOT be copied
         
         // Copy species tree
         _species_tree = other._species_tree;
@@ -395,10 +416,12 @@ namespace proj {
         // Copy log marginal likelihood
         _log_marg_like = other._log_marg_like;
         
-        // Copy gene trees
+        // Copy gene trees and _prev_log_marg_like
         for (unsigned g = 0; g < G::_nloci; g++) {
-            for (unsigned i = 0; i < G::_ngparticles; i++) {
+            _prev_log_marg_like[g] = other._prev_log_marg_like[g];
+            for (unsigned i = 0; i < G::_nparticles; i++) {
                 _locus_vect[g][i] = other._locus_vect[g][i];
+                assert(_locus_vect[g][i].getSpeciesTree() == &_species_tree);
             }
         }
     }

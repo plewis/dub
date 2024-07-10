@@ -46,8 +46,8 @@ namespace proj {
             virtual void operator=(const Particle & other);
 
             // Pure virtuals
-            virtual pair<double, double> drawIncrement() = 0;
-            virtual void joinRandomPair() = 0;
+            virtual pair<double, double> drawIncrement(Lot::SharedPtr lot) = 0;
+            virtual void joinRandomPair(Lot::SharedPtr lot) = 0;
             virtual double calcLogLikelihood() const = 0;
             virtual void createTrivialForest() = 0;
             virtual string info() const = 0;
@@ -74,7 +74,7 @@ namespace proj {
         _next_node_number = 0;
         _is_species_tree = false;
     }
- 
+     
     inline void Particle::extendAllLineagesBy(double incr) {
         _height += incr;
         for (auto nd : _lineages) {

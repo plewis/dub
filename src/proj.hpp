@@ -96,8 +96,9 @@ namespace proj {
         ("subset",  value(&partition_subsets), "a string defining a partition subset, e.g. 'first:1-1234\3' or 'default[codon:standard]:1-3702'")
         ("speciestreeref",  value(&G::_species_tree_ref_file_name), "name of a tree file containing a single reference species tree")
         ("genetreeref",  value(&G::_gene_trees_ref_file_name), "name of a tree file containing a reference gene tree for each locus")
-        ("nsparticles", value(&G::_nsparticles)->default_value(100), "number of species-tree particles")
-        ("ngparticles", value(&G::_ngparticles)->default_value(100), "number of gene-tree particles per locus")
+        ("nthreads",  value(&G::_nthreads)->default_value(1), "number of threads (each thread will handle nparticles/nthreads particle updates)")
+        ("nbundles", value(&G::_nbundles)->default_value(100), "number of bundles")
+        ("nparticles", value(&G::_nparticles)->default_value(100), "number of gene-tree particles per locus per bundle")
         ("lambda", value(&G::_lambda)->default_value(1.0), "speciation rate")
         ("theta", value(&G::_theta)->default_value(0.1), "mutation-scaled population size parameter")
         ("ambigmissing",  value(&_ambig_missing)->default_value(true), "treat all ambiguities as missing data")
@@ -145,6 +146,17 @@ namespace proj {
                 ::partition->parseSubsetDefinition(s);
             }
         }
+
+#if defined(USING_MULTITHREADING)
+        // nothing to do
+#else
+        if (vm.count("nthreads") > 0) {
+            if (G::_nthreads != 1) {
+                output(format("\nWARNING: You specified %d threads but this non-multithreading version only allows 1 thread\nProceeding with a single thread.\n\n")  % G::_nthreads,G::VSTANDARD);
+                G::_nthreads = 1;
+            }
+        }
+#endif
     }
     
     inline void Proj::readData() {
@@ -519,7 +531,7 @@ namespace proj {
                 end_site = begin_site + ::partition->numSitesInSubset(g) - 1;
 
                 // Number of points is number of bundles times number of particles per bundle for locus g
-                unsigned npoints = G::_nsparticles*G::_ngparticles;
+                unsigned npoints = G::_nbundles*G::_nparticles;
                 
                 // log-likelihoods for every gene tree in every bundle for locus g
                 vector<double> lnL;
@@ -532,20 +544,20 @@ namespace proj {
                 // Use a different random color for every bundle
                 vector<string> rcolor;
                 rcolor.reserve(npoints);
-                for (unsigned b = 0; b < G::_nsparticles; b++) {
+                for (unsigned b = 0; b < G::_nbundles; b++) {
                     string random_rcolor = ::rcolors[rng->randint(0, nrcolors-1)];
-                    fill_n(back_inserter(rcolor), G::_ngparticles, random_rcolor);
+                    fill_n(back_inserter(rcolor), G::_nparticles, random_rcolor);
                 }
                 
-                for (unsigned b = 0; b < G::_nsparticles; b++) {
+                for (unsigned b = 0; b < G::_nbundles; b++) {
                     // Save vector of log likelihoods for bundle b, locus g
                     vector<double> log_likes;
                     smc.saveLogLikesForLocus(b, g, log_likes);
                     
-                    // Dump these G::_ngparticles log likelihoods into lnL
+                    // Dump these G::_nparticles log likelihoods into lnL
                     lnL.insert(lnL.end(), log_likes.begin(), log_likes.end());
                     
-                    for (unsigned i = 0; i < G::_ngparticles; i++) {
+                    for (unsigned i = 0; i < G::_nparticles; i++) {
                         auto kf_rf = Particle::calcTreeDistances(gene_ref_vect[g], smc.getGeneTreeConst(b,g,i));
                         dRF.push_back(kf_rf.second);
                     }
@@ -592,16 +604,16 @@ namespace proj {
                 nexf << "begin trees;\n";
                 nexf << str(format("  tree gtrue = [&R] %s;\n") % gene_ref_vect[g].makeNewick(9, true));
 
-                for (unsigned b = 0; b < G::_nsparticles; b++) {
+                for (unsigned b = 0; b < G::_nbundles; b++) {
                     // Save newick tree descriptions for every bundle's gene trees for locus g
                     vector<string> newicks;
                     smc.saveGeneTreeBundleLocus(b, g, newicks, /*compress*/false);
-                    assert(G::_ngparticles == newicks.size());
+                    assert(G::_nparticles == newicks.size());
                     
                     vector<double> log_likes;
                     smc.saveLogLikesForLocus(b, g, log_likes);
                     
-                    for (unsigned i = 0; i < G::_ngparticles; i++) {
+                    for (unsigned i = 0; i < G::_nparticles; i++) {
                         nexf << str(format("  tree t%d [lnL = %.9f] = [&R] %s;\n") % (i+1) % log_likes[i] % newicks[i]);
                     }
                 }
@@ -627,7 +639,7 @@ namespace proj {
                 begin_site = end_site + 1;
             } // locus loop
 #else
-            unsigned nbundles = G::_nsparticles;
+            unsigned nbundles = G::_nbundles;
             for (unsigned b = 0; b < nbundles; b++) {
                 // Save vector of log likelihoods for every locus
                 vector< vector<double> > log_likes;
@@ -641,13 +653,13 @@ namespace proj {
                 for (unsigned g = 0; g < G::_nloci; g++) {
                     ofstream Rfile(str(format("bundle%d-locus%d-scatterplot.R") % b % g));
                     Rfile << "rf <- c(";
-                    for (unsigned i = 0; i < G::_ngparticles; i++) {
+                    for (unsigned i = 0; i < G::_nparticles; i++) {
                         auto kf_rf = Particle::calcTreeDistances(gene_ref_vect[g], smc.getGeneTreeConst(b,g,i));
                         Rfile << (i > 0 ? "," : "") << kf_rf.second;
                     }
                     Rfile << ")\n";
                     Rfile << "lnl <- c(";
-                    for (unsigned i = 0; i < G::_ngparticles; i++) {
+                    for (unsigned i = 0; i < G::_nparticles; i++) {
                         Rfile << (i > 0 ? "," : "") << str(format("%.5f") % log_likes[g][i]);
                     }
                     Rfile << ")\n";
@@ -675,9 +687,9 @@ namespace proj {
                     // for locus g
                     vector<string> newicks;
                     smc.saveGeneTrees(b, g, newicks);
-                    assert(G::_ngparticles == newicks.size());
+                    assert(G::_nparticles == newicks.size());
 
-                    for (unsigned i = 0; i < G::_ngparticles; i++) {
+                    for (unsigned i = 0; i < G::_nparticles; i++) {
                         nexf << str(format("  tree h%d [lnL = %.9f] = [&R] %s;\n") % (i+1) % log_likes[g][i] % newicks[i]);
                     }
                     nexf << "end;\n\n";
@@ -752,10 +764,10 @@ namespace proj {
         memf << str(format("  No. species:                %d\n") % G::_nspecies);
         memf << str(format("  No. taxa:                   %d\n") % G::_ntaxa);
         memf << str(format("  No. loci:                   %d\n") % G::_nloci);
-        memf << str(format("  No. species tree particles: %d\n") % G::_nsparticles);
-        memf << str(format("  No. gene tree particles:    %d\n") % (G::_nsparticles*G::_nloci*G::_ngparticles));
-        memf << str(format("  SParticle memory used:      %.1f MB\n") % (Smem*G::_nsparticles/1048576));
-        memf << str(format("  GParticle memory used:      %.1f GB\n") % (Gmem*G::_nsparticles*G::_nloci*G::_ngparticles/1073741824));
+        memf << str(format("  No. species tree particles: %d\n") % G::_nbundles);
+        memf << str(format("  No. gene tree particles:    %d\n") % (G::_nbundles*G::_nloci*G::_nparticles));
+        memf << str(format("  SParticle memory used:      %.1f MB\n") % (Smem*G::_nbundles/1048576));
+        memf << str(format("  GParticle memory used:      %.1f GB\n") % (Gmem*G::_nbundles*G::_nloci*G::_nparticles/1073741824));
         ::data->memoryReport(memf);
     }
 #endif

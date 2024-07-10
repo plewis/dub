@@ -8,6 +8,7 @@ namespace proj {
             ~SMC() {}
             
             void run();
+            void advanceBundleRange(unsigned step, unsigned thread, unsigned first, unsigned last);
             
             unsigned saveBestSpeciesTree() const;
 
@@ -32,19 +33,22 @@ namespace proj {
             void filterBundles(unsigned step);
             void sanityCheckBundles() const;
         
-            vector<Bundle>           _bundle;
+            vector<unsigned>    _update_seeds;
+            vector<Bundle *>    _bundle_vect;
     };
     
     inline const SParticle & SMC::getSpeciesTreeConst(unsigned b) const {
-        assert(b < _bundle.size());
-        return _bundle[b].getSpeciesTreeConst();
+        assert(b < _bundle_vect.size());
+        assert(_bundle_vect[b]);
+        return _bundle_vect[b]->getSpeciesTreeConst();
     }
     
     inline const GParticle & SMC::getGeneTreeConst(unsigned b, unsigned g, unsigned i) const {
-        assert(b < _bundle.size());
+        assert(b < _bundle_vect.size());
+        assert(_bundle_vect[b]);
         assert(g < G::_nloci);
-        assert(i < G::_ngparticles);
-        return _bundle[b].getGeneTreeConst(g, i);
+        assert(i < G::_nparticles);
+        return _bundle_vect[b]->getGeneTreeConst(g, i);
     }
     
     inline void SMC::saveSpeciesTrees(vector<string> & newicks, bool compress) const {
@@ -55,8 +59,9 @@ namespace proj {
             // Create map with newicks as keys and counts as values
             newicks.clear();
             map<string, unsigned> freq;
-            for (unsigned i = 0; i < G::_nsparticles; i++) {
-                string newick = _bundle[i].getSpeciesTreeConst().makeNewick(9, true);
+            for (unsigned i = 0; i < G::_nbundles; i++) {
+                assert(_bundle_vect[i]);
+                string newick = _bundle_vect[i]->getSpeciesTreeConst().makeNewick(9, true);
                 freq[newick] += 1;
             }
 
@@ -72,9 +77,10 @@ namespace proj {
         }
         else {
             // Save all species trees, even if they are all identical newick strings
-            newicks.resize(G::_nsparticles);
-            for (unsigned i = 0; i < G::_nsparticles; i++) {
-                newicks[i] = _bundle[i].getSpeciesTreeConst().makeNewick(9, true);
+            newicks.resize(G::_nbundles);
+            for (unsigned i = 0; i < G::_nbundles; i++) {
+                assert(_bundle_vect[i]);
+                newicks[i] = _bundle_vect[i]->getSpeciesTreeConst().makeNewick(9, true);
             }
         }
     }
@@ -95,6 +101,7 @@ namespace proj {
     }
     
     inline void SMC::saveGeneTreeBundleLocus(unsigned b, unsigned g, vector<string> & newicks, bool compress) const {
+        assert(_bundle_vect[b]);
         if (compress) {
             // Save only unique newick species tree descriptions
             // May save same topology many times if edge lengths differ
@@ -102,8 +109,8 @@ namespace proj {
             // Create map with newicks as keys and counts as values
             newicks.clear();
             map<string, unsigned> freq;
-            for (unsigned i = 0; i < G::_ngparticles; i++) {
-                string newick = _bundle[b].getGeneTreeConst(g, i).makeNewick(9, true);
+            for (unsigned i = 0; i < G::_nparticles; i++) {
+                string newick = _bundle_vect[b]->getGeneTreeConst(g, i).makeNewick(9, true);
                 freq[newick] += 1;
             }
             
@@ -119,9 +126,9 @@ namespace proj {
         }
         else {
             // Save all species trees, even if they are all identical newick strings
-            newicks.resize(G::_ngparticles);
-            for (unsigned i = 0; i < G::_nsparticles; i++) {
-                newicks[i] = _bundle[b].getGeneTreeConst(g, i).makeNewick(9, true);
+            newicks.resize(G::_nparticles);
+            for (unsigned i = 0; i < G::_nbundles; i++) {
+                newicks[i] = _bundle_vect[b]->getGeneTreeConst(g, i).makeNewick(9, true);
             }
         }
     }
@@ -149,9 +156,10 @@ namespace proj {
             // Create map with newicks as keys and counts as values
             newicks.clear();
             map<string, unsigned> freq;
-            for (unsigned i = 0; i < G::_nsparticles; i++) {
-                for (unsigned j = 0; j < G::_ngparticles; j++) {
-                    string newick = _bundle[i].getGeneTreeConst(g, j).makeNewick(9, true);
+            for (unsigned i = 0; i < G::_nbundles; i++) {
+                assert(_bundle_vect[i]);
+                for (unsigned j = 0; j < G::_nparticles; j++) {
+                    string newick = _bundle_vect[i]->getGeneTreeConst(g, j).makeNewick(9, true);
                     freq[newick] += 1;
                 }
             }
@@ -168,10 +176,11 @@ namespace proj {
         }
         else {
             // Save all species trees, even if they are all identical newick strings
-            newicks.resize(G::_ngparticles);
-            for (unsigned i = 0; i < G::_nsparticles; i++) {
-                for (unsigned j = 0; j < G::_ngparticles; j++) {
-                    newicks[i] = _bundle[i].getGeneTreeConst(g, j).makeNewick(9, true);
+            newicks.resize(G::_nparticles);
+            for (unsigned i = 0; i < G::_nbundles; i++) {
+                assert(_bundle_vect[i]);
+                for (unsigned j = 0; j < G::_nparticles; j++) {
+                    newicks[i] = _bundle_vect[i]->getGeneTreeConst(g, j).makeNewick(9, true);
                 }
             }
         }
@@ -192,108 +201,24 @@ namespace proj {
         treef.close();
     }
     
-//    inline void SMC::saveGeneTrees(unsigned bundle_index, unsigned locus, vector<string> & newicks, bool compress) {
-//        typedef tuple<unsigned, double, string, string, string> treeinfo_t;
-//        treeinfo_t treeinfo;
-//        vector<treeinfo_t> treeinfo_vect;
-//        if (compress) {
-//            // Save only unique newick strings
-//            map<string,vector<GeneTreeDetails> > tree_info;
-//            for (const Particle & p : particle_list) {
-//                GeneTreeDetails info;
-//
-//                // Get count for this particle
-//                info._count = p.getCount();
-//
-//                // Get newick tree description for this gene tree
-//                assert(gene_index < p.getGeneForestsConst().size());
-//                const GeneForest & gf = p.getGeneForestsConst()[gene_index];
-//                string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
-//
-//                // Calculate log-likelihood for this gene tree
-//                info._log_likelihood = gf.calcLogLikelihood();
-//
-//                // Record everything for this particle
-//                tree_info[newick].push_back(info);
-//            }
-//
-//            ofstream tmpf(str(format("%s.txt") % fnprefix));
-//            unsigned i = 0;
-//            for (auto it = tree_info.begin(); it != tree_info.end(); ++it) {
-//                const string & newick = it->first;
-//                vector<GeneTreeDetails> & details_vect = it->second;
-//
-//                // Calculate total count (i.e. freq)
-//                unsigned total_c = 0;
-//                for (auto v : details_vect) {
-//                    total_c += v._count;
-//                }
-//
-//                tmpf << total_c << " <-- " << newick << endl;
-//                unsigned k = 0;
-//                for (auto v : details_vect) {
-//                    unsigned c = v._count;
-//                    tmpf << "  particle: " << k << endl;
-//                    tmpf << "    count: " << c << endl;
-//                    tmpf << "    log_like: " << str(format("%.9f") % v._log_likelihood) << endl;
-//                    tmpf << endl;
-//                    k++;
-//                }
-//
-//                double pct = 100.0*total_c/_nparticles;
-//                string note = str(format("freq = %d") % total_c);
-//                string treename = str(format("'tree%d-freq%d'") % i % total_c);
-//                treeinfo = make_tuple(total_c, pct, note, treename, newick);
-//                treeinfo_vect.push_back(treeinfo);
-//                ++i;
-//            }
-//            tmpf.close();
-//        }
-//        else {
-//            unsigned i = 0;
-//            for (const Particle & p : particle_list) {
-//                unsigned c = p.getCount();
-//                assert(gene_index < p.getGeneForestsConst().size());
-//                const GeneForest & gf = p.getGeneForestsConst()[gene_index];
-//                string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
-//                if (compression_level == 1) {
-//                    double pct = 100.0*c/_nparticles;
-//                    string note = str(format("freq = %d") % c);
-//                    string treename = str(format("'tree%d-freq%d'") % i % c);
-//                    treeinfo = make_tuple(c, pct, note, treename, newick);
-//                    treeinfo_vect.push_back(treeinfo);
-//                    i++;
-//                }
-//                else {
-//                    double pct = 100.0/_nparticles;
-//                    string note = "freq = 1";
-//                    for (unsigned j = 0; j < c; j++) {
-//                        string treename = str(format("'tree%d-freq1'") % i);
-//                        treeinfo = make_tuple(c, pct, note, treename, newick);
-//                        treeinfo_vect.push_back(treeinfo);
-//                        i++;
-//                    }
-//                }
-//            }
-//        }
-//        string fn = str(format("%s.tre") % fnprefix);
-//        outputAnnotatedNexusTreefile(fn, treeinfo_vect);
-//    }
     inline void SMC::saveLogMargLike(vector<double> & log_marg_like) const {
-        log_marg_like.resize(G::_nsparticles);
-        for (unsigned i = 0; i < G::_nsparticles; i++) {
-            log_marg_like[i] = _bundle[i].getLogMargLike();
+        log_marg_like.resize(G::_nbundles);
+        for (unsigned i = 0; i < G::_nbundles; i++) {
+            assert(_bundle_vect[i]);
+            log_marg_like[i] = _bundle_vect[i]->getLogMargLike();
         }
     }
     
     inline void SMC::saveLogLikesForLocus(unsigned b, unsigned g, vector<double> & log_likes) const {
-        _bundle[b].getLogLikesForLocus(g, log_likes);
+        assert(_bundle_vect[b]);
+        _bundle_vect[b]->getLogLikesForLocus(g, log_likes);
     }
 
     inline void SMC::saveLogLikes(unsigned b, vector< vector<double> > & log_likes_for_locus) const {
+        assert(_bundle_vect[b]);
         log_likes_for_locus.resize(G::_nloci);
         for (unsigned g = 0; g < G::_nloci; g++) {
-            _bundle[b].getLogLikes(log_likes_for_locus);
+            _bundle_vect[b]->getLogLikes(log_likes_for_locus);
         }
     }
     
@@ -301,37 +226,39 @@ namespace proj {
         output("Filtering bundles...\n", G::VDEBUG);
 
         // Copy log weights for all bundles to prob vector
-        vector<double> probs(G::_nsparticles, 0.0);
-        for (G::_bundle = 0; G::_bundle < G::_nsparticles; G::_bundle++) {
-            probs[G::_bundle] = _bundle[G::_bundle].getLogWeight();
+        vector<double> probs(G::_nbundles, 0.0);
+        for (unsigned b = 0; b < G::_nbundles; b++) {
+            assert(_bundle_vect[b]);
+            probs[b] = _bundle_vect[b]->getLogWeight();
         }
 
         // Normalize log_weights to create discrete probability distribution
         double log_sum_weights = G::calcLogSum(probs);
         transform(probs.begin(), probs.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
         
-        G::_log_marg_like += log_sum_weights - log(G::_nsparticles);
+        G::_log_marg_like += log_sum_weights - log(G::_nbundles);
 
         // Compute cumulative probabilities
         partial_sum(probs.begin(), probs.end(), probs.begin());
 
         // Initialize vector of counts storing number of darts hitting each particle
-        vector<unsigned> counts(G::_nsparticles, 0);
+        vector<unsigned> counts(G::_nbundles, 0);
 
-        // Throw _nparticles darts
-        for (unsigned i = 0; i < G::_nsparticles; ++i) {
+        // Throw G::_nbundles darts
+        for (unsigned i = 0; i < G::_nbundles; ++i) {
             double u = rng->uniform();
+            
             auto it = find_if(probs.begin(), probs.end(), [u](double cump){return cump > u;});
             assert(it != probs.end());
             unsigned which = (unsigned)distance(probs.begin(), it);
             counts[which]++;
         }
-
+        
         // Copy particles
 
         // Count number of cells with zero count that can serve as copy recipients
         unsigned nzeros = 0;
-        for (unsigned i = 0; i < G::_nsparticles; i++) {
+        for (unsigned i = 0; i < G::_nbundles; i++) {
             if (counts[i] == 0)
                 nzeros++;
         }
@@ -352,11 +279,13 @@ namespace proj {
             }
 
             while (nzeros > 0) {
-                assert(donor < G::_nsparticles);
-                assert(recipient < G::_nsparticles);
+                assert(donor < G::_nbundles);
+                assert(recipient < G::_nbundles);
 
                 // Copy donor to recipient
-                _bundle[recipient] = _bundle[donor];
+                assert(_bundle_vect[donor]);
+                assert(_bundle_vect[recipient]);
+                *(_bundle_vect[recipient]) = *(_bundle_vect[donor]);
 
                 counts[donor]--;
                 counts[recipient]++;
@@ -365,14 +294,14 @@ namespace proj {
                 if (counts[donor] == 1) {
                     // Move donor to next slot with count > 1
                     donor++;
-                    while (donor < G::_nsparticles && counts[donor] < 2) {
+                    while (donor < G::_nbundles && counts[donor] < 2) {
                         donor++;
                     }
                 }
 
                 // Move recipient to next slot with count equal to 0
                 recipient++;
-                while (recipient < G::_nsparticles && counts[recipient] > 0) {
+                while (recipient < G::_nbundles && counts[recipient] > 0) {
                     recipient++;
                 }
             }
@@ -383,12 +312,13 @@ namespace proj {
         unsigned best_bundle = 0;
         double best_log_marg_like = G::_negative_infinity;
         string best_species_tree = "";
-        for (G::_bundle = 0; G::_bundle < G::_nsparticles; G::_bundle++) {
-            double log_marg_like = _bundle[G::_bundle].report();
+        for (unsigned b = 0; b < G::_nbundles; b++) {
+            assert(_bundle_vect[b]);
+            double log_marg_like = _bundle_vect[b]->report();
             if (log_marg_like > best_log_marg_like) {
-                best_bundle = G::_bundle;
+                best_bundle = b;
                 best_log_marg_like = log_marg_like;
-                best_species_tree = _bundle[G::_bundle].getSpeciesTreeConst().makeNewick(5, true);
+                best_species_tree = _bundle_vect[b]->getSpeciesTreeConst().makeNewick(5, true);
             }
         }
         
@@ -407,32 +337,37 @@ namespace proj {
     }
     
     inline void SMC::sanityCheckBundles() const {
-        for (G::_bundle = 0; G::_bundle < G::_nsparticles; G::_bundle++) {
-            _bundle[G::_bundle].debugSanityCheck();
+        for (unsigned b = 0; b < G::_nbundles; b++) {
+            assert(_bundle_vect[b]);
+            _bundle_vect[b]->debugSanityCheck();
         }
     }
     
 #if defined(STOW_UNUSED_PARTIALS)
     inline void SMC::returnUnusedPartials() {
-        // Determine which partials can be deleted
-        vector<map<string, int> > unused(G::_nloci);
-        map<string, PartialStore::partial_t> key;
-        for (unsigned g = 0; g < G::_nloci; g++) {
-            for (unsigned b = 0; b < G::_nsparticles; b++) {
-                for (unsigned i = 0; i < G::_ngparticles; i++) {
-                    _bundle[b].getGParticleConst(g,i).enumerateUnusedPartials(unused, key);
+        {   // scope ensures that unused will be deleted (and the partials it stores as keys
+            // will have their use counts decremented) before actually deleting unused partials
+            
+            // Determine which partials can be deleted
+            vector<map<PartialStore::partial_t, int> > unused(G::_nloci);
+            for (unsigned g = 0; g < G::_nloci; g++) {
+                for (unsigned b = 0; b < G::_nbundles; b++) {
+                    assert(_bundle_vect[b]);
+                    for (unsigned i = 0; i < G::_nparticles; i++) {
+                        _bundle_vect[b]->getGParticleConst(g,i).enumerateUnusedPartials(unused);
+                    }
                 }
             }
-        }
 
-        // If unused[locus][partial] > -1, stow partial
-        for (unsigned g = 0; g < G::_nloci; g++) {
-            for (auto & mpair : unused[g]) {
-                PartialStore::partial_t     p = key[mpair.first];
-                int                     count = mpair.second;
-                if (count > -1) {
-                    if (!p->_in_storage) {
-                        ps.putPartial(g, p);
+            // If unused[locus][partial] > -1, stow partial
+            for (unsigned g = 0; g < G::_nloci; g++) {
+                for (auto & mpair : unused[g]) {
+                    PartialStore::partial_t     p = mpair.first;
+                    int                     count = mpair.second;
+                    if (count > -1) {
+                        if (!p->_in_storage) {
+                            ps.stowPartial(g, p);
+                        }
                     }
                 }
             }
@@ -440,9 +375,10 @@ namespace proj {
 
         // Delete partials that have been stowed
         for (unsigned g = 0; g < G::_nloci; g++) {
-            for (unsigned b = 0; b < G::_nsparticles; b++) {
-                for (unsigned i = 0; i < G::_ngparticles; i++) {
-                    _bundle[b].getGParticle(g,i).deleteStowedPartials();
+            for (unsigned b = 0; b < G::_nbundles; b++) {
+                assert(_bundle_vect[b]);
+                for (unsigned i = 0; i < G::_nparticles; i++) {
+                    _bundle_vect[b]->getGParticle(g,i).deleteStowedPartials();
                 }
             }
         }
@@ -451,15 +387,33 @@ namespace proj {
     
     inline void SMC::run() {
         // Sanity checks
-        assert(G::_nsparticles > 0);
-        assert(G::_ngparticles > 0);
+        assert(G::_nbundles > 0);
+        assert(G::_nparticles > 0);
         assert(G::_nloci > 0);
 
-        // Create vector of G::_nsparticles Bundle objects
-        _bundle.resize(G::_nsparticles);
-        for (unsigned i = 0; i < G::_nsparticles; i++) {
-            _bundle[i].setBundleIndex(i);
+        // Create vector of G::_nbundles Bundle objects
+        _bundle_vect.resize(G::_nbundles);
+        for (unsigned i = 0; i < G::_nbundles; i++) {
+            _bundle_vect[i] = new Bundle();
+            assert(_bundle_vect[i]);
+            _bundle_vect[i]->setBundleIndex(i);
         }
+
+#if defined(USING_MULTITHREADING)
+        unsigned bundles_per_thread = G::_nbundles/G::_nthreads;
+        output(format("\nUsing %d threads:\n") % G::_nthreads, G::VSTANDARD);
+        unsigned bstart = 0;
+        unsigned bend = bundles_per_thread;
+        for (unsigned th = 0; th < G::_nthreads; th++) {
+            output(format("  thread %d will process bundles %d to %d:\n") % (th+1) % (bstart+1) % bend, G::VSTANDARD);
+            bstart = bend;
+            bend += bundles_per_thread;
+            if (bend > G::_nbundles)
+                bend = G::_nbundles;
+        }
+#else
+        output(format("\nSole thread will process bundles 1 to %d\n") % G::_nbundles, G::VSTANDARD);
+#endif
         
         // *****************
         // *** Main loop ***
@@ -472,24 +426,64 @@ namespace proj {
         G::_log_marg_like = 0.0;
         
         output("\n", G::VSTANDARD);
-        for (G::_step = 0; G::_step < nsteps; G::_step++) {
-            output(format("Step %d of %d\n") % (G::_step + 1) % nsteps, G::VSTANDARD);
+        for (unsigned step = 0; step < nsteps; step++) {
+            output(format("Step %d of %d\n") % (step + 1) % nsteps, G::VSTANDARD);
+
+            _update_seeds.resize(G::_nbundles);
+            G::generateUpdateSeeds(_update_seeds);
             
-            for (G::_bundle = 0; G::_bundle < G::_nsparticles; G::_bundle++) {
-                output(format("  Bundle %d\n") % G::_bundle, G::VDEBUG);
-                _bundle[G::_bundle].advanceAllGeneTrees();
-                _bundle[G::_bundle].filterAllGeneTrees(G::_step);
-                _bundle[G::_bundle].shrinkWrapSpeciesTree();
+#if defined(USING_MULTITHREADING)
+            bstart = 0;
+            bend   = bundles_per_thread;
+            vector<thread> threads;
+            for (unsigned th = 0; th < G::_nthreads; th++) {
+                threads.push_back(
+                    thread(&SMC::advanceBundleRange,
+                        this,
+                        step,
+                        th,
+                        bstart,
+                        bend
+                    )
+                );
+                bstart =  bend;
+                bend   += bundles_per_thread;
+                if (bend > G::_nbundles)
+                    bend = G::_nbundles;
             }
-            filterBundles(G::_step);
+
+            // The join function causes this loop to pause until the ith thread finishes
+            for (unsigned i = 0; i < threads.size(); i++) {
+                threads[i].join();
+            }
+#else
+            advanceBundleRange(/*step*/step, /*thread*/0, /*first*/0, /*last*/G::_nbundles);
+#endif
+
+            filterBundles(step);
+            
 #if defined(STOW_UNUSED_PARTIALS)
             returnUnusedPartials();
 #endif
         }
         
         unsigned best_bundle = saveBestSpeciesTree();
-        _bundle[best_bundle].saveJavascript("newicks-best");
+        assert(_bundle_vect[best_bundle]);
+        _bundle_vect[best_bundle]->saveJavascript("newicks-best");
         output(format("log marginal likelihood = %.5f\n") % G::_log_marg_like, G::VSTANDARD);
     }
-    
+
+    inline void SMC::advanceBundleRange(unsigned step, unsigned thread, unsigned first, unsigned last) {
+        for (unsigned b = first; b < last; b++) {
+            assert(_bundle_vect[b]);
+            _bundle_vect[b]->setSeed(_update_seeds[b]);
+            if (step == 0) {
+                _bundle_vect[b]->initSpeciesTree();
+            }
+            _bundle_vect[b]->advanceAllGeneTrees();
+            _bundle_vect[b]->filterAllGeneTrees(step);
+            _bundle_vect[b]->shrinkWrapSpeciesTree();
+        }
+    }
+
 }

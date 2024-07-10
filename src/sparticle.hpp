@@ -23,15 +23,15 @@ namespace proj {
             G::join_info_t heightOfNextNodeAbove(double h, const vector<G::join_info_t> & spec_info) const;
             
             void sanityCheck(unsigned step, unsigned bundle) const;
-            void joinThenIncrement();
-            void trimToHeight(double h0);
+            void joinThenIncrement(Lot::SharedPtr lot);
+            void trimToHeight(double h0, Lot::SharedPtr lot);
             
             // Overrides of base class virtual functions
             virtual void recordJoinInfo(vector<G::join_info_t> & join_info) const;
 
             // Overrides of base class abstract virtual functions
-            pair<double, double> drawIncrement();
-            void joinRandomPair();
+            pair<double, double> drawIncrement(Lot::SharedPtr lot);
+            void joinRandomPair(Lot::SharedPtr lot);
             double calcLogLikelihood() const;
             void createTrivialForest();
             string info() const {
@@ -61,7 +61,7 @@ namespace proj {
         refreshSplits();
     }
     
-    inline void SParticle::joinRandomPair() {
+    inline void SParticle::joinRandomPair(Lot::SharedPtr lot) {
         // Grab next node to use as ancestor
         unsigned node_number = _next_node_number;
         size_t n = _returned_node_numbers.size();
@@ -78,7 +78,7 @@ namespace proj {
         anc->setEdgeLength(0.0);
         
         // Choose two existing lineages at random to join
-        pair<unsigned, unsigned> lr = rng->nchoose2((unsigned)_lineages.size());
+        pair<unsigned, unsigned> lr = lot->nchoose2((unsigned)_lineages.size());
         Node * lchild = _lineages[lr.first];
         Node * rchild = _lineages[lr.second];
         
@@ -88,13 +88,13 @@ namespace proj {
         output(format("joining species %d and %d to form %d\n") % lchild->_species % rchild->_species % anc->_species, G::VDEBUG);
     }
 
-    inline pair<double, double> SParticle::drawIncrement() {
+    inline pair<double, double> SParticle::drawIncrement(Lot::SharedPtr lot) {
         // Choose an increment at random from the Exp(n*lambda) prior
         // where n is the current number of lineages
         unsigned n = (unsigned)_lineages.size();
         double rate = G::_lambda*n;
         double scale = 1.0/rate;
-        double incr = rng->gamma(1.0, scale);
+        double incr = lot->gamma(1.0, scale);
         return make_pair(incr, rate);
     }
 
@@ -143,13 +143,13 @@ namespace proj {
         }
     }
 
-    inline void SParticle::joinThenIncrement() {
-        joinRandomPair();
-        auto incr_rate = drawIncrement();
+    inline void SParticle::joinThenIncrement(Lot::SharedPtr lot) {
+        joinRandomPair(lot);
+        auto incr_rate = drawIncrement(lot);
         extendAllLineagesBy(incr_rate.first);
     }
 
-    inline void SParticle::trimToHeight(double h0) {
+    inline void SParticle::trimToHeight(double h0, Lot::SharedPtr lot) {
         //  Assume there are 3 lineages in the species tree
         //  After filtering gene trees from all loci, the
         //  height of the deepest coalescent event in any
@@ -225,7 +225,7 @@ namespace proj {
         // Choose a new species tree increment and adjust edge lengths of all
         // nodes in _lineages so that height of the species tree is h0 plus
         // the new increment.
-        pair<double,double> incr_rate = drawIncrement();
+        pair<double,double> incr_rate = drawIncrement(lot);
         double incr = incr_rate.first;
         for (auto nd : _lineages) {
             //  a   b   c   d   e  f   g   h
@@ -255,21 +255,38 @@ namespace proj {
             // If species tree is complete, add final element at infinity
             // with all zeros for species. This indicates that anything goes
             // with respect to coalescence because we are in the ancestral species
-            join_info.push_back({G::_infinity, true, G::_species_zero, G::_species_zero});
+            join_info.push_back({
+                G::_infinity,      /*height*/
+                true,              /*species tree*/
+                G::_species_zero,  /*left child species*/
+                G::_species_zero   /*right child species*/
+            });
         }
         else {
             // If species tree is not complete, add final element at _height
             // with all zeros for species representing the point at which
             // the next join will occur
-            join_info.push_back({_height, true, G::_species_zero, G::_species_zero});
+            join_info.push_back({
+                _height,          /*height*/
+                true,             /*species tree*/
+                G::_species_zero, /*left child species*/
+                G::_species_zero  /*right child species*/
+            });
         }
     }
     
     inline G::join_info_t SParticle::heightOfNextNodeAbove(double h, const vector<G::join_info_t> & spec_info) const {
-        // If there are no elements in spec_info, then species tree has not yet experienced a join,
-        // in which case the height returned should be _height, which is the height at which the
-        // next join will occur when it happens.
-        G::join_info_t next_speciation = make_tuple(_height, true, G::_species_zero, G::_species_zero);
+        // If there are no elements in spec_info, then species tree
+        // has not yet experienced a join, in which case the height
+        // returned should be _height, which is the height at which
+        // the next join will occur when it happens. If the species
+        // tree is complete, _height = G::_infinity.
+        G::join_info_t next_speciation = make_tuple(
+            _height,           /*height*/
+            true,              /*is species tree*/
+            G::_species_zero,  /*left child species*/
+            G::_species_zero   /*right child species*/
+        );
         for (auto & si : spec_info) {
             double ht = get<0>(si);
             if (ht > h) {
@@ -277,6 +294,7 @@ namespace proj {
                 break;
             }
         }
+        
         return next_speciation;
     }
 

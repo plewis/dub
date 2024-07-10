@@ -6,3 +6,6 @@
 
 // Uncomment to store partials as soon as they are no longer needed
 //#define STOW_UNUSED_PARTIALS
+
+// Uncomment to divide up work among several threads
+//#define USING_MULTITHREADING
