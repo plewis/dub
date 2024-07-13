@@ -1,14 +1,7 @@
 #pragma once
 
-//extern void output(string msg, proj::G::verbosity_t verb);
-//extern void output(format & fmt, proj::G::verbosity_t level);
 extern void doof(string msg, proj::G::verbosity_t verb);
 extern void doof(format & fmt, proj::G::verbosity_t level);
-//extern proj::PartialStore         ps;
-//extern proj::StopWatch            stopwatch;
-//extern proj::Lot::SharedPtr       rng;
-//extern proj::Partition::SharedPtr partition;
-//extern proj::Data::SharedPtr      data;
 
 namespace proj {
 
@@ -22,7 +15,7 @@ namespace proj {
             void operator=(const Bundle & other);
             
             // Getters and setters
-            void setBundleIndex(unsigned i);
+            void setBundleIndex(unsigned i) {_bundle_index = i; _species_tree.setIndex(i);}
             unsigned getBundleIndex() const {return _bundle_index;};
             
             Lot::SharedPtr getLot() const {return _lot;}
@@ -30,13 +23,6 @@ namespace proj {
             
             unsigned getNumSpeciesTreeLineages() const {return (unsigned)_species_tree._lineages.size();};
             
-            GParticle & getGParticle(unsigned locus_index, unsigned particle_index) {
-                return _locus_vect[locus_index][particle_index];
-            }
-            const GParticle & getGParticleConst(unsigned locus_index, unsigned particle_index) {
-                return _locus_vect[locus_index][particle_index];
-            }
-
             double getLogMargLike() const;
             double getPrevLogMargLike() const;
             double getLogWeight() const;
@@ -46,11 +32,20 @@ namespace proj {
             SParticle & getSpeciesTree() {return _species_tree;}
             const SParticle & getSpeciesTreeConst() const {return _species_tree;}
             
+            //TODO: don't need both getGeneTree and getGParticle
             GParticle & getGeneTree(unsigned g, unsigned i) {
                 return _locus_vect[g][i];
             }
             const GParticle & getGeneTreeConst(unsigned g, unsigned i) const {
                 return _locus_vect[g][i];
+            }
+
+            GParticle & getGParticle(unsigned locus_index, unsigned particle_index) {
+                return _locus_vect[locus_index][particle_index];
+            }
+
+            const GParticle & getGParticleConst(unsigned locus_index, unsigned particle_index) {
+                return _locus_vect[locus_index][particle_index];
             }
 
             void initSpeciesTree();
@@ -62,7 +57,7 @@ namespace proj {
             void debugSanityCheck() const;
             
             double report() const;
-                        
+            
         protected:
             vector< vector<GParticle> >     _locus_vect;
             SParticle                       _species_tree;
@@ -70,7 +65,7 @@ namespace proj {
             vector<double>                  _log_marg_like;
             vector<double>                  _prev_log_marg_like;
             vector< pair<unsigned, unsigned> > _eval_order;
-
+            
             // Even though it is a shared pointer, _lot is a private random number
             // generator not shared with any other bundle and has nothing to
             // to do with the global Lot shared_ptr rng defined in main.cpp.
@@ -80,9 +75,6 @@ namespace proj {
     
     inline Bundle::Bundle() {
         _lot.reset(new Lot());
-
-        //auto spp_incr_rate = _species_tree.drawIncrement(_lot);
-        //_species_tree.extendAllLineagesBy(spp_incr_rate.first);
         
         // Build vector
         _locus_vect.resize(G::_nloci);
@@ -95,11 +87,6 @@ namespace proj {
                 // Each GParticle needs to know to which locus it belongs
                 _locus_vect[g][i].setLocusIndex(g);
                 
-                // Each GParticle needs to know to which bundle it belongs
-                // but currently the bundle itself doean't know its index
-                // so this needs to be set in setBundleIndex
-                _locus_vect[g][i].setBundleIndex(-1);
-                
                 // Each GParticle needs to know its index
                 _locus_vect[g][i].setIndex(i);
                 
@@ -109,15 +96,17 @@ namespace proj {
         }
         
         // Compute starting log likelihood for all loci
-        _log_marg_like.resize(G::_nloci, 0.0);
-        _prev_log_marg_like.resize(G::_nloci, 0.0);
-        double total_log_like = 0.0;
-        for (unsigned g = 0; g < G::_nloci; g++) {
-            _log_marg_like[g] = _locus_vect[g][0].calcLogLikelihood();
-            total_log_like = _log_marg_like[g];
-            output(format("%12.5f = starting log-likelihood for locus %d\n") %  _log_marg_like[g] % g, G::VDEBUG);
+        if (!::data->empty()) {
+            _log_marg_like.resize(G::_nloci, 0.0);
+            _prev_log_marg_like.resize(G::_nloci, 0.0);
+            double total_log_like = 0.0;
+            for (unsigned g = 0; g < G::_nloci; g++) {
+                _log_marg_like[g] = _locus_vect[g][0].calcLogLikelihood();
+                total_log_like = _log_marg_like[g];
+                output(format("%12.5f = starting log-likelihood for locus %d\n") %  _log_marg_like[g] % g, G::VDEBUG);
+            }
+            output(format("%12.5f = starting total log-likelihood\n") %  total_log_like, G::VDEBUG);
         }
-        output(format("%12.5f = starting total log-likelihood\n") %  total_log_like, G::VDEBUG);
     }
     
     inline void Bundle::shrinkWrapSpeciesTree() {
@@ -169,17 +158,6 @@ namespace proj {
                         throw XProj(format("Coalescent event joined different species (%d, %d) at height %g in locus %d, particle %d") % sppL % sppR % h % g % i);
                     }
                 }
-            }
-        }
-    }
-
-    inline void Bundle::setBundleIndex(unsigned i) {
-        _bundle_index = i;
-        _species_tree.setIndex(i);
-        for (unsigned g = 0; g < G::_nloci; g++) {
-            for (unsigned k = 0; k < G::_nparticles; k++) {
-                // Let each GParticle know which bundle it belongs to
-                _locus_vect[g][k].setBundleIndex(i);
             }
         }
     }
@@ -274,6 +252,9 @@ namespace proj {
         for (auto evalpair : _eval_order) {
             unsigned locus = evalpair.first;
             unsigned particle = evalpair.second;
+            
+            // Note: coalesce returns ancestral node created by the
+            // coalescence event, but we are ignoring that here.
             _locus_vect[locus][particle].coalesce(_lot);
         }
     }
@@ -372,8 +353,11 @@ namespace proj {
             ++i;
         }
         jsf << "};\n\n";
-        
+
+        bool prev_newick_theta = _species_tree.getNewickTheta();
+        _species_tree.setNewickTheta(false);
         string newick_species_tree_numeric = _species_tree.makeNewick(5, false);
+        _species_tree.setNewickTheta(prev_newick_theta);
         jsf << str(format("let species_newick = \"%s\";\n\n") % newick_species_tree_numeric);
         
         jsf << "let gene_translate = {\n";

@@ -2,11 +2,7 @@
 
 extern void output(string msg, proj::G::verbosity_t verb);
 extern void output(format & fmt, proj::G::verbosity_t level);
-// extern proj::PartialStore         ps;
-// extern proj::StopWatch            stopwatch;
 extern proj::Lot::SharedPtr       rng;
-// extern proj::Partition::SharedPtr partition;
-// extern proj::Data::SharedPtr      data;
 
 namespace proj {
 
@@ -17,26 +13,49 @@ namespace proj {
         friend class Bundle;
 
         public:
+            typedef map<G::species_t, double> theta_map_t;
+            
             SParticle() {_is_species_tree = true; createTrivialForest();}
             ~SParticle() {}
             
+            // Getters and setters
+            double getThetaMean() const {return _theta_mean;}
+            void setThetaMean(double theta_mean) {_theta_mean = theta_mean; }
+            
+            theta_map_t & getThetaMap() {return _theta_map;}
+            const theta_map_t & getThetaMapConst() const {return _theta_map;}
+            
+            bool getNewickTheta() const {return _newick_theta;}
+            void setNewickTheta(bool save_thetas_in_newick) const {_newick_theta = save_thetas_in_newick;}
+            
             G::join_info_t heightOfNextNodeAbove(double h, const vector<G::join_info_t> & spec_info) const;
             
-            void sanityCheck(unsigned step, unsigned bundle) const;
-            void joinThenIncrement(Lot::SharedPtr lot);
-            void trimToHeight(double h0, Lot::SharedPtr lot);
+            void        sanityCheck(unsigned step, unsigned bundle) const;
+            Node *      joinThenIncrement(Lot::SharedPtr lot);
+            void        trimToHeight(double h0, Lot::SharedPtr lot);
             
+            double      drawThetaForSpecies(Lot::SharedPtr lot);
+            void        initThetaMap(Lot::SharedPtr lot);
+
             // Overrides of base class virtual functions
-            virtual void recordJoinInfo(vector<G::join_info_t> & join_info) const;
+            virtual void    recordJoinInfo(vector<G::join_info_t> & join_info) const;
+            virtual string  makeNewick(unsigned precision, bool use_names) const;
 
             // Overrides of base class abstract virtual functions
             pair<double, double> drawIncrement(Lot::SharedPtr lot);
-            void joinRandomPair(Lot::SharedPtr lot);
+            Node * joinRandomPair(Lot::SharedPtr lot);
             double calcLogLikelihood() const;
             void createTrivialForest();
             string info() const {
                 return str(format("  S-%d (h=%g)") % _index % getHeight());
             }
+            
+        private:
+        
+            double          _theta_mean;
+            theta_map_t     _theta_map;
+            
+            mutable bool    _newick_theta;
     };
             
     inline double SParticle::calcLogLikelihood() const {
@@ -61,7 +80,7 @@ namespace proj {
         refreshSplits();
     }
     
-    inline void SParticle::joinRandomPair(Lot::SharedPtr lot) {
+    inline Node * SParticle::joinRandomPair(Lot::SharedPtr lot) {
         // Grab next node to use as ancestor
         unsigned node_number = _next_node_number;
         size_t n = _returned_node_numbers.size();
@@ -86,6 +105,8 @@ namespace proj {
         makeAnc(anc, lchild, rchild);
         
         output(format("joining species %d and %d to form %d\n") % lchild->_species % rchild->_species % anc->_species, G::VDEBUG);
+        
+        return anc;
     }
 
     inline pair<double, double> SParticle::drawIncrement(Lot::SharedPtr lot) {
@@ -143,10 +164,11 @@ namespace proj {
         }
     }
 
-    inline void SParticle::joinThenIncrement(Lot::SharedPtr lot) {
-        joinRandomPair(lot);
+    inline Node * SParticle::joinThenIncrement(Lot::SharedPtr lot) {
+        Node * anc = joinRandomPair(lot);
         auto incr_rate = drawIncrement(lot);
         extendAllLineagesBy(incr_rate.first);
+        return anc;
     }
 
     inline void SParticle::trimToHeight(double h0, Lot::SharedPtr lot) {
@@ -298,5 +320,180 @@ namespace proj {
         return next_speciation;
     }
 
+    inline string SParticle::makeNewick(unsigned precision, bool use_names) const {
+        // Place basal polytomy (if there is one) at a height 10% greater than
+        // _height
+        double basal_polytomy_height = 0.0; //_height*(1.1);
+        bool is_complete_tree = (bool)(_lineages.size() == 1);
+        
+        const format name_theta_edgelen( str(format("%%s[&theta=%%.%df]:%%.%df") % precision % precision) );
+        const format name_edgelen( str(format("%%s:%%.%df") % precision) );
+        
+        const format name_theta( str(format("%%s[&theta=%%.%df]") % precision) );
+        const format name_only("%%s");
+        
+        const format number_theta_edgelen( str(format("%%d[&theta=%%.%df]:%%.%df") % precision % precision) );
+        const format number_edgelen( str(format("%%d:%%.%df") % precision) );
+        
+        const format number_theta( str(format("%%d[&theta=%%.%df]") % precision) );
+        const format number_only("%%d");
+        
+        const format theta_edgelen( str(format(")[&theta=%%.%df]:%%.%df") % precision % precision) );
+        const format edgelen_only( str(format("):%%.%df") % precision) );
+        
+        const format theta_only( str(format(")[&theta=%%.%df]") % precision) );
+        const format right_paren(")");
+        
+        // Build preorders vector
+        vector<Node::ptr_vect_t> preorders;
+        buildPreordersVector(preorders);
+        
+        vector<string> subtree_newicks;
+        for (auto & preorder : preorders) {
+            string subtree_newick;
+            stack<Node *> node_stack;
+            for (auto nd : preorder) {
+                if (nd->_left_child) {
+                    subtree_newick += "(";
+                    node_stack.push(nd);
+                }
+                else {
+                    double edge_length = nd->_edge_length;
+                    if (!nd->_parent) {
+                        // Subtree consists of just this one leaf node
+                        edge_length += basal_polytomy_height;
+                    }
+                    if (use_names) {
+                        if (precision > 0) {
+                            if (_newick_theta)
+                                subtree_newick += str(format(name_theta_edgelen) % nd->_name % _theta_map.at(nd->_species) % edge_length);
+                            else
+                                subtree_newick += str(format(name_edgelen) % nd->_name % edge_length);
+                        }
+                        else {
+                            if (_newick_theta)
+                                subtree_newick += str(format(name_theta) % nd->_name % _theta_map.at(nd->_species));
+                            else
+                                subtree_newick += str(format(name_only) % nd->_name );
+                        }
+                    } else {
+                        if (precision > 0) {
+                            if (_newick_theta)
+                                subtree_newick += str(format(number_theta_edgelen) % (nd->_number + 1) % _theta_map.at(nd->_species) % edge_length);
+                            else
+                                subtree_newick += str(format(number_edgelen) % (nd->_number + 1) % edge_length);
+                        }
+                        else {
+                            if (_newick_theta) {
+                                subtree_newick += str(format(number_theta) % (nd->_number + 1) % _theta_map.at(nd->_species));
+                            }
+                            else {
+                                subtree_newick += str(format(number_only) % (nd->_number + 1));
+                            }
+                        }
+                    }
+                    if (nd->_right_sib)
+                        subtree_newick += ",";
+                    else if (nd->_parent) {
+                        Node * popped = (node_stack.empty() ? 0 : node_stack.top());
+                        double popped_edge_length = popped->_edge_length;
+                        while (popped && !popped->_right_sib) {
+                            node_stack.pop();
+                            if (node_stack.empty()) {
+                                if (is_complete_tree) {
+                                    subtree_newick += ")";
+                                }
+                                else {
+                                    // This is the root of one of several subtrees, so
+                                    // it is important to preserve its edge length
+                                    popped_edge_length += basal_polytomy_height;
+                                    if (precision > 0) {
+                                        if (_newick_theta)
+                                            subtree_newick += str(format(theta_edgelen) % _theta_map.at(nd->_species) % popped_edge_length);
+                                        else
+                                            subtree_newick += str(format(edgelen_only) %  popped_edge_length);
+                                    }
+                                    else {
+                                        if (_newick_theta)
+                                            subtree_newick += str(format(theta_only) % _theta_map.at(nd->_species));
+                                        else
+                                            subtree_newick += str(format(right_paren));
+                                    }
+                                }
+                                popped = 0;
+                            }
+                            else {
+                                if (precision > 0) {
+                                    if (_newick_theta)
+                                        subtree_newick += str(format(theta_edgelen) % _theta_map.at(nd->_species) % popped_edge_length);
+                                    else
+                                        subtree_newick += str(format(edgelen_only) % popped_edge_length);
+                                }
+                                else {
+                                    if (_newick_theta)
+                                        subtree_newick += str(format(theta_only) % _theta_map.at(nd->_species));
+                                    else
+                                        subtree_newick += str(format(right_paren));
+                                }
+                                popped = node_stack.top();
+                                popped_edge_length = popped->_edge_length;
+                            }
+                        }
+                        if (popped && popped->_right_sib) {
+                            node_stack.pop();
+                            if (precision > 0) {
+                                if (_newick_theta)
+                                    subtree_newick += str(format(theta_edgelen) % _theta_map.at(nd->_species) % popped_edge_length);
+                                else
+                                    subtree_newick += str(format(edgelen_only) % popped_edge_length);
+                                subtree_newick += ",";
+                            }
+                            else {
+                                if (_newick_theta)
+                                    subtree_newick += str(format(theta_only) % _theta_map.at(nd->_species));
+                                else
+                                    subtree_newick += str(format(right_paren));
+                                subtree_newick += ",";
+                            }
+                        }
+                    }
+                }
+            }
+            subtree_newicks.push_back(subtree_newick);
+        }
+        
+        string newick;
+        if (is_complete_tree)
+            newick = subtree_newicks[0];
+        else {
+            string separator = str(format(":%.5f,") % basal_polytomy_height);
+            string insides = boost::join(subtree_newicks, ",");
+            newick = str(format("(%s)") % insides);
+        }
+
+        return newick;
+    }
+
+    inline double SParticle::drawThetaForSpecies(Lot::SharedPtr lot) {
+        double theta = 0.0;
+        if (G::_fixed_theta) {
+            theta = _theta_mean;
+        }
+        else {
+            double b = (G::_invgamma_shape - 1.0)*_theta_mean;
+            theta = G::inverseGammaVariate(G::_invgamma_shape, b, lot);
+        }
+        return theta;
+    }
+    
+    inline void SParticle::initThetaMap(Lot::SharedPtr lot) {
+        _theta_map.clear();
+        for (unsigned i = 0; i < G::_nspecies; i++) {
+            G::species_t s;
+            G::setSpeciesBit(s, i, true);
+            _theta_map[s] = drawThetaForSpecies(lot);
+        }
+    }
+    
 }
 

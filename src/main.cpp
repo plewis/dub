@@ -133,8 +133,15 @@ map<string, unsigned>               G::_taxon_to_species;
 unsigned                            G::_nbundles        = 0;
 unsigned                            G::_nparticles        = 0;
 
-double                              G::_theta              = 0.01;
+double                              G::_theta_mean          = 0.01;
+double                              G::_invgamma_shape      = 2.01;
+bool                                G::_fixed_theta         = true;
+
 double                              G::_lambda             = 1.0;
+
+unsigned                            G::_nsimspecies         = 5;
+vector<unsigned>                    G::_nsimtaxaperspecies  = {2, 2, 2, 2, 2};
+vector<unsigned>                    G::_nsites_per_locus;
 
 double                              G::_epsilon            = 1e-8;
 double                              G::_small_enough       = 1e-12;

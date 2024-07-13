@@ -45,8 +45,15 @@ namespace proj {
         static unsigned                 _nbundles;
         static unsigned                 _nparticles;
         
-        static double                   _theta;
+        static double                   _theta_mean;
+        static double                   _invgamma_shape;
+        static bool                     _fixed_theta;
+        
         static double                   _lambda;
+        
+        static unsigned                 _nsimspecies;
+        static vector<unsigned>         _nsimtaxaperspecies;
+        static vector<unsigned>         _nsites_per_locus;
         
         static double                   _epsilon;
         static double                   _small_enough;

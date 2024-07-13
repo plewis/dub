@@ -32,13 +32,20 @@ namespace proj {
             void                         clear();
             void                         processCommandLineOptions(int argc, const char * argv[]);
             void                         run();
-                        
+            void                         simulateData();
+            void                         saveTreesToFile(string fn, vector<string> & newicks) const;
+            
 #if defined(LOG_MEMORY)
             void                         memoryReport(ofstream & memf) const;
 #endif
             
         private:
         
+            double                       calcExpectedSpeciesTreeHeight(double speciation_rate) const;
+            double                       calcExpectedGeneTreeHeight(double theta_mean) const;
+            void                         initThetaMap(map<G::species_t, double> & theta_map, Lot::SharedPtr lot) const;
+
+
             static string                inventName(unsigned k, bool lower_case);
 
 
@@ -100,11 +107,15 @@ namespace proj {
         ("nbundles", value(&G::_nbundles)->default_value(100), "number of bundles")
         ("nparticles", value(&G::_nparticles)->default_value(100), "number of gene-tree particles per locus per bundle")
         ("lambda", value(&G::_lambda)->default_value(1.0), "speciation rate")
-        ("theta", value(&G::_theta)->default_value(0.1), "mutation-scaled population size parameter")
+        ("thetamean", value(&G::_theta_mean)->default_value(0.1), "mutation-scaled population size parameter")
+        ("fixedtheta", value(&G::_fixed_theta)->default_value(true), "if yes, theta is constant across entire tree; if no, each species has theta drawn from InvGamma with mean thetamean")
+        ("invgammashape", value(&G::_invgamma_shape)->default_value(2.01), "if fixedtheta is no, then thetas are drawn from an InvGamma distribution with shape=invgammashape and mean=thetamean")
         ("ambigmissing",  value(&_ambig_missing)->default_value(true), "treat all ambiguities as missing data")
         ("debugging",  value(&debugging)->default_value(false), "if yes, shows debugging output")
         ("temp",  value(&temp)->default_value(false), "if yes, shows output from temporary debugging code")
-        ("rnseed",  value(&_rnseed)->default_value(13579), "pseudorandom number seed");
+        ("rnseed",  value(&_rnseed)->default_value(13579), "pseudorandom number seed")
+        ("nspecies",  value(&G::_nsimspecies)->default_value(5), "number of species (only used if startmode sim specified)")
+        ("ntaxaperspecies",  value(&G::_nsimtaxaperspecies), "number of taxa sampled per species (only used if startmode sim specified); should be _nimspecies of these entries, one for each species simulated");
         
         store(parse_command_line(argc, argv, desc), vm);
         try {
@@ -157,6 +168,21 @@ namespace proj {
             }
         }
 #endif
+
+        if (vm.count("ntaxaperspecies") > 0) {
+            if (G::_nsimspecies > 1) {
+                unsigned ntaxaperspecies = (unsigned)G::_nsimtaxaperspecies.size();
+                if (ntaxaperspecies == 1) {
+                    unsigned n = G::_nsimtaxaperspecies[0];
+                    for (unsigned i = 1; i < G::_nsimspecies; ++i) {
+                        G::_nsimtaxaperspecies.push_back(n);
+                    }
+                }
+                else if (ntaxaperspecies != G::_nsimspecies)
+                    throw XProj(format("Expecting either 1 or %d ntaxaperspecies entries, but found %d") % G::_nsimspecies % ntaxaperspecies);
+            }
+        }
+
     }
     
     inline void Proj::readData() {
@@ -172,7 +198,7 @@ namespace proj {
         
         // Inform PartialStore of number of genes so that it can allocate
         // its _nelements and _storage vectors
-        ps.setNGenes(nsubsets);
+        ps.setNLoci(nsubsets);
         
         for (unsigned subset = 0; subset < nsubsets; subset++) {
             // Set length of partials for gene g
@@ -720,21 +746,30 @@ namespace proj {
         try {
             rng->setSeed(_rnseed);
             
-            if (_start_mode != "smc")
-                throw XProj("\"sim\" is the only startmode currently");
-
-            readData();
-            
-            SMC smc;
-            smc.run();
-            
-            smc.saveSpeciesTreesToFile("species-tree.tre", /*compress*/true);
-            
-            for (unsigned l = 0; l < G::_nloci; l++) {
-                smc.saveGeneTreeLocusToFile(str(format("gene-trees-locus-%d.tre") % l), l, /*compress*/true);
+            if (_start_mode == "sim") {
+                simulateData();
             }
-            
-            compareWithReferenceTrees(smc);
+            else if (_start_mode == "smc") {
+                if (!G::_fixed_theta) {
+                    throw XProj("fixedtheta must be yes for smc mode currently");
+                }
+                
+                readData();
+                
+                SMC smc;
+                smc.run();
+                
+                smc.saveSpeciesTreesToFile("species-tree.tre", /*compress*/true);
+                
+                for (unsigned g = 0; g < G::_nloci; g++) {
+                    smc.saveGeneTreeLocusToFile(str(format("gene-trees-locus-%d.tre") % g), g, /*compress*/true);
+                }
+                
+                compareWithReferenceTrees(smc);
+            }
+            else {
+                throw XProj(format("Did not recognize start mode \"%s\"") % _start_mode);
+            }
         }
         catch (XProj & x) {
             output(format("Proj encountered a problem:\n  %s\n") % x.what(), G::VSTANDARD);
@@ -772,4 +807,226 @@ namespace proj {
     }
 #endif
 
+    inline double Proj::calcExpectedSpeciesTreeHeight(double speciation_rate) const {
+        // Expected height of species tree is (1/2 + 1/3 + ... + 1/nspecies)/lambda
+        // Approximation to (1/2 + 1/3 + ... + 1/nspecies) is
+        //   ln(nspecies) + 0.58 (Euler's constant)
+        //   see http://www.dimostriamogoldbach.it/en/inverses-integers-sum/
+        // 0.25 = Exact (nspecies = 5, lambda = 5)
+        // 0.44 = Approximate
+        double expected_species_tree_height = 0.0;
+        for (unsigned i = 2; i <= G::_nspecies; i++) {
+            expected_species_tree_height += 1.0/i;
+        }
+        expected_species_tree_height /= speciation_rate;
+        return expected_species_tree_height;
+    }
+    
+    inline double Proj::calcExpectedGeneTreeHeight(double theta_mean) const {
+        // Expected gene tree height without species tree constraints
+        // is theta/n(n-1) + theta/(n-1)(n-2) + ... + theta/(2)(1)
+        double expected_gene_tree_height = 0.0;
+        for (unsigned i = 2; i <= G::_ntaxa; i++) {
+            expected_gene_tree_height += 1.0/(i*(i-1));
+        }
+        expected_gene_tree_height *= theta_mean;
+        return expected_gene_tree_height;
+    }
+    
+    inline void Proj::simulateData() {
+        G::_nspecies = G::_nsimspecies;
+        G::_ntaxa = (unsigned)accumulate(G::_nsimtaxaperspecies.begin(), G::_nsimtaxaperspecies.end(), 0);
+
+        output("Simulating sequence data under multispecies coalescent model:\n", G::VSTANDARD);
+        output(format("  theta  = %.5f\n") % G::_theta_mean, G::VSTANDARD);
+        output(format("  lambda = %.5f\n") % G::_lambda, G::VSTANDARD);
+        output(format("  Number of species = %d\n") % G::_nsimspecies, G::VSTANDARD);
+        
+        // ***************************************
+        // *** Calculate expected tree heights ***
+        // ***************************************
+        
+        // Expected height of species tree
+        double sheight = calcExpectedSpeciesTreeHeight(G::_lambda);
+        output(format("  Expected species tree height = %.5f\n") % sheight, G::VSTANDARD);
+        
+        // Expected height of gene tree without species tree constraints
+        double gheight = calcExpectedGeneTreeHeight(G::_theta_mean);
+        output(format("  Expected gene tree height (unconstrained) = %.5f\n") % gheight, G::VSTANDARD);
+
+        // *****************************
+        // *** Interrogate partition ***
+        // *****************************
+
+        // Determine number of genes, gene names, and
+        // number of sites in each gene
+        G::_nloci = ::partition->getNumSubsets();
+        G::_nsites_per_locus.resize(G::_nloci);
+        G::_locus_names.resize(G::_nloci);
+        unsigned total_nsites = 0;
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            unsigned gnsites = ::partition->numSitesInSubset(g);
+            total_nsites += gnsites;
+            string gname = ::partition->getSubsetName(g);
+            G::_nsites_per_locus[g] = gnsites;
+            G::_locus_names[g] = gname;
+        }
+
+        // **************************************
+        // *** Invent species and taxon names ***
+        // **************************************
+
+        // Invent taxon/species names and numbers, and create
+        // taxpartition vector used later in paup command file
+        G::_species_names.resize(G::_nspecies);
+        G::_taxon_names.resize(G::_ntaxa);
+        unsigned k = 0;
+        vector<string> taxpartition;
+        for (unsigned i = 0; i < G::_nspecies; ++i) {
+            string species_name = inventName(i, false);
+            G::_species_names[i] = species_name;
+            for (unsigned j = 0; j < G::_nsimtaxaperspecies[i]; ++j) {
+                taxpartition.push_back(G::_species_names[i]);
+                string taxon_name = str(format("%s^%s") % inventName(k, true) % G::_species_names[i]);
+                G::_taxon_names[k] = taxon_name;
+                G::_taxon_to_species[taxon_name] = i;
+                ++k;
+            }
+        }
+
+        // Report species names created
+        output("  Species names:\n", G::VSTANDARD);
+        for (unsigned i = 0; i < G::_nspecies; ++i) {
+            output(format("    %s\n") % G::_species_names[i], G::VSTANDARD);
+        }
+
+        // Report taxon names created
+        output("  Taxon names:\n", G::VSTANDARD);
+        for (unsigned i = 0; i < G::_ntaxa; ++i) {
+            string taxon_name = G::_taxon_names[i];
+            output(format("    %s\n") % taxon_name, G::VSTANDARD);
+        }
+        
+        // *********************
+        // *** Create ::data ***
+        // *********************
+
+        assert(!::data);
+        ::data = Data::SharedPtr(new Data());
+        ::data->setTaxonNames(G::_taxon_names);
+        ::data->setPartition(::partition);
+        
+        // *********************
+        // *** Create bundle ***
+        // *********************
+
+        // Create a single bundle with 1 GParticle per locus
+        G::_nparticles = 1;
+        Bundle bundle;
+
+        // ******************************
+        // *** Build the species tree ***
+        // ******************************
+
+        // Draw first increment
+        SParticle & stree = bundle.getSpeciesTree();
+        stree.setThetaMean(G::_theta_mean);
+        auto incr_rate = stree.drawIncrement(rng);
+        stree.extendAllLineagesBy(incr_rate.first);
+
+        // The variable theta_map keeps track of theta values
+        // for each species. It is used even if _fixed_theta is true,
+        // but in that case all values in the map will be equal
+        // to _theta_mean. initThetaMap just creates theta values
+        // for the leaf species; theta values for ancestral species
+        // are added as they arise.
+        stree.initThetaMap(rng);
+        SParticle::theta_map_t & theta_map = stree.getThetaMap();
+        
+        // Add joins and new increments until complete
+        unsigned nsteps = G::_nspecies - 1;
+        for (unsigned step = 0; step < nsteps; step++) {
+            Node * anc = stree.joinThenIncrement(rng);
+            assert(anc);
+            G::species_t s = anc->getSpecies();
+            theta_map[s] = stree.drawThetaForSpecies(rng);
+        }
+        
+        vector<string> newicks = {stree.makeNewick(9, true)};
+        saveTreesToFile("true-species-tree.tre", newicks);
+        
+        // ****************************
+        // *** Build the gene trees ***
+        // ****************************
+
+        nsteps = G::_ntaxa - 1;
+        for (unsigned step = 0; step < nsteps; step++) {
+            bundle.advanceAllGeneTrees();
+        }
+        
+        newicks.resize(G::_nloci);
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            GParticle & gtree = bundle.getGeneTree(g, 0);
+            newicks[g] = gtree.makeNewick(9, true);
+        }
+        saveTreesToFile("true-gene-trees.tre", newicks);
+        
+        // ******************************
+        // *** Save trees for viewing ***
+        // ******************************
+        
+        bundle.saveJavascript("newicks");
+
+        // ******************************
+        // *** Simulate sequence data ***
+        // ******************************
+        
+        // Inform PartialStore of number of genes so that it can allocate
+        // its _nelements and _storage vectors
+        ps.setNLoci(G::_nloci);
+
+        // Simulate sequence data
+        unsigned starting_site = 0;
+        for (unsigned g = 0; g < G::_nloci; ++g) {
+            GParticle & particle = bundle.getGeneTree(g, 0);
+            ps.setNElements(4*G::_nsites_per_locus[g], g);
+            particle.simulateData(rng, ::data, starting_site, G::_nsites_per_locus[g]);
+            starting_site += G::_nsites_per_locus[g];
+        }
+        
+        // Output data to file
+        ::data->compressPatterns();
+        ::data->writeDataToFile(_data_file_name);
+        output(format("  Sequence data saved in file \"%s\"\n") % _data_file_name, G::VSTANDARD);
+
+        // Output a PAUP* command file for estimating the
+        // species tree using svd quartets and qage
+        output("  PAUP* commands saved in file \"svd-qage.nex\"\n", G::VSTANDARD);
+        ofstream paupf("svd-qage.nex");
+        paupf << "#NEXUS\n\n";
+        paupf << "begin paup;\n";
+        paupf << "  log start file=svdout.txt replace;\n";
+        paupf << "  exe " << _data_file_name << ";\n";
+        paupf << "  taxpartition species (vector) = " << join(taxpartition," ") << ";\n";
+        paupf << "  svd taxpartition=species;\n";
+        paupf << "  roottrees;\n";
+        paupf << "  qage taxpartition=species patprob=exactjc outUnits=substitutions treefile=svd.tre replace;\n";
+        paupf << "  log stop;\n";
+        paupf << "  quit;\n";
+        paupf << "end;\n";
+        paupf.close();
+     }
+
+    inline void Proj::saveTreesToFile(string fn, vector<string> & newicks) const {
+        ofstream nexf(fn);
+        nexf << "#nexus\n\n";
+        nexf << "begin trees;\n";
+        unsigned t = 0;
+        for (auto newick : newicks) {
+            nexf << "  tree tree" << ++t << " = [&R] " << newick << ";\n";
+        }
+        nexf << "end;\n";
+        nexf.close();
+    }
+    
 }

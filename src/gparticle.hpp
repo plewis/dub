@@ -1,12 +1,8 @@
 #pragma once
 
-//extern void output(string msg, proj::G::verbosity_t verb);
-//extern void output(format & fmt, proj::G::verbosity_t level);
 extern void doof(string msg, proj::G::verbosity_t verb);
 extern void doof(format & fmt, proj::G::verbosity_t level);
 extern proj::PartialStore         ps;
-//extern proj::StopWatch            stopwatch;
-//extern proj::Lot::SharedPtr       rng;
 extern proj::Partition::SharedPtr partition;
 extern proj::Data::SharedPtr      data;
 
@@ -20,7 +16,7 @@ namespace proj {
         friend class Bundle;
         
         public:
-            GParticle() : _locus_index(-1), _bundle_index(-1), _log_weight(G::_negative_infinity), _species_tree(nullptr) {}
+            GParticle() : _locus_index(-1), _log_weight(G::_negative_infinity), _species_tree(nullptr) {}
             ~GParticle() {}
             
             // Getters and setters
@@ -29,16 +25,15 @@ namespace proj {
             
             unsigned getLocusIndex() const {return _locus_index;}
             void setLocusIndex(unsigned i) {_locus_index = i;}
-            
-            unsigned getBundleIndex() const {return _bundle_index;}
-            void setBundleIndex(unsigned i) {_bundle_index = i;}
-            
+                        
             SParticle * getSpeciesTree() {return _species_tree;}
+            const SParticle * getSpeciesTree() const {return _species_tree;}
             void setSpeciesTree(SParticle * s) {_species_tree = s;}
             
             double calcTransitionProbability(unsigned from, unsigned to, double edge_length, double relrate);
             double calcPartialArray(Node * new_nd);
-            void coalesce(Lot::SharedPtr lot);
+            Node * coalesce(Lot::SharedPtr lot);
+            void simulateData(Lot::SharedPtr lot, Data::SharedPtr data, unsigned starting_site, unsigned nsites);
             
 #if defined(STOW_UNUSED_PARTIALS)
             void deleteStowedPartials();
@@ -47,7 +42,7 @@ namespace proj {
 
             // Overrides of base class abstract virtual functions
             pair<double, double> drawIncrement(Lot::SharedPtr lot);
-            void joinRandomPair(Lot::SharedPtr lot);
+            Node * joinRandomPair(Lot::SharedPtr lot);
             double calcLogLikelihood() const;
             void createTrivialForest();
             string info() const {
@@ -61,8 +56,7 @@ namespace proj {
             void operator=(const GParticle & other);
             
         protected:
-            int         _locus_index;
-            int         _bundle_index;
+            int          _locus_index;
             double       _log_weight;
             SParticle *  _species_tree;
             
@@ -126,8 +120,10 @@ namespace proj {
             string nm = G::_taxon_names[i];
             _lineages[i]->setName(nm);
             _lineages[i]->setNumber(i);
-            assert(GParticle::_leaf_partials[_locus_index].size() > i);
-            _nodes[i].setPartial(GParticle::_leaf_partials[_locus_index][i]);
+            if (!::data->empty()) {
+                assert(GParticle::_leaf_partials[_locus_index].size() > i);
+                _nodes[i].setPartial(GParticle::_leaf_partials[_locus_index][i]);
+            }
             G::setSpeciesBit(_lineages[i]->getSpecies(), G::_taxon_to_species[nm], /*init_to_zero_first*/true);
         }
         _next_node_number = G::_ntaxa;
@@ -153,8 +149,17 @@ namespace proj {
         double total_rate = 0.0;
         for (auto & p : species_counts) {
             output(format("~~> species %d contains %d lineages\n") % p.first % p.second, G::VDEBUG);
+
+            // Get theta value for current species (p.first)
+            const SParticle::theta_map_t & theta_map = _species_tree->getThetaMapConst();
+            double theta = theta_map.at(p.first);
+
+            // Get number of lineages in this species
             unsigned       n = p.second;
-            double rate = 1.0*n*(n-1)/G::_theta;
+            
+            // Calculate coalescent rate within this species
+            double rate = 1.0*n*(n-1)/theta;
+            
             total_rate += rate;
         }
         
@@ -170,7 +175,7 @@ namespace proj {
         return make_pair(incr, total_rate);
     }
 
-    inline void GParticle::joinRandomPair(Lot::SharedPtr lot) {
+    inline Node * GParticle::joinRandomPair(Lot::SharedPtr lot) {
         // Create map in which keys are species and values are vectors of Node *
         //TODO: inefficient, nearly same thing done in drawIncrement
         map<G::species_t, vector<Node *> > species_nodevector;
@@ -183,8 +188,16 @@ namespace proj {
         vector<double> rates;
         double total_rate = 0.0;
         for (auto & p : species_nodevector) {
-            unsigned       n = (unsigned)p.second.size();
-            double rate = 1.0*n*(n-1)/G::_theta;
+            // Get theta value for current species (p.first)
+            const SParticle::theta_map_t & theta_map = _species_tree->getThetaMapConst();
+            double theta = theta_map.at(p.first);
+            
+            // Get number of lineages in this species
+            unsigned n = (unsigned)p.second.size();
+            
+            // Calculate coalescent rate within this species
+            double rate = 1.0*n*(n-1)/theta;
+            
             total_rate += rate;
             rates.push_back(rate);
         }
@@ -223,17 +236,22 @@ namespace proj {
         
         makeAnc(anc, lchild, rchild);
 
-        // Calculate partial for anc and store _log_weight
-        PartialStore::partial_t part = ps.pullPartial(_locus_index);
-        anc->setPartial(part);
-        _log_weight = calcPartialArray(anc);
+        if (!::data->empty()) {
+            // Calculate partial for anc and store _log_weight
+            PartialStore::partial_t part = ps.pullPartial(_locus_index);
+            anc->setPartial(part);
+            _log_weight = calcPartialArray(anc);
+        }
+        
+        return anc;
     }
 
-    inline void GParticle::coalesce(Lot::SharedPtr lot) {
+    inline Node * GParticle::coalesce(Lot::SharedPtr lot) {
         assert(_species_tree);
         vector<G::join_info_t> spec_rec;
         _species_tree->recordJoinInfo(spec_rec);
         
+        Node * anc = nullptr;
         bool done = false;
         while (!done) {
             // Determine the height of the next species tree join
@@ -249,7 +267,7 @@ namespace proj {
                 // add a coalescence event and we're done
                 output(format("DONE! height + incr = %g < %g = upper_bound\n") % (_height + incr_rate.first) % upper_bound, G::VDEBUG);
                 extendAllLineagesBy(incr_rate.first);
-                joinRandomPair(lot);
+                anc = joinRandomPair(lot);
                 done = true;
             }
             else {
@@ -261,6 +279,8 @@ namespace proj {
                 G::species_t spp = get<2>(ceiling) | get<3>(ceiling);
                 if (spp == G::_species_zero) {
                     // Species tree needs to be extended before continuing
+                    // Note: joinThenIncrement returns ancestral node, but
+                    // we are ignoring that return value here.
                     _species_tree->joinThenIncrement(lot);
                     
                     // Refresh speciation info
@@ -301,6 +321,8 @@ namespace proj {
                 }   // extension unnecessary
             }   // _height + incr_rate.first >= upper_bound
         } // while (!done)
+        
+        return anc;
     }
 
     inline void GParticle::clearLeafPartials() {
@@ -508,7 +530,6 @@ namespace proj {
         Particle::operator=(other);
         _locus_index = other._locus_index;
         _log_weight = other._log_weight;
-        // _bundle_index does not need to be copied
         // _species_tree does not need to be copied
 
         // Node _partial data members not copied in base class because partials are
@@ -588,5 +609,83 @@ namespace proj {
     }
 #endif
 
+    inline void GParticle::simulateData(Lot::SharedPtr lot, Data::SharedPtr data, unsigned starting_site, unsigned nsites) {
+        
+#if !defined(USE_JUKE_CANTOR_MODEL)
+#   error Must define USE_JUKE_CANTOR_MODEL as that is the only model currently implemented
+#endif
+
+        // Create vector of states for each node in the tree
+        unsigned nnodes = (unsigned)_nodes.size();
+        vector< vector<unsigned> > sequences(nnodes);
+        for (unsigned i = 0; i < nnodes; i++) {
+            sequences[i].resize(nsites, 4);
+        }
+        
+        // Walk through tree in preorder sequence, simulating all sites as we go
+        //    DNA   state      state
+        //         (binary)  (decimal)
+        //    A      0001        1
+        //    C      0010        2
+        //    G      0100        4
+        //    T      1000        8
+        //    ?      1111       15
+        //    R      0101        5
+        //    Y      1010       10
+        
+        // Simulate starting sequence at the root node
+        Node * nd = *(_lineages.begin());
+        unsigned ndnum = nd->_number;
+        assert(ndnum < nnodes);
+        for (unsigned i = 0; i < nsites; i++) {
+            sequences[ndnum][i] = lot->randint(0,3);
+        }
+        
+        nd = findNextPreorder(nd);
+        while (nd) {
+            ndnum = nd->_number;
+            assert(ndnum < nnodes);
+
+            // Get reference to parent sequence
+            assert(nd->_parent);
+            unsigned parnum = nd->_parent->_number;
+            assert(parnum < nnodes);
+            
+            // Evolve nd's sequence given parent's sequence and edge length
+            for (unsigned i = 0; i < nsites; i++) {
+                unsigned from_state = sequences[parnum][i];
+                double cum_prob = 0.0;
+                double u = lot->uniform();
+                for (unsigned to_state = 0; to_state < 4; to_state++) {
+                    cum_prob += calcTransitionProbability(from_state, to_state, nd->_edge_length, /*relrate*/1.0);
+                    if (u < cum_prob) {
+                        sequences[ndnum][i] = to_state;
+                        break;
+                    }
+                }
+                assert(sequences[ndnum][i] < 4);
+            }
+            
+            // Move to next node in preorder sequence
+            nd = findNextPreorder(nd);
+        }
+
+        assert(data);
+        Data::data_matrix_t & dm = data->getDataMatrixNonConst();
+        
+        // Copy sequences to data object
+        for (unsigned t = 0; t < G::_ntaxa; t++) {
+            // Allocate row t of _data's _data_matrix data member
+            dm[t].resize(starting_site + nsites);
+            
+            // Get reference to nd's sequence
+            unsigned ndnum = _nodes[t]._number;
+            
+            // Translate to state codes and copy
+            for (unsigned i = 0; i < nsites; i++) {
+                dm[t][starting_site + i] = (Data::state_t)1 << sequences[ndnum][i];
+            }
+        }
+    }
 }
 

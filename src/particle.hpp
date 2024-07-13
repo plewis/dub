@@ -1,13 +1,5 @@
 #pragma once
 
-//extern void output(string msg, proj::G::verbosity_t verb);
-//extern void output(format & fmt, proj::G::verbosity_t level);
-//extern proj::PartialStore         ps;
-//extern proj::StopWatch            stopwatch;
-//extern proj::Lot::SharedPtr       rng;
-//extern proj::Partition::SharedPtr partition;
-//extern proj::Data::SharedPtr      data;
-
 namespace proj {
 
     // Particle encapsulates generic particle data and methods
@@ -31,7 +23,6 @@ namespace proj {
             void makeAnc(Node * anc, Node * lchild, Node * rchild);
             
             void buildFromNewick(const string newick, map<unsigned,unsigned> & taxon_map, vector<string> & taxon_names);
-            string makeNewick(unsigned precision, bool use_names) const;
             void   buildPreordersVector(vector<Node::ptr_vect_t> & preorders) const;
             void storeEdgelensBySplit(map<Split, double> & edgelenmap) const;
             void storeSplits(Split::treeid_t & splitset) const;
@@ -43,11 +34,12 @@ namespace proj {
             
             // Virtuals
             virtual void recordJoinInfo(vector<G::join_info_t> & join_info) const;
+            virtual string makeNewick(unsigned precision, bool use_names) const;
             virtual void operator=(const Particle & other);
 
             // Pure virtuals
             virtual pair<double, double> drawIncrement(Lot::SharedPtr lot) = 0;
-            virtual void joinRandomPair(Lot::SharedPtr lot) = 0;
+            virtual Node * joinRandomPair(Lot::SharedPtr lot) = 0;
             virtual double calcLogLikelihood() const = 0;
             virtual void createTrivialForest() = 0;
             virtual string info() const = 0;

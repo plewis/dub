@@ -68,7 +68,7 @@ namespace proj {
             typedef vector<vect_partial_t>       storage_t;
             
             void                    clear();
-            void                    setNGenes(unsigned ngenes);
+            void                    setNLoci(unsigned nloci);
 
             partial_t               pullPartial(unsigned locus);
             void                    stowPartial(unsigned locus, partial_t p);
@@ -134,24 +134,24 @@ namespace proj {
     }
 #endif
 
-    inline void PartialStore::setNGenes(unsigned ngenes) {
+    inline void PartialStore::setNLoci(unsigned nloci) {
         // Should be called before any partials are stored
         assert(_nelements.empty());
         assert(_storage.empty());
         
         // Resize both containers
-        _nelements.resize(ngenes);
-        _storage.resize(ngenes);
+        _nelements.resize(nloci);
+        _storage.resize(nloci);
         
 #if defined(LOG_MEMORY)
         Partial::_nconstructed.clear();
-        Partial::_nconstructed.resize(ngenes, 0);
+        Partial::_nconstructed.resize(nloci, 0);
         Partial::_ndestroyed.clear();
-        Partial::_ndestroyed.resize(ngenes, 0);
+        Partial::_ndestroyed.resize(nloci, 0);
         Partial::_max_in_use.clear();
-        Partial::_max_in_use.resize(ngenes, 0);
+        Partial::_max_in_use.resize(nloci, 0);
         Partial::_bytes_per_partial.clear();
-        Partial::_bytes_per_partial.resize(ngenes, 0);
+        Partial::_bytes_per_partial.resize(nloci, 0);
 #endif
     }
 
