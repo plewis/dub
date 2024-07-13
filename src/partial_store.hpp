@@ -192,7 +192,15 @@ namespace proj {
         }
         else {
             size_t n = _storage[gene].size();
-            partial = _storage[gene].at(n-1);
+            
+            try {
+                partial = _storage[gene].at(n-1);
+            }
+            catch(std::exception & x) {
+                cerr << str(format("Exception (at) 15: %s\n") % x.what());
+                exit(1);
+            }
+            
             _storage[gene].pop_back();
         }
 

@@ -43,7 +43,6 @@ namespace proj {
         
             double                       calcExpectedSpeciesTreeHeight(double speciation_rate) const;
             double                       calcExpectedGeneTreeHeight(double theta_mean) const;
-            void                         initThetaMap(map<G::species_t, double> & theta_map, Lot::SharedPtr lot) const;
 
 
             static string                inventName(unsigned k, bool lower_case);
@@ -322,7 +321,13 @@ namespace proj {
             if (species_name_to_index.count(sname) == 0)
                 throw XProj(format("Proj::buildSpeciesMap failed because key \"%s\" does not exist in species_name_to_index map") % sname);
             else {
-                species_index = species_name_to_index.at(sname);
+                try {
+                    species_index = species_name_to_index.at(sname);
+                }
+                catch(std::exception & x) {
+                    cerr << str(format("Exception (at) 1: %s\n") % x.what());
+                    exit(1);
+                }
             }
             output(format("  %s --> %d\n") % sname % species_index, G::VSTANDARD);
             

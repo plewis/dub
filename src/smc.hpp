@@ -394,6 +394,7 @@ namespace proj {
         // Create vector of G::_nbundles Bundle objects
         _bundle_vect.resize(G::_nbundles);
         for (unsigned i = 0; i < G::_nbundles; i++) {
+            output(format("Creating bundle %d of %d...\n") % (i+1) % G::_nbundles, G::VDEBUG);
             _bundle_vect[i] = new Bundle();
             assert(_bundle_vect[i]);
             _bundle_vect[i]->setBundleIndex(i);

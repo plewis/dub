@@ -152,7 +152,16 @@ namespace proj {
 
             // Get theta value for current species (p.first)
             const SParticle::theta_map_t & theta_map = _species_tree->getThetaMapConst();
-            double theta = theta_map.at(p.first);
+            
+            double theta;
+            try {
+                theta = theta_map.at(p.first);
+                assert(theta > 0.0);
+            }
+            catch(std::exception & x) {
+                    cerr << str(format("Exception (at) 12: %s\n") % x.what());
+                    exit(1);
+            }
 
             // Get number of lineages in this species
             unsigned       n = p.second;
@@ -190,7 +199,15 @@ namespace proj {
         for (auto & p : species_nodevector) {
             // Get theta value for current species (p.first)
             const SParticle::theta_map_t & theta_map = _species_tree->getThetaMapConst();
-            double theta = theta_map.at(p.first);
+            
+            double theta;
+            try {
+                theta = theta_map.at(p.first);
+            }
+            catch(std::exception & x) {
+                    cerr << str(format("Exception (at) 13: %s\n") % x.what());
+                    exit(1);
+            }
             
             // Get number of lineages in this species
             unsigned n = (unsigned)p.second.size();

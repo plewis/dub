@@ -251,7 +251,13 @@ namespace proj {
                                 nd->_name = taxon_names[nd->_number];
                             
                             // Set node species
-                            G::setSpeciesBit(nd->_species, G::_taxon_to_species.at(nd->_name), /*init_to_zero_first*/true);
+                            try {
+                                G::setSpeciesBit(nd->_species, G::_taxon_to_species.at(nd->_name), /*init_to_zero_first*/true);
+                            }
+                            catch(std::exception & x) {
+                                cerr << str(format("Exception (at) 2: %s\n") % x.what());
+                                exit(1);
+                            }
 
                             curr_leaf++;
                         }
@@ -287,7 +293,13 @@ namespace proj {
                                 nd->_name = taxon_names[nd->_number];
                                 
                             // Set node species
-                            G::setSpeciesBit(nd->_species, G::_taxon_to_species.at(nd->_name), /*init_to_zero_first*/true);
+                            try {
+                                G::setSpeciesBit(nd->_species, G::_taxon_to_species.at(nd->_name), /*init_to_zero_first*/true);
+                            }
+                            catch(std::exception & x) {
+                                cerr << str(format("Exception (at) 3: %s\n") % x.what());
+                                exit(1);
+                            }
 
                             curr_leaf++;
                         }

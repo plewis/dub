@@ -131,6 +131,8 @@ namespace proj {
     
     inline void Bundle::initSpeciesTree() {
         assert(_species_tree.getHeight() == 0.0);
+        _species_tree.setThetaMean(G::_theta_mean);
+        _species_tree.initThetaMap(_lot);
         auto spp_incr_rate = _species_tree.drawIncrement(_lot);
         _species_tree.extendAllLineagesBy(spp_incr_rate.first);
     }

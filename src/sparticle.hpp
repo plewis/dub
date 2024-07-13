@@ -18,6 +18,8 @@ namespace proj {
             SParticle() {_is_species_tree = true; createTrivialForest();}
             ~SParticle() {}
             
+            void operator=(const SParticle & other);
+
             // Getters and setters
             double getThetaMean() const {return _theta_mean;}
             void setThetaMean(double theta_mean) {_theta_mean = theta_mean; }
@@ -103,6 +105,11 @@ namespace proj {
         
         // Connect chosen lineages to ancestor
         makeAnc(anc, lchild, rchild);
+        
+        // Determine theta for anc and add to _theta_map
+        G::species_t s = anc->getSpecies();
+        assert(_theta_map.count(s) == 0);
+        _theta_map[s] = drawThetaForSpecies(lot);
         
         output(format("joining species %d and %d to form %d\n") % lchild->_species % rchild->_species % anc->_species, G::VDEBUG);
         
@@ -226,11 +233,24 @@ namespace proj {
                 rchild->_parent = nullptr;
                 lchild->_right_sib = nullptr;
                 highest->_left_child = nullptr;
+                
+                // Being the root of a subtree, highest should
+                // not have a parent or a right sib
+                assert(highest->_parent == nullptr);
+                assert(highest->_right_sib == nullptr);
+                
+                // Remove highest's species from _theta_map
+                G::species_t s = highest->getSpecies();
+                auto qit = _theta_map.find(s);
+                assert(qit != _theta_map.end());
+                _theta_map.erase(qit);
                                 
-                // Remove highest from _lineages
+                // Add highest's node number to _returned_node_numbers
                 _returned_node_numbers.push_back(highest->_number);
-                highest->_edge_length = 0.0;
                 highest->_number = -1;  // flag node as being unused
+
+                // Remove highest from _lineages
+                highest->_edge_length = 0.0;
                 auto it = find(_lineages.begin(), _lineages.end(), highest);
                 assert(it != _lineages.end());
                 _lineages.erase(it);
@@ -365,14 +385,28 @@ namespace proj {
                     }
                     if (use_names) {
                         if (precision > 0) {
-                            if (_newick_theta)
-                                subtree_newick += str(format(name_theta_edgelen) % nd->_name % _theta_map.at(nd->_species) % edge_length);
+                            if (_newick_theta) {
+                                try {
+                                    subtree_newick += str(format(name_theta_edgelen) % nd->_name % _theta_map.at(nd->_species) % edge_length);
+                                }
+                                catch(std::exception & x) {
+                                    cerr << str(format("Exception (at) 4: %s\n") % x.what());
+                                    exit(1);
+                                }
+                            }
                             else
                                 subtree_newick += str(format(name_edgelen) % nd->_name % edge_length);
                         }
                         else {
-                            if (_newick_theta)
-                                subtree_newick += str(format(name_theta) % nd->_name % _theta_map.at(nd->_species));
+                            if (_newick_theta) {
+                                try {
+                                    subtree_newick += str(format(name_theta) % nd->_name % _theta_map.at(nd->_species));
+                                }
+                                catch(std::exception & x) {
+                                    cerr << str(format("Exception (at) 5: %s\n") % x.what());
+                                    exit(1);
+                                }
+                            }
                             else
                                 subtree_newick += str(format(name_only) % nd->_name );
                         }
@@ -385,7 +419,13 @@ namespace proj {
                         }
                         else {
                             if (_newick_theta) {
-                                subtree_newick += str(format(number_theta) % (nd->_number + 1) % _theta_map.at(nd->_species));
+                                try {
+                                    subtree_newick += str(format(number_theta) % (nd->_number + 1) % _theta_map.at(nd->_species));
+                                }
+                                catch(std::exception & x) {
+                                    cerr << str(format("Exception (at) 6: %s\n") % x.what());
+                                    exit(1);
+                                }
                             }
                             else {
                                 subtree_newick += str(format(number_only) % (nd->_number + 1));
@@ -414,8 +454,15 @@ namespace proj {
                                             subtree_newick += str(format(edgelen_only) %  popped_edge_length);
                                     }
                                     else {
-                                        if (_newick_theta)
-                                            subtree_newick += str(format(theta_only) % _theta_map.at(nd->_species));
+                                        if (_newick_theta) {
+                                            try {
+                                                subtree_newick += str(format(theta_only) % _theta_map.at(nd->_species));
+                                            }
+                                            catch(std::exception & x) {
+                                                cerr << str(format("Exception (at) 7: %s\n") % x.what());
+                                                exit(1);
+                                            }
+                                        }
                                         else
                                             subtree_newick += str(format(right_paren));
                                     }
@@ -424,14 +471,28 @@ namespace proj {
                             }
                             else {
                                 if (precision > 0) {
-                                    if (_newick_theta)
-                                        subtree_newick += str(format(theta_edgelen) % _theta_map.at(nd->_species) % popped_edge_length);
+                                    if (_newick_theta) {
+                                        try {
+                                            subtree_newick += str(format(theta_edgelen) % _theta_map.at(nd->_species) % popped_edge_length);
+                                        }
+                                        catch(std::exception & x) {
+                                            cerr << str(format("Exception (at) 8: %s\n") % x.what());
+                                            exit(1);
+                                        }
+                                    }
                                     else
                                         subtree_newick += str(format(edgelen_only) % popped_edge_length);
                                 }
                                 else {
-                                    if (_newick_theta)
-                                        subtree_newick += str(format(theta_only) % _theta_map.at(nd->_species));
+                                    if (_newick_theta) {
+                                        try {
+                                            subtree_newick += str(format(theta_only) % _theta_map.at(nd->_species));
+                                        }
+                                        catch(std::exception & x) {
+                                            cerr << str(format("Exception (at) 9: %s\n") % x.what());
+                                            exit(1);
+                                        }
+                                    }
                                     else
                                         subtree_newick += str(format(right_paren));
                                 }
@@ -442,15 +503,29 @@ namespace proj {
                         if (popped && popped->_right_sib) {
                             node_stack.pop();
                             if (precision > 0) {
-                                if (_newick_theta)
-                                    subtree_newick += str(format(theta_edgelen) % _theta_map.at(nd->_species) % popped_edge_length);
+                                if (_newick_theta) {
+                                    try {
+                                        subtree_newick += str(format(theta_edgelen) % _theta_map.at(nd->_species) % popped_edge_length);
+                                    }
+                                    catch(std::exception & x) {
+                                        cerr << str(format("Exception (at) 10: %s\n") % x.what());
+                                        exit(1);
+                                    }
+                                }
                                 else
                                     subtree_newick += str(format(edgelen_only) % popped_edge_length);
                                 subtree_newick += ",";
                             }
                             else {
-                                if (_newick_theta)
-                                    subtree_newick += str(format(theta_only) % _theta_map.at(nd->_species));
+                                if (_newick_theta) {
+                                    try {
+                                        subtree_newick += str(format(theta_only) % _theta_map.at(nd->_species));
+                                    }
+                                    catch(std::exception & x) {
+                                        cerr << str(format("Exception (at) 11: %s\n") % x.what());
+                                        exit(1);
+                                    }
+                                }
                                 else
                                     subtree_newick += str(format(right_paren));
                                 subtree_newick += ",";
@@ -493,6 +568,17 @@ namespace proj {
             G::setSpeciesBit(s, i, true);
             _theta_map[s] = drawThetaForSpecies(lot);
         }
+    }
+    
+    inline void SParticle::operator=(const SParticle & other) {
+        Particle::operator=(other);
+        _theta_mean = other._theta_mean;
+        _theta_map = other._theta_map;
+        
+        // _newick_theta does not need to be copied
+        // It is only used as a flag indicating whether
+        // to save theta values in newick tree descriptions
+        // and is thus a very ephemeral setting
     }
     
 }
