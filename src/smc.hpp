@@ -71,8 +71,9 @@ namespace proj {
             sort(count_newick.begin(), count_newick.end(), greater< pair<unsigned, string> >());
             
             // Save the newicks in order of decreasing count
+            unsigned t = 1;
             for (auto & uniq : count_newick) {
-                newicks.push_back(str(format("[freq=%d] %s") % uniq.first % uniq.second));
+                newicks.push_back(str(format("t%dfreq%d = %s") % (t++) % uniq.first % uniq.second));
             }
         }
         else {
@@ -80,7 +81,7 @@ namespace proj {
             newicks.resize(G::_nbundles);
             for (unsigned i = 0; i < G::_nbundles; i++) {
                 assert(_bundle_vect[i]);
-                newicks[i] = _bundle_vect[i]->getSpeciesTreeConst().makeNewick(9, true);
+                newicks[i] = str(format("t%dfreq1 = %s") % (i+1) % _bundle_vect[i]->getSpeciesTreeConst().makeNewick(9, true));
             }
         }
     }
@@ -92,9 +93,8 @@ namespace proj {
         ofstream treef(fn);
         treef << "#nexus\n\n";
         treef << "begin trees;\n";
-        unsigned i = 1;
         for (auto newick : newicks) {
-            treef << str(format("  tree t%d = %s;\n") % (i++) % newick);
+            treef << str(format("  tree %s;\n") % newick);
         }
         treef << "end;\n";
         treef.close();
