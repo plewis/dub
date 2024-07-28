@@ -1,7 +1,7 @@
 #pragma once
 
-extern void output(string msg, proj::G::verbosity_t verb);
-extern void output(format & fmt, proj::G::verbosity_t verb);
+extern void output(string msg, unsigned level);
+extern void output(format & fmt, unsigned level);
 
 #if defined(USING_SIGNPOSTS)
 extern os_log_t log_handle;
@@ -11,12 +11,13 @@ extern os_signpost_id_t signpost_id;
 namespace proj {
 
     class Proj;
-    class GParticle;
 
     class Data {
         
         friend class Proj;
-        friend class GParticle;
+        friend class Forest;
+        friend class GeneForest;
+        friend class Particle;
         
         public:
             typedef vector<string>                        taxon_names_t;
@@ -37,8 +38,6 @@ namespace proj {
 
                                                         Data();
                                                         ~Data();
-                                                        
-            bool                                        empty() const;
                                                         
             Partition::SharedPtr                        getPartition();
             void                                        setPartition(Partition::SharedPtr partition);
@@ -171,11 +170,7 @@ namespace proj {
         _subset_end.clear();
     }    
 
-    inline bool Data::empty() const {
-        return getNumPatterns() == 0;
-    }
-    
-    inline unsigned Data::getNumPatterns() const {
+    inline unsigned Data::getNumPatterns() const {    
         if (_data_matrix.size() > 0)
             return (unsigned)_data_matrix[0].size();
         else
@@ -605,7 +600,7 @@ namespace proj {
 
         // Compress _data_matrix so that it holds only unique patterns (counts stored in _pattern_counts)
         if (_data_matrix.empty()) {
-            output(format("No data were stored from the file \"%s\"\n") % filename, G::VSTANDARD);
+            output(format("No data were stored from the file \"%s\"\n") % filename, 2);
             clear();
         }
         else {
@@ -665,62 +660,59 @@ namespace proj {
     
     inline void Data::memoryReport(ofstream & memf) const {
         memf << "\nData memory report:\n\n";
-        if (getNumPatterns() == 0) {
-            memf << "  no data stored\n";
+        unsigned long total_nbytes = 0;
+        unsigned ntaxa = getNumTaxa();
+        unsigned nsubsets = getNumSubsets();
+        memf << str(format("  Number of taxa: %d\n") % ntaxa);
+        memf << str(format("  Number of subsets: %d\n") % nsubsets);
+        memf << str(format("  Number of sites: %d\n\n") % _cum_nchar);
+        
+        memf << str(format("  %12s %12s %12s\n") % "subset" % "nstates" % "npatterns");
+        memf << str(format("  %12s %12s %12s\n") % " -----------" % " -----------" % " -----------");
+        unsigned total_npatterns = 0;
+        for (unsigned subset = 0; subset < nsubsets; ++subset) {
+            unsigned npatterns = getNumPatternsInSubset(subset);
+            unsigned nstates = getNumStatesForSubset(subset);
+            memf << str(format("  %12d %12d %12d\n") % subset % nstates % npatterns);
+            total_npatterns += npatterns;
         }
-        else {
-            unsigned long total_nbytes = 0;
-            unsigned ntaxa = getNumTaxa();
-            unsigned nsubsets = getNumSubsets();
-            memf << str(format("  Number of taxa: %d\n") % ntaxa);
-            memf << str(format("  Number of subsets: %d\n") % nsubsets);
-            memf << str(format("  Number of sites: %d\n\n") % _cum_nchar);
-            
-            memf << str(format("  %12s %12s %12s\n") % "subset" % "nstates" % "npatterns");
-            memf << str(format("  %12s %12s %12s\n") % " -----------" % " -----------" % " -----------");
-            unsigned total_npatterns = 0;
-            for (unsigned subset = 0; subset < nsubsets; ++subset) {
-                unsigned npatterns = getNumPatternsInSubset(subset);
-                unsigned nstates = getNumStatesForSubset(subset);
-                memf << str(format("  %12d %12d %12d\n") % subset % nstates % npatterns);
-                total_npatterns += npatterns;
-            }
-            memf << str(format("  %12s %12s %12s\n") % " -----------" % " -----------" % " -----------");
-            memf << str(format("  %12s %12s %12d\n\n") % " " % " " % total_npatterns);
-            
-            unsigned element_size = (unsigned)sizeof(unsigned);
-            unsigned nelements = (unsigned)_pattern_counts.size();
-            unsigned nbytes = nelements*element_size;
-            total_nbytes += nbytes;
-            memf << str(format("  _pattern_counts:     %d bytes = %d patterns * %d bytes\n") % nbytes % nelements % element_size);
+        memf << str(format("  %12s %12s %12s\n") % " -----------" % " -----------" % " -----------");
+        memf << str(format("  %12s %12s %12d\n\n") % " " % " " % total_npatterns);
+        
+        unsigned element_size = (unsigned)sizeof(unsigned);
+        unsigned nelements = (unsigned)_pattern_counts.size();
+        unsigned nbytes = nelements*element_size;
+        total_nbytes += nbytes;
+        memf << str(format("  _pattern_counts:     %d bytes = %d patterns * %d bytes\n") % nbytes % nelements % element_size);
 
-            element_size = (unsigned)sizeof(state_t);
-            nelements = (unsigned)_monomorphic.size();
-            nbytes = nelements*element_size;
-            total_nbytes += nbytes;
-            memf << str(format("  _monomorphic:        %d bytes = %d patterns * %d bytes\n") % nbytes % nelements % element_size);
-            
-            element_size = (unsigned)sizeof(int);
-            nelements = (unsigned)_partition_key.size();
-            nbytes = nelements*element_size;
-            total_nbytes += nbytes;
-            memf << str(format("  _partition_key:      %d bytes = %d patterns * %d bytes\n") % nbytes % nelements % element_size);
+        element_size = (unsigned)sizeof(state_t);
+        nelements = (unsigned)_monomorphic.size();
+        nbytes = nelements*element_size;
+        total_nbytes += nbytes;
+        memf << str(format("  _monomorphic:        %d bytes = %d patterns * %d bytes\n") % nbytes % nelements % element_size);
+        
+        element_size = (unsigned)sizeof(int);
+        nelements = (unsigned)_partition_key.size();
+        nbytes = nelements*element_size;
+        total_nbytes += nbytes;
+        memf << str(format("  _partition_key:      %d bytes = %d patterns * %d bytes\n") % nbytes % nelements % element_size);
 
-            element_size = (unsigned)sizeof(state_t);
-            nelements = ntaxa*_cum_nchar;
-            nbytes = nelements*element_size;
-            //total_nbytes += nbytes;
-            memf << str(format("  _data_matrix (pre):  %d bytes = %d taxa * %d sites * %d bytes\n") % nbytes % ntaxa % _cum_nchar % element_size);
-            
-            element_size = (unsigned)sizeof(state_t);
-            nelements = ntaxa*total_npatterns;
-            nbytes = nelements*element_size;
-            total_nbytes += nbytes;
-            memf << str(format("  _data_matrix (post): %d bytes = %d taxa * %d patterns * %d bytes\n") % nbytes % ntaxa % total_npatterns % element_size);
-            
-            //TODO: add other data members
-            
-            memf << str(format("\n  Total megabytes: %.5f\n") % (1.0*total_nbytes/1048576));
-        }
+        element_size = (unsigned)sizeof(state_t);
+        nelements = ntaxa*_cum_nchar;
+        nbytes = nelements*element_size;
+        //total_nbytes += nbytes;
+        memf << str(format("  _data_matrix (pre):  %d bytes = %d taxa * %d sites * %d bytes\n") % nbytes % ntaxa % _cum_nchar % element_size);
+        
+        element_size = (unsigned)sizeof(state_t);
+        nelements = ntaxa*total_npatterns;
+        nbytes = nelements*element_size;
+        total_nbytes += nbytes;
+        memf << str(format("  _data_matrix (post): %d bytes = %d taxa * %d patterns * %d bytes\n") % nbytes % ntaxa % total_npatterns % element_size);
+        
+        //TODO: add other data members
+        
+        memf << str(format("\n  Total megabytes: %.5f\n") % (1.0*total_nbytes/1048576));
+        
     }
+    
 }

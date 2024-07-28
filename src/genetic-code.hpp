@@ -1,7 +1,7 @@
 #pragma once
 
-extern void output(string msg, proj::G::verbosity_t verb);
-extern void output(format & fmt, proj::G::verbosity_t verb);
+extern void output(string msg, unsigned level);
+extern void output(format & fmt, unsigned level);
 
 namespace proj {
 
@@ -97,13 +97,7 @@ namespace proj {
         if (_genetic_code_map.count(triplet_index) == 0)
             throw XProj(format("GeneticCode::getStateCode failed because key %d does not exist in _genetic_code_map") % triplet_index);
         else {
-            try {
-                retval = _genetic_code_map.at(triplet_index);
-            }
-            catch(std::exception & x) {
-                cerr << str(format("Exception (at) 14: %s\n") % x.what());
-                exit(1);
-            }
+            retval = _genetic_code_map.at(triplet_index);
         }
         return retval;
     }
@@ -163,11 +157,11 @@ namespace proj {
     inline void GeneticCode::ensureGeneticCodeNameIsValid(const string & name) {
         if (!isRecognizedGeneticCodeName(name)) {
             auto valid_genetic_code_names = getRecognizedGeneticCodeNames();
-            output("Recognized genetic codes:\n", G::VSTANDARD);
+            output("Recognized genetic codes:\n", 2);
             for (string name : valid_genetic_code_names) {
-                output(format("  %s\n") % name, G::VSTANDARD);
+                output(format("  %s\n") % name, 2);
             }
-            output("\n", G::VSTANDARD);
+            output("\n", 2);
             throw XProj(format("%s is not a recognized genetic code") % name);
         }
     }

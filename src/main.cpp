@@ -53,106 +53,70 @@ using boost::format;
 #include "conditionals.hpp"
 #include "xproj.hpp"
 #include "lot.hpp"
-#include "split.hpp"
-#include "g.hpp"
+#include "smcglobal.hpp"
 #include "stopwatch.hpp"
 #include "genetic-code.hpp"
 #include "datatype.hpp"
 #include "partition.hpp"
 #include "data.hpp"
+#include "split.hpp"
 #include "partial_store.hpp"
 #include "node.hpp"
-#include "particle.hpp"
-#include "sparticle.hpp"
-#include "gparticle.hpp"
-#include "bundle.hpp"
+#include "forest.hpp"
+#include "species-forest.hpp"
+#include "policy-parallel-none.hpp"
 #include "smc.hpp"
+#include "particle.hpp"
+#include "gene-forest.hpp"
+#include "particle-func.hpp"
+#include "smc-func.hpp"
+//#include "policy-parallel-mt.hpp"
+//#include "policy-parallel-mpi.hpp"
 #include "proj.hpp"
 
 using namespace proj;
 
-void output(format & fmt, G::verbosity_t verb) {
-    if (verb & G::_verbosity)
-        cout << str(fmt);
-}
+#if defined(USING_MPI) && defined(USING_MULTITHREADING)
+#error USING_MPI and USING_MULTITHREADING are mutually exclusive: undefine one or the other to compile
+#endif
 
-void output(string msg, G::verbosity_t verb) {
-    if (verb & G::_verbosity)
-        cout << msg;
-}
+#if defined(USING_MPI)
+    int my_rank = 0;
+    int ntasks = 0;
 
-void doof(format & fmt, G::verbosity_t verb) {
-    if (verb & G::_verbosity) {
-        ofstream tmpf("doof.txt", ios::out | ios::app);
-        tmpf << str(fmt);
-        tmpf.close();
+    unsigned my_first_particle = 0;
+    unsigned my_last_particle = 0;
+
+    void output(format & fmt, unsigned level) {
+        if (my_rank == 0 && G::_verbosity > 0 && level <= G::_verbosity)
+            cout << str(fmt);
     }
-}
 
-void doof(string msg, G::verbosity_t verb) {
-    if (verb & G::_verbosity) {
-        ofstream tmpf("doof.txt", ios::out | ios::app);
-        tmpf << msg;
-        tmpf.close();
+    void output(string msg, unsigned level) {
+        if (my_rank == 0 && G::_verbosity > 0 && level <= G::_verbosity)
+            cout << msg;
     }
-}
+#else
+    void output(format & fmt, unsigned level) {
+        if (G::_verbosity > 0 && level <= G::_verbosity)
+            cout << str(fmt);
+    }
 
+    void output(string msg, unsigned level) {
+        if (G::_verbosity > 0 && level <= G::_verbosity)
+            cout << msg;
+    }
+#endif
+
+#if defined(LOG_MEMORY)
+    char dummy_char;
+    ofstream memfile;
+#endif
+
+//POLWAS Lot                                 rng;
 Lot::SharedPtr                      rng(new Lot());
 StopWatch                           stopwatch;
 PartialStore                        ps;
-Partition::SharedPtr                partition;
-Data::SharedPtr                     data;
-
-unsigned                            G::_nthreads        = 1;
-#if defined(USING_MULTITHREADING)
-mutex                               G::_mutex;
-#endif
-
-G::verbosity_t                      G::_verbosity          = G::VSTANDARD;
-
-string                              G::_species_tree_ref_file_name = "";
-string                              G::_gene_trees_ref_file_name = "";
-map<unsigned,unsigned>              G::_nexus_taxon_map;
-
-double                              G::_log_marg_like      = 0.0;
-
-G::species_t                        G::_species_zero       = (G::species_t)0;
-unsigned                            G::_nstates            = 4;
-
-unsigned                            G::_ntaxa              = 0;
-vector<string>                      G::_taxon_names;
-
-unsigned                            G::_nspecies           = 0;
-vector<string>                      G::_species_names;
-
-unsigned                            G::_nloci              = 0;
-vector<string>                      G::_locus_names;
-
-map<string, unsigned>               G::_taxon_to_species;
-
-unsigned                            G::_nbundles        = 0;
-unsigned                            G::_nparticles        = 0;
-
-double                              G::_theta_mean          = 0.01;
-double                              G::_invgamma_shape      = 2.01;
-bool                                G::_fixed_theta         = true;
-
-double                              G::_lambda             = 1.0;
-
-unsigned                            G::_nsimspecies         = 5;
-vector<unsigned>                    G::_nsimtaxaperspecies  = {2, 2, 2, 2, 2};
-vector<unsigned>                    G::_nsites_per_locus;
-
-double                              G::_epsilon            = 1e-8;
-double                              G::_small_enough       = 1e-12;
-
-static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in order to use infinity()");
-double                              G::_infinity = numeric_limits<double>::infinity();
-double                              G::_negative_infinity = -numeric_limits<double>::infinity();
-
-PartialStore::leaf_partials_t       GParticle::_leaf_partials;
-
-const double                        Node::_smallest_edge_length = 1.0e-12;
 
 #if defined(LOG_MEMORY)
 vector<unsigned>                    Partial::_nconstructed;
@@ -164,8 +128,87 @@ unsigned long                       Partial::_total_max_bytes   = 0;
 unsigned                            Partial::_nstates           = 4;
 #endif
 
-string                              Proj::_program_name         = "smc5";
-unsigned                            Proj::_major_version        = 1;
+string                              G::_species_tree_ref_file_name = "";
+string                              G::_gene_trees_ref_file_name = "";
+
+string                              G::_debugging_text          = "doof.txt";
+bool                                G::_debugging               = false;
+
+unsigned                            G::_nthreads        = 1;
+#if defined(USING_MULTITHREADING)
+mutex                               G::_mutex;
+mutex                               G::_gene_forest_clear_mutex;
+mutex                               G::_debug_mutex;
+//vector<unsigned>                    G::_thread_first_gene;
+//vector<unsigned>                    G::_thread_last_gene;
+#endif
+
+// Let Nup be the number of unique particles
+// Let Np be the nominal number of particles (i.e. count = 1 for each particle)
+// Nup < Np if count > 1 for some particles
+// 0: Save all species trees even if they are identical to others
+//    File will contain Np species trees
+// 1: Save species tree from each unique particle and, for each, show that particle's count
+//    File will contain Nup species trees
+// 2: Save unique species trees along with their frequency in the sample
+//    Is this effectively the same as compression level 1?
+//    Creates map in which species tree newicks are keys and cumulative count is value,
+//    but will there ever be exactly the same newick in different particles?
+unsigned                            G::_treefile_compression = 0;
+
+unsigned                            G::_verbosity          = 3;
+
+unsigned                            G::_nstates            = 4;
+
+unsigned                            G::_ntaxa              = 0;
+vector<string>                      G::_taxon_names;
+map<string, unsigned>               G::_taxon_to_species;
+
+unsigned                            G::_nspecies           = 0;
+G::species_t                        G::_species_mask       = (G::species_t)0;
+vector<string>                      G::_species_names;
+map<unsigned,unsigned>              G::_nexus_taxon_map;
+
+unsigned                            G::_ngenes              = 0;
+vector<string>                      G::_gene_names;
+vector<unsigned>                    G::_nsites_per_gene;
+map<unsigned, double>               G::_relrate_for_gene;
+
+double                              G::_phi                 = 1.0;
+double                              G::_theta               = 0.05;
+double                              G::_lambda              = 1.0;
+
+double                              G::_invgamma_shape      = 2.0;
+bool                                G::_theta_mean_frozen   = false;
+double                              G::_theta_mean_fixed    = -1.0;
+double                              G::_theta_prior_mean    = 1.0;
+double                              G::_theta_proposal_mean = 0.1;
+double                              G::_lambda_prior_mean   = 1.0;
+
+//bool                                G::_update_theta       = true;
+//bool                                G::_update_lambda      = true;
+
+double                              G::_small_enough         = 0.00001;
+
+unsigned                            G::_nparticles           = 500;
+unsigned                            G::_nkept                = 500;
+unsigned                            G::_nparticles2          = 1000;
+
+//temporary!
+map<unsigned, vector<G::SpecLog> >  G::_speclog;
+
+static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in order to use infinity()");
+double                              G::_infinity = numeric_limits<double>::infinity();
+double                              G::_negative_infinity = -numeric_limits<double>::infinity();
+
+bool                                G::_prior_post        = false;
+
+PartialStore::leaf_partials_t       GeneForest::_leaf_partials;
+
+const double                        Node::_smallest_edge_length = 1.0e-12;
+
+string                              Proj::_program_name         = "smc";
+unsigned                            Proj::_major_version        = 3;
 unsigned                            Proj::_minor_version        = 0;
 
 GeneticCode::genetic_code_definitions_t GeneticCode::_definitions = { 
@@ -189,9 +232,25 @@ GeneticCode::genetic_code_definitions_t GeneticCode::_definitions = {
     {"thraustochytriummito", "KNKNTTTTRSRSIIMIQHQHPPPPRRRRLLLLEDEDAAAAGGGGVVVV*Y*YSSSS*CWC*FLF"}
 };
 
-vector<string> rcolors = {"aliceblue" ,"aquamarine" ,"aquamarine1" ,"aquamarine2" ,"aquamarine3" ,"aquamarine4" ,"azure" ,"azure1" ,"azure2" ,"azure3" ,"azure4" ,"beige" ,"bisque" ,"bisque1" ,"bisque2" ,"bisque3" ,"bisque4" ,"black" ,"blanchedalmond" ,"blue" ,"blue1" ,"blue2" ,"blue3" ,"blue4" ,"blueviolet" ,"brown" ,"brown1" ,"brown2" ,"brown3" ,"brown4" ,"burlywood" ,"burlywood1" ,"burlywood2" ,"burlywood3" ,"burlywood4" ,"cadetblue" ,"cadetblue1" ,"cadetblue2" ,"cadetblue3" ,"cadetblue4" ,"chartreuse" ,"chartreuse1" ,"chartreuse2" ,"chartreuse3" ,"chartreuse4" ,"chocolate" ,"chocolate1" ,"chocolate2" ,"chocolate3" ,"chocolate4" ,"coral" ,"coral1" ,"coral2" ,"coral3" ,"coral4" ,"cornflowerblue" ,"cornsilk" ,"cornsilk1" ,"cornsilk2" ,"cornsilk3" ,"cornsilk4" ,"cyan" ,"cyan1" ,"cyan2" ,"cyan3" ,"cyan4" ,"darkblue" ,"darkcyan" ,"darkgoldenrod" ,"darkgoldenrod1" ,"darkgoldenrod2" ,"darkgoldenrod3" ,"darkgoldenrod4" ,"darkgray" ,"darkgreen" ,"darkgrey" ,"darkkhaki" ,"darkmagenta" ,"darkolivegreen" ,"darkolivegreen1" ,"darkolivegreen2" ,"darkolivegreen3" ,"darkolivegreen4" ,"darkorange" ,"darkorange1" ,"darkorange2" ,"darkorange3" ,"darkorange4" ,"darkorchid" ,"darkorchid1" ,"darkorchid2" ,"darkorchid3" ,"darkorchid4" ,"darkred" ,"darksalmon" ,"darkseagreen" ,"darkseagreen1" ,"darkseagreen2" ,"darkseagreen3" ,"darkseagreen4" ,"darkslateblue" ,"darkslategray" ,"darkslategray1" ,"darkslategray2" ,"darkslategray3" ,"darkslategray4" ,"darkslategrey" ,"darkturquoise" ,"darkviolet" ,"deeppink" ,"deeppink1" ,"deeppink2" ,"deeppink3" ,"deeppink4" ,"deepskyblue" ,"deepskyblue1" ,"deepskyblue2" ,"deepskyblue3" ,"deepskyblue4" ,"dimgray" ,"dimgrey" ,"dodgerblue" ,"dodgerblue1" ,"dodgerblue2" ,"dodgerblue3" ,"dodgerblue4" ,"firebrick" ,"firebrick1" ,"firebrick2" ,"firebrick3" ,"firebrick4" ,"floralwhite" ,"forestgreen" ,"gainsboro" ,"ghostwhite" ,"gold" ,"gold1" ,"gold2" ,"gold3" ,"gold4" ,"goldenrod" ,"goldenrod1" ,"goldenrod2" ,"goldenrod3" ,"goldenrod4" ,"gray" ,"green" ,"green1" ,"green2" ,"green3" ,"green4" ,"greenyellow" ,"honeydew" ,"honeydew1" ,"honeydew2" ,"honeydew3" ,"honeydew4" ,"hotpink" ,"hotpink1" ,"hotpink2" ,"hotpink3" ,"hotpink4" ,"indianred" ,"indianred1" ,"indianred2" ,"indianred3" ,"indianred4" ,"ivory" ,"ivory1" ,"ivory2" ,"ivory3" ,"ivory4" ,"khaki" ,"khaki1" ,"khaki2" ,"khaki3" ,"khaki4" ,"lavender" ,"lavenderblush" ,"lavenderblush1" ,"lavenderblush2" ,"lavenderblush3" ,"lavenderblush4" ,"lawngreen" ,"lemonchiffon" ,"lemonchiffon1" ,"lemonchiffon2" ,"lemonchiffon3" ,"lemonchiffon4" ,"lightblue" ,"lightblue1" ,"lightblue2" ,"lightblue3" ,"lightblue4" ,"lightcoral" ,"lightcyan" ,"lightcyan1" ,"lightcyan2" ,"lightcyan3" ,"lightcyan4" ,"lightgoldenrod" ,"lightgoldenrod1" ,"lightgoldenrod2" ,"lightgoldenrod3" ,"lightgoldenrod4" ,"lightgoldenrodyellow" ,"lightgray" ,"lightgreen" ,"lightgrey" ,"lightpink" ,"lightpink1" ,"lightpink2" ,"lightpink3" ,"lightpink4" ,"lightsalmon" ,"lightsalmon1" ,"lightsalmon2" ,"lightsalmon3" ,"lightsalmon4" ,"lightseagreen" ,"lightskyblue" ,"lightskyblue1" ,"lightskyblue2" ,"lightskyblue3" ,"lightskyblue4" ,"lightslateblue" ,"lightslategray" ,"lightslategrey" ,"lightsteelblue" ,"lightsteelblue1" ,"lightsteelblue2" ,"lightsteelblue3" ,"lightsteelblue4" ,"lightyellow" ,"lightyellow1" ,"lightyellow2" ,"lightyellow3" ,"lightyellow4" ,"limegreen" ,"linen" ,"magenta" ,"magenta1" ,"magenta2" ,"magenta3" ,"magenta4" ,"maroon" ,"maroon1" ,"maroon2" ,"maroon3" ,"maroon4" ,"mediumaquamarine" ,"mediumblue" ,"mediumorchid" ,"mediumorchid1" ,"mediumorchid2" ,"mediumorchid3" ,"mediumorchid4" ,"mediumpurple" ,"mediumpurple1" ,"mediumpurple2" ,"mediumpurple3" ,"mediumpurple4" ,"mediumseagreen" ,"mediumslateblue" ,"mediumspringgreen" ,"mediumturquoise" ,"mediumvioletred" ,"midnightblue" ,"mintcream" ,"mistyrose" ,"mistyrose1" ,"mistyrose2" ,"mistyrose3" ,"mistyrose4" ,"moccasin" ,"navajowhite" ,"navajowhite1" ,"navajowhite2" ,"navajowhite3" ,"navajowhite4" ,"navy" ,"navyblue" ,"oldlace" ,"olivedrab" ,"olivedrab1" ,"olivedrab2" ,"olivedrab3" ,"olivedrab4" ,"orange" ,"orange1" ,"orange2" ,"orange3" ,"orange4" ,"orangered" ,"orangered1" ,"orangered2" ,"orangered3" ,"orangered4" ,"orchid" ,"orchid1" ,"orchid2" ,"orchid3" ,"orchid4" ,"palegoldenrod" ,"palegreen" ,"palegreen1" ,"palegreen2" ,"palegreen3" ,"palegreen4" ,"paleturquoise" ,"paleturquoise1" ,"paleturquoise2" ,"paleturquoise3" ,"paleturquoise4" ,"palevioletred" ,"palevioletred1" ,"palevioletred2" ,"palevioletred3" ,"palevioletred4" ,"papayawhip" ,"peachpuff" ,"peachpuff1" ,"peachpuff2" ,"peachpuff3" ,"peachpuff4" ,"peru" ,"pink" ,"pink1" ,"pink2" ,"pink3" ,"pink4" ,"plum" ,"plum1" ,"plum2" ,"plum3" ,"plum4" ,"powderblue" ,"purple" ,"purple1" ,"purple2" ,"purple3" ,"purple4" ,"red" ,"red1" ,"red2" ,"red3" ,"red4" ,"rosybrown" ,"rosybrown1" ,"rosybrown2" ,"rosybrown3" ,"rosybrown4" ,"royalblue" ,"royalblue1" ,"royalblue2" ,"royalblue3" ,"royalblue4" ,"saddlebrown" ,"salmon" ,"salmon1" ,"salmon2" ,"salmon3" ,"salmon4" ,"sandybrown" ,"seagreen" ,"seagreen1" ,"seagreen2" ,"seagreen3" ,"seagreen4" ,"seashell" ,"seashell1" ,"seashell2" ,"seashell3" ,"seashell4" ,"sienna" ,"sienna1" ,"sienna2" ,"sienna3" ,"sienna4" ,"skyblue" ,"skyblue1" ,"skyblue2" ,"skyblue3" ,"skyblue4" ,"slateblue" ,"slateblue1" ,"slateblue2" ,"slateblue3" ,"slateblue4" ,"slategray" ,"slategray1" ,"slategray2" ,"slategray3" ,"slategray4" ,"slategrey" ,"snow" ,"snow1" ,"snow2" ,"snow3" ,"snow4" ,"springgreen" ,"springgreen1" ,"springgreen2" ,"springgreen3" ,"springgreen4" ,"steelblue" ,"steelblue1" ,"steelblue2" ,"steelblue3" ,"steelblue4" ,"tan" ,"tan1" ,"tan2" ,"tan3" ,"tan4" ,"thistle" ,"thistle1" ,"thistle2" ,"thistle3" ,"thistle4" ,"tomato" ,"tomato1" ,"tomato2" ,"tomato3" ,"tomato4" ,"turquoise" ,"turquoise1" ,"turquoise2" ,"turquoise3" ,"turquoise4" ,"violet" ,"violetred" ,"violetred1" ,"violetred2" ,"violetred3" ,"violetred4" ,"wheat" ,"wheat1" ,"wheat2" ,"wheat3" ,"wheat4" ,"whitesmoke" ,"yellow" ,"yellow1" ,"yellow2" ,"yellow3" ,"yellow4" ,"yellowgreen"};
-
 int main(int argc, const char * argv[]) {
+
+#if defined(USING_MPI)
+	MPI_Init(NULL, NULL);
+	MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &ntasks);
+#   if defined(LOG_MEMORY)
+        memfile.open(str(format("allocs-%d.txt") % my_rank));
+#   endif
+#elif defined(LOG_MEMORY)
+    memfile.open("allocs.txt");
+#endif
+
+#if defined(USING_SIGNPOSTS)
+    log_handle  = os_log_create("edu.uconn.eeb.phylogeny", OS_LOG_CATEGORY_POINTS_OF_INTEREST);
+    signpost_id = os_signpost_id_generate(log_handle);
+    assert(signpost_id != OS_SIGNPOST_ID_INVALID);
+#endif
+
     Proj proj;
     bool normal_termination = true;
     try {
@@ -201,7 +260,7 @@ int main(int argc, const char * argv[]) {
         sw.start();
         proj.run();
         double total_seconds = sw.stop();
-        output(format("\nTotal time: %.5f seconds\n") % total_seconds, G::VSTANDARD);
+        output(format("\nTotal time: %.5f seconds\n") % total_seconds, 1);
     }
     catch(std::exception & x) {
         cerr << str(format("Exception: %s\n") % x.what());
@@ -215,15 +274,11 @@ int main(int argc, const char * argv[]) {
     
 #if defined(LOG_MEMORY)
     if (normal_termination) {
-        ofstream memfile("allocs.txt");
         proj.memoryReport(memfile);
         ps.memoryReport(memfile);
-        memfile.close();
     }
+    memfile.close();
 #endif
-
-    GParticle::clearLeafPartials();
-    ps.clear();
 
     return 0;
 }

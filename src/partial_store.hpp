@@ -8,10 +8,6 @@ namespace proj {
         unsigned        _g; // the gene
         vector<double>  _v; // the partial array: length = _nstates*<no. patterns>
         
-#if defined(STOW_UNUSED_PARTIALS)
-        bool            _in_storage;
-#endif
-        
 #if defined(LOG_MEMORY)
         static vector<unsigned> _nconstructed;  // no. partials allocated for each gene
         static vector<unsigned> _ndestroyed;    // no. partials destroyed for each gene
@@ -26,10 +22,6 @@ namespace proj {
     inline Partial::Partial(unsigned g, unsigned n) {
         _g = g;
         _v.resize(n);
-
-#if defined(STOW_UNUSED_PARTIALS)
-        _in_storage = true;
-#endif
 
 #if defined(LOG_MEMORY)
         assert(g < _nconstructed.size());
@@ -67,14 +59,11 @@ namespace proj {
             typedef vector<vect_partial_t>       leaf_partials_t;
             typedef vector<vect_partial_t>       storage_t;
             
-            void                    clear();
-            void                    setNLoci(unsigned nloci);
-
-            partial_t               pullPartial(unsigned locus);
-            void                    stowPartial(unsigned locus, partial_t p);
-
-            void                    setNElements(unsigned nelements, unsigned gene);
-            unsigned                getNElements(unsigned gene) const {return _nelements[gene];}
+            void            setNGenes(unsigned ngenes);
+            partial_t       getPartial(unsigned gene);
+            void            putPartial(unsigned gene, partial_t partial);
+            void            setNElements(unsigned nelements, unsigned gene);
+            unsigned        getNElements(unsigned gene) const {return _nelements[gene];}
             
 #if defined(LOG_MEMORY)
             unsigned        getInUse();
@@ -86,9 +75,6 @@ namespace proj {
             
         private:
         
-            partial_t        getPartial(unsigned locus);
-            void             putPartial(unsigned gene, partial_t partial);
-            
             vector<unsigned> _nelements;
             storage_t        _storage;
     };
@@ -97,10 +83,6 @@ namespace proj {
     }
 
     inline PartialStore::~PartialStore() {
-        clear();
-    }
-    
-    inline void PartialStore::clear() {
         _nelements.clear();
         _storage.clear();
     }
@@ -134,24 +116,24 @@ namespace proj {
     }
 #endif
 
-    inline void PartialStore::setNLoci(unsigned nloci) {
+    inline void PartialStore::setNGenes(unsigned ngenes) {
         // Should be called before any partials are stored
         assert(_nelements.empty());
         assert(_storage.empty());
         
         // Resize both containers
-        _nelements.resize(nloci);
-        _storage.resize(nloci);
+        _nelements.resize(ngenes);
+        _storage.resize(ngenes);
         
 #if defined(LOG_MEMORY)
         Partial::_nconstructed.clear();
-        Partial::_nconstructed.resize(nloci, 0);
+        Partial::_nconstructed.resize(ngenes, 0);
         Partial::_ndestroyed.clear();
-        Partial::_ndestroyed.resize(nloci, 0);
+        Partial::_ndestroyed.resize(ngenes, 0);
         Partial::_max_in_use.clear();
-        Partial::_max_in_use.resize(nloci, 0);
+        Partial::_max_in_use.resize(ngenes, 0);
         Partial::_bytes_per_partial.clear();
-        Partial::_bytes_per_partial.resize(nloci, 0);
+        Partial::_bytes_per_partial.resize(ngenes, 0);
 #endif
     }
 
@@ -161,23 +143,6 @@ namespace proj {
 #if defined(LOG_MEMORY)
         Partial::_bytes_per_partial[gene] = (unsigned)nelements*sizeof(double);
 #endif
-    }
-
-    inline PartialStore::partial_t PartialStore::pullPartial(unsigned locus) {
-        assert(locus < G::_nloci);
-
-        PartialStore::partial_t ptr;
-        
-        // Grab one partial from partial storage
-#if defined(USING_MULTITHREADING)
-        {
-            lock_guard<mutex> guard(G::_mutex);
-            ptr = getPartial(locus);
-        }
-#else
-        ptr = getPartial(locus);
-#endif
-        return ptr;
     }
 
     inline PartialStore::partial_t PartialStore::getPartial(unsigned gene) {
@@ -192,51 +157,21 @@ namespace proj {
         }
         else {
             size_t n = _storage[gene].size();
-            
-            try {
-                partial = _storage[gene].at(n-1);
-            }
-            catch(std::exception & x) {
-                cerr << str(format("Exception (at) 15: %s\n") % x.what());
-                exit(1);
-            }
-            
+            partial = _storage[gene].at(n-1);
             _storage[gene].pop_back();
         }
-
-#if defined(STOW_UNUSED_PARTIALS)
-        partial->_in_storage = false;
-#endif
-
         return partial;
     }
     
-    inline void PartialStore::stowPartial(unsigned locus, PartialStore::partial_t p) {
-        assert(locus < G::_nloci);
-        assert(p);
-#if defined(USING_MULTITHREADING)
-        {
-            lock_guard<mutex> guard(G::_mutex);
-            putPartial(locus, p);
-        }
-#else
-        putPartial(locus, p);
-#endif
-    }
-
-    inline void PartialStore::putPartial(unsigned locus, partial_t partial) {
-        // Check to make sure supplied value of locus is valid
-        assert(_nelements.size() > locus);
-        assert(_nelements[locus] > 0);
+    inline void PartialStore::putPartial(unsigned gene, partial_t partial) {
+        // Check to make sure supplied value of gene is valid
+        assert(_nelements.size() > gene);
+        assert(_nelements[gene] > 0);
 
         // Store the partial for later
-        assert(partial->_v.size() == _nelements[locus]);
-        partial->_v.assign(_nelements[locus], 0.0);
-
-#if defined(STOW_UNUSED_PARTIALS)
-        partial->_in_storage = true;
-#endif        
-        _storage[locus].push_back(partial);
+        assert(partial->_v.size() == _nelements[gene]);
+        partial->_v.assign(_nelements[gene], 0.0);
+        _storage[gene].push_back(partial);
     }
     
 #if defined(LOG_MEMORY)

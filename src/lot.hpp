@@ -78,12 +78,6 @@ namespace proj {
 
     inline double Lot::gamma(double shape, double scale) {
         assert(shape > 0.0);
-
-        //temporary!
-        if (scale <= 0.0) {
-            cerr << endl;
-        }
-        
         assert(scale > 0.0);
         if (shape != _gamma_shape) {
             _gamma_shape = shape;
