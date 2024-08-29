@@ -42,12 +42,15 @@ namespace proj {
         
                     Node *              getParent()                 {return _parent;}
                     const Node *        getParent() const           {return _parent;}
+                    void                setParent(Node * nd)        {_parent = nd;}
 
                     Node *              getLeftChild()              {return _left_child;}
                     const Node *        getLeftChild() const        {return _left_child;}
+                    void                setLeftChild(Node * nd)      {_left_child = nd;}
 
                     Node *              getRightSib()               {return _right_sib;}
                     const Node *        getRightSib() const         {return _right_sib;}
+                    void                setRightSib(Node * nd)      {_right_sib = nd;}
 
                     string              getName()                   {return _name;}
                     const string        getName() const             {return _name;}

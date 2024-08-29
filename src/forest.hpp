@@ -26,6 +26,8 @@ namespace proj {
             double              getPrevHeight() const;
             double              getHeight() const;
             unsigned            getNumLineages() const;
+            
+            Node *              findNodeNumbered(unsigned num);
                         
             static void         readTreefile(const string filename,
                                         unsigned skip,
@@ -59,6 +61,18 @@ namespace proj {
             static pair<double,double> calcTreeDistances(Forest & ref, Forest & test);
             static bool         subsumed(G::species_t test_species, G::species_t subtending_species);
 
+            void        debugShowPreorder() const;
+            
+            Node::ptr_vect_t & getLineages();
+
+            void        removeOne(Node::ptr_vect_t & node_vect, Node * del);
+            void        addOne(Node::ptr_vect_t & node_vect, Node * add);
+            void        removeTwoAddOne(Node::ptr_vect_t & node_vect, Node * del1, Node * del2, Node * add);
+            void        addTwoRemoveOne(Node::ptr_vect_t & node_vect, Node * del1, Node * del2, Node * add);
+            void        addTwoRemoveOneAt(Node::ptr_vect_t & node_vect, unsigned pos1, Node * del1, unsigned pos2, Node * del2, Node * add);
+
+            void        refreshAllPreorders() const;
+
         protected:
         
             int         extractNodeNumberFromName(string node_name, set<unsigned> & used);
@@ -67,7 +81,6 @@ namespace proj {
             Node *      findNextPreorder(Node * nd) const;
             bool        canHaveSibling(Node * nd) const;
             void        refreshPreorder(Node::ptr_vect_t & preorder) const;
-            void        refreshAllPreorders() const;
             void        storeEdgelensBySplit(map<Split, double> & edgelenmap);
             void        resizeAllSplits(unsigned nleaves);
             void        refreshAllHeightsAndPreorders();
@@ -75,14 +88,11 @@ namespace proj {
             void        stowNode(Node * nd);
             void        joinLineagePair(Node * anc, Node * first, Node * second);
             void        unjoinLineagePair(Node * anc, Node * first, Node * second);
-            void        removeTwoAddOne(Node::ptr_vect_t & node_vect, Node * del1, Node * del2, Node * add);
-            void        addTwoRemoveOne(Node::ptr_vect_t & node_vect, Node * del1, Node * del2, Node * add);
-            void        addTwoRemoveOneAt(Node::ptr_vect_t & node_vect, unsigned pos1, Node * del1, unsigned pos2, Node * del2, Node * add);
             
             void        debugCheckCoalInfoSorted(const vector<coalinfo_t> & coalinfo_vect) const;
             void        debugCheckMarkEmpty() const;
-            void        debugCheckPreorder(const Node::ptr_vect_t & preorder) const;
             void        debugCheckAllPreorders() const;
+            void        debugCheckPreorder(const Node::ptr_vect_t & preorder) const;
             void        debugShowNodeInfo(string title);
             void        debugShowNodePtrVector(Node::ptr_vect_t& v, string title);
 
@@ -133,6 +143,10 @@ namespace proj {
         _mark_increments = {};
         _mark_anc_nodes = {};
         _mark_left_right_pos = {};
+    }
+    
+    inline Node::ptr_vect_t & Forest::getLineages() {
+        return _lineages;
     }
     
     inline double Forest::getPrevHeight() const {
@@ -700,14 +714,28 @@ namespace proj {
         }
     }
     
-inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
-    edgelenmap.clear();
-    for (auto & preorder : _preorders) {
-        for (auto nd : preorder) {
-            edgelenmap[nd->_split] = nd->_edge_length;
+    inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
+        edgelenmap.clear();
+        for (auto & preorder : _preorders) {
+            for (auto nd : preorder) {
+                edgelenmap[nd->_split] = nd->_edge_length;
+            }
         }
     }
-}
+
+    Node * Forest::findNodeNumbered(unsigned num) {
+        Node * found = nullptr;
+        for (auto & preorder : _preorders) {
+            for (auto nd : preorder) {
+                if (nd->_number == num) {
+                    found = nd;
+                }
+            }
+        }
+        if (!found)
+            throw XProj(format("Could not find node numbered %d in forest") % num);
+        return found;
+    }
 
     inline void Forest::storeSplits(Forest::treeid_t & splitset) {
         // Resize all splits (also clears all splits)
@@ -740,6 +768,24 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
         }
     }
     
+    inline void Forest::debugShowPreorder() const {
+        assert(_lineages.size() > 0);
+        unsigned sub = 0;
+        for (auto preorder : _preorders) {
+            output(format("\nSubtree %d\n") % sub, 1);
+            for (auto nd : preorder) {
+                output(format("  node %d:\n") % nd->_number, 1);
+                output(format("    name    = \"%s\"\n") % nd->_name, 1);
+                output(format("    height  = %.5f\n") % nd->_height, 1);
+                output(format("    edgelen = %.5f\n") % nd->_edge_length, 1);
+                output(format("    par     = %s\n") % (nd->_parent ? to_string(nd->_parent->_number) : "none"), 1);
+                output(format("    lchild  = %s\n") % (nd->_left_child ? to_string(nd->_left_child->_number) : "none"), 1);
+                output(format("    rchild  = %s\n") % (nd->_right_sib ? to_string(nd->_right_sib->_number) : "none"), 1);
+            }
+            sub++;
+        }
+    }
+
     inline void Forest::debugCheckAllPreorders() const {
         // For each subtree stored in _lineages, check to ensure that the
         // node pointers stored in _preorders are indeed in preorder sequence
@@ -1053,7 +1099,7 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
     }
     
     inline void Forest::joinLineagePair(Node * new_nd, Node * subtree1, Node * subtree2) {
-        // Note: must call pullNode to obtain anc before calling this function
+        // Note: must call pullNode to obtain new_nd before calling this function
         assert(new_nd);
         assert(subtree1);
         assert(subtree2);
@@ -1091,6 +1137,18 @@ inline void Forest::storeEdgelensBySplit(map<Split, double> & edgelenmap) {
         subtree1->_right_sib = nullptr;
         subtree1->_parent = nullptr;
         subtree2->_parent = nullptr;
+    }
+    
+    inline void Forest::removeOne(Node::ptr_vect_t & v, Node * del) {
+        // Get iterator to node to be deleted and remove from v
+        auto it = find(v.begin(), v.end(), del);
+        assert(it != v.end());
+        v.erase(it);
+    }
+    
+    inline void Forest::addOne(Node::ptr_vect_t & v, Node * add) {
+        // Add node
+        v.push_back(add);
     }
     
     inline void Forest::removeTwoAddOne(Node::ptr_vect_t & v, Node * del1, Node * del2, Node * add) {

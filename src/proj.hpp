@@ -13,6 +13,11 @@ using boost::program_options::parse_config_file;
 using boost::program_options::reading_file;
 using boost::program_options::notify;
 
+#if defined(POLTMP)
+// Define column_vector type used by DLib
+typedef dlib::matrix<double,0,1> column_vector;
+#endif
+
 #if defined(LOG_MEMORY)
 extern char dummy_char;
 extern ofstream memfile;
@@ -79,6 +84,10 @@ namespace proj {
             void                         testSecondLevelSMC();
             void                         chibSim(/*const Particle & test_particle*/);
             
+#if defined(POLTMP)
+            void                         geneTreeExperiment(bool forest, bool smctree);
+#endif
+
             void                         selectParticlesToKeep(list<Particle> & first_level_particles, vector<unsigned> & kept);
 
             void                         readData();
@@ -201,7 +210,7 @@ namespace proj {
 #if defined(EST_THETA)
         ("invgammashape", value(&G::_invgamma_shape)->default_value(2.0), "shape parameter of inverse gamma prior distribution used for species-specific theta values (default 2.0)")
         ("freezethetamean",  value(&G::_theta_mean_frozen)->default_value(false), "if true, every species uses fixedthetamean (ignored if fixedthetamean is negative); if false, theta for any given species is drawn from InverseGamma(invgammashape, fixedthetamean) (default false)")
-        ("fixedthetamean",  value(&G::_theta_mean_fixed)->default_value(-1.0), "mean theta will be fixed to this value if specified; if not specified, theta mean will vary among particles (default -1.0, and negative value indicates \"not specified\")")
+        ("fixedthetamean",  value(&G::_theta_mean_fixed)->default_value(-1.0), "mean theta will be fixed to this value if specified; if not specified, theta mean will vary among particles (default -1.0: negative value indicates \"not specified\")")
 #else
         ("theta",  value(&G::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
 #endif
@@ -591,7 +600,7 @@ namespace proj {
         // Add coalescent events and speciation events until all trees are built
         for (unsigned step = 0; step < nsteps; step++) {
 #if defined(ONE_LOCUS_PER_STEP)
-            unsigned step_modulus = step & G::_ngenes;
+            unsigned step_modulus = step % G::_ngenes;
             if (step_modulus == 0) {
                 // Time to choose a new random locus ordering
                 for (unsigned i = 0; i < G::_ngenes; i++) {
@@ -812,7 +821,7 @@ namespace proj {
             paupf << "#NEXUS\n\n";
             paupf << "begin paup;\n";
             paupf << "  log start file=svdout.txt replace;\n";
-            paupf << "  exe simulated.nex;\n";
+            paupf << "  exe sim.nex;\n";
             paupf << "  taxpartition species (vector) = " << join(taxpartition," ") << ";\n";
             paupf << "  svd taxpartition=species;\n";
             paupf << "  roottrees;\n";
@@ -883,6 +892,821 @@ namespace proj {
         particle.calcLogCoalescentLikelihood(coalinfo_vect,
             /*integrate_out_thetas*/true, /*verbose*/true);
     }
+
+#if defined(POLTMP)
+    GeneForest * optgf = nullptr;
+        
+    Node * sppA = nullptr;
+    Node * sppAl = nullptr;
+    Node * sppAr = nullptr;
+    Node * sppB = nullptr;
+    Node * sppBl = nullptr;
+    Node * sppBr = nullptr;
+    Node * sppC = nullptr;
+    Node * sppCl = nullptr;
+    Node * sppCr = nullptr;
+    Node * sppD = nullptr;
+    Node * sppDl = nullptr;
+    Node * sppDr = nullptr;
+    Node * sppE = nullptr;
+    Node * sppEl = nullptr;
+    Node * sppEr = nullptr;
+    Node * sppBC = nullptr;
+    Node * sppDE = nullptr;
+    Node * sppCDE = nullptr;
+    Node * sppBCDE = nullptr;
+    Node * sppABCDE = nullptr;
+    
+    double minTrueForest(const column_vector & m) {
+        assert(optgf);
+        GeneForest & gf = *optgf;
+
+        // Unpack variables
+        double hA = m(0);
+        double hBC = m(1);
+        double hDE = m(2);
+        double logitB = m(3);
+        double logitC = m(4);
+        double logitD = m(5);
+        double logitE = m(6);
+        
+        double hB = hBC*exp(logitB)/(1.0 + exp(logitB));
+        double hC = hBC*exp(logitC)/(1.0 + exp(logitC));
+        double hD = hDE*exp(logitD)/(1.0 + exp(logitD));
+        double hE = hDE*exp(logitE)/(1.0 + exp(logitE));
+        
+        assert(hB < hBC);
+        assert(hC < hBC);
+        assert(hD < hDE);
+        assert(hE < hDE);
+
+        sppA->setHeight(hA);
+        sppAl->setHeight(0.0);
+        sppAr->setHeight(0.0);
+        
+        sppBC->setHeight(hBC);
+        
+        sppB->setHeight(hB);
+        sppBl->setHeight(0.0);
+        sppBr->setHeight(0.0);
+
+        sppC->setHeight(hC);
+        sppCl->setHeight(0.0);
+        sppCr->setHeight(0.0);
+
+        sppDE->setHeight(hDE);
+        
+        sppD->setHeight(hD);
+        sppDl->setHeight(0.0);
+        sppDr->setHeight(0.0);
+
+        sppE->setHeight(hE);
+        sppEl->setHeight(0.0);
+        sppEr->setHeight(0.0);
+        
+        sppAl->setEdgeLength(hA);
+        sppAr->setEdgeLength(hA);
+
+        sppBl->setEdgeLength(hB);
+        sppBr->setEdgeLength(hB);
+
+        sppCl->setEdgeLength(hC);
+        sppCr->setEdgeLength(hC);
+
+        sppDl->setEdgeLength(hD);
+        sppDr->setEdgeLength(hD);
+
+        sppEl->setEdgeLength(hE);
+        sppEr->setEdgeLength(hE);
+        
+        sppB->setEdgeLength(hBC - hB);
+        sppC->setEdgeLength(hBC - hC);
+        sppD->setEdgeLength(hDE - hD);
+        sppE->setEdgeLength(hDE - hE);
+
+        sppA->setEdgeLength(0.0);
+        sppBC->setEdgeLength(0.0);
+        sppDE->setEdgeLength(0.0);
+        
+        gf.calcPartialArray(sppA);
+        gf.calcPartialArray(sppB);
+        gf.calcPartialArray(sppC);
+        gf.calcPartialArray(sppD);
+        gf.calcPartialArray(sppE);
+        gf.calcPartialArray(sppBC);
+        gf.calcPartialArray(sppDE);
+        return gf.calcLogLikelihood();
+    }
+    
+    double minWrongForest(const column_vector & m) {
+        assert(optgf);
+        GeneForest & gf = *optgf;
+
+        double hA       = m(0); // starting height of A, ancestor of a^A and b^A
+        double hB       = m(1); // starting height of B, ancestor of c^B and d^B
+        double hCDE     = m(2); // starting height of ancestor of C and D+E
+        double logitpDE = m(3); // log-proportion of height of D+E ancestor
+                              //   to height of ancestor of C and D+E
+        double logitpC  = m(4); // log-proportion of height of e^C and f^C ancestor
+                              //   to height of ancestor of C and D+E
+        double logitpD  = m(5); // log-proportion of height of g^D and h^D ancestor
+                              //   to height of D+E ancestor
+        double logitpE  = m(6); // log-proportion of height of i^E and j^E ancestor
+
+        sppA->setHeight(hA);
+        sppAl->setHeight(0.0);
+        sppAr->setHeight(0.0);
+        sppB->setHeight(hB);
+        sppBl->setHeight(0.0);
+        sppBr->setHeight(0.0);
+        sppCDE->setHeight(hCDE);
+        double hC = hCDE*exp(logitpC)/(1.0 + exp(logitpC));
+        sppC->setHeight(hC);
+        sppCl->setHeight(0.0);
+        sppCr->setHeight(0.0);
+        double hDE = hCDE*exp(logitpDE)/(1.0 + exp(logitpDE));
+        sppDE->setHeight(hDE);
+        double hD = hDE*exp(logitpD)/(1.0 + exp(logitpD));
+        sppD->setHeight(hD);
+        sppDl->setHeight(0.0);
+        sppDr->setHeight(0.0);
+        double hE = hDE*exp(logitpE)/(1.0 + exp(logitpE));
+        sppE->setHeight(hE);
+        sppEl->setHeight(0.0);
+        sppEr->setHeight(0.0);
+        
+        sppA->setEdgeLength(0.0);
+        sppAl->setEdgeLength(hA);
+        sppAr->setEdgeLength(hA);
+        
+        sppB->setEdgeLength(0.0);
+        sppBl->setEdgeLength(hB);
+        sppBr->setEdgeLength(hB);
+        
+        double edgelenC = hCDE - hC;
+        assert(edgelenC >= 0.0);
+        sppC->setEdgeLength(edgelenC);
+        sppCl->setEdgeLength(hC);
+        sppCr->setEdgeLength(hC);
+        
+        double edgelenD = hDE - hD;
+        assert(edgelenD >= 0.0);
+        sppD->setEdgeLength(edgelenD);
+        sppDl->setEdgeLength(hD);
+        sppDr->setEdgeLength(hD);
+        
+        double edgelenE = hDE - hE;
+        assert(edgelenE >= 0.0);
+        sppE->setEdgeLength(edgelenE);
+        sppEl->setEdgeLength(hE);
+        sppEr->setEdgeLength(hE);
+        
+        double edgelenDE = hCDE - hDE;
+        assert(edgelenDE >= 0.0);
+        sppDE->setEdgeLength(edgelenDE);
+        
+        sppCDE->setEdgeLength(0.0);
+                
+        gf.calcPartialArray(sppA);
+        gf.calcPartialArray(sppB);
+        gf.calcPartialArray(sppC);
+        gf.calcPartialArray(sppD);
+        gf.calcPartialArray(sppE);
+        gf.calcPartialArray(sppDE);
+        gf.calcPartialArray(sppCDE);
+        return gf.calcLogLikelihood();
+    }
+    
+    inline void Proj::geneTreeExperiment(bool forest, bool smctree) {
+        // forest   smctree   newick
+        //    yes        no   A, (B,C), (D,E)
+        //    yes       yes   A, B, (C,(D,E))
+        //     no        no   (A,((B,C),(D,E))
+        //     no       yes   (A,(B,(C,(D,E)))
+        readData();
+        G::_ngenes = _data->getNumSubsets();
+        assert(G::_ngenes > 0);
+
+        // Copy taxon names to global variable _taxon_names
+        G::_ntaxa = _data->getNumTaxa();
+        _data->copyTaxonNames(G::_taxon_names);
+                    
+        for (unsigned g = 0; g < G::_ngenes; g++) {
+            GeneForest::computeLeafPartials(g, _data);
+        }
+
+        // Read in the true species tree
+        G::_nexus_taxon_map.clear();
+        map<unsigned,unsigned> species_taxon_map;
+        vector<string> species_tree_names;
+        vector<string> species_newicks;
+        Forest::readTreefile(G::_species_tree_ref_file_name, /*skip*/0, G::_species_names, species_taxon_map, species_tree_names, species_newicks);
+        G::_nspecies = (unsigned)G::_species_names.size();
+                
+        // Read in the true gene tree
+        map<unsigned,unsigned> gene_taxon_map;
+        vector<string> gene_tree_names;
+        vector<string> gene_newicks;
+        GeneForest::readTreefile(G::_gene_trees_ref_file_name, /*skip*/0, G::_taxon_names, gene_taxon_map, gene_tree_names, gene_newicks);
+        G::_ntaxa = (unsigned)G::_taxon_names.size();
+        
+        // Copy taxon names to global variable _taxon_names
+        buildSpeciesMap(/*taxa_from_data*/false);
+        
+        // Create a particle in which to store species and gene trees
+        Particle particle;
+        particle.setData(_data);
+        
+        // Build the species tree
+        SpeciesForest & sppref = particle.getSpeciesForest();
+        G::_nexus_taxon_map = species_taxon_map;
+        sppref.buildFromNewick(species_newicks[0]);
+        
+        // Build the gene trees
+        G::_ngenes = (unsigned)gene_newicks.size();
+        vector<GeneForest> & gfref = particle.getGeneForests();
+        gfref.resize(gene_newicks.size());
+        
+        // Only considering locus 2
+        unsigned g = 1;
+        const string & newick = gene_newicks[g];
+        output(format("locus %d:\n") % (g+1), 2);
+        
+        G::_nexus_taxon_map = gene_taxon_map;
+        GeneForest & gf = gfref[g];
+        gf.setParticle(&particle);
+        gf.setGeneIndex(g);
+        output(format("  newick = \"%s\"\n") %  newick, 2);
+        gf.buildFromNewick(newick);
+        
+        // Calculate log likelihood for locus 2 gene tree
+        gf.setData(_data);
+        gf.computeAllPartials();
+        double logL = gf.calcLogLikelihood();
+        output(format("  logL = %.5f\n") % logL, 2);
+        
+        // Create pointers to important nodes
+        //gf.debugShowPreorder();
+        
+        sppA = gf.findNodeNumbered(17);
+        sppAl = gf.findNodeNumbered(0);
+        sppAr = gf.findNodeNumbered(1);
+
+        sppB = gf.findNodeNumbered(13);
+        sppBl = gf.findNodeNumbered(2);
+        sppBr = gf.findNodeNumbered(3);
+
+        sppC = gf.findNodeNumbered(14);
+        sppCl = gf.findNodeNumbered(4);
+        sppCr = gf.findNodeNumbered(5);
+
+        sppD = gf.findNodeNumbered(11);
+        sppDl = gf.findNodeNumbered(6);
+        sppDr = gf.findNodeNumbered(7);
+
+        sppE = gf.findNodeNumbered(10);
+        sppEl = gf.findNodeNumbered(8);
+        sppEr = gf.findNodeNumbered(9);
+
+        sppBC = gf.findNodeNumbered(15);
+        sppDE = gf.findNodeNumbered(12);
+        sppBCDE = gf.findNodeNumbered(16);
+        sppABCDE = gf.findNodeNumbered(18);
+
+        double sppAheight  = sppA->getHeight();
+        double sppBheight  = sppB->getHeight();
+        double sppCheight  = sppC->getHeight();
+        double sppDheight  = sppD->getHeight();
+        double sppEheight  = sppE->getHeight();
+        double sppBCheight = sppBC->getHeight();
+        double sppDEheight = sppDE->getHeight();
+        double sppBCDEheight = sppBCDE->getHeight();
+        double sppABCDEheight = sppABCDE->getHeight();
+        double hBCDE  = sppBCDEheight; //(sppABCDEheight + sppBCDEheight)/2.0;
+        double hstart = forest ? sppABCDEheight : sppBCDEheight;
+        double hstop  = sppDEheight;
+        double hincr  = (hstart - hstop)/20.0;
+        output(format("sppAheight    = %.5f\n") % sppAheight, 1);
+        output(format("sppBheight    = %.5f\n") % sppBheight, 1);
+        output(format("sppCheight    = %.5f\n") % sppCheight, 1);
+        output(format("sppDheight    = %.5f\n") % sppDheight, 1);
+        output(format("sppEheight    = %.5f\n") % sppEheight, 1);
+        output(format("sppBCheight   = %.5f\n") % sppBCheight, 1);
+        output(format("sppDEheight   = %.5f\n") % sppDEheight, 1);
+        output(format("sppBCDEheight = %.5f\n") % sppBCDEheight, 1);
+        output(format("sppaBCDEheight = %.5f\n") % sppABCDEheight, 1);
+        output(format("hstart = %.5f\n") % hstart, 1);
+        output(format("hstop  = %.5f\n") % hstop, 1);
+        output(format("hincr  = %.5f\n") % hincr, 1);
+        
+        if (forest) {
+            if (smctree) {
+                // (A,((B,C),(D,E)) --> (A,B,(C,(D,E)))
+                // Separate sppABCDE into sppA and sppBCDE
+                gf.addTwoRemoveOne(gf.getLineages(), sppA, sppBCDE, sppABCDE);
+                sppA->setParent(nullptr);
+                sppA->setRightSib(nullptr);
+                sppBCDE->setParent(nullptr);
+                sppBCDE->setRightSib(nullptr);
+                sppABCDE->setLeftChild(nullptr);
+                //gf.refreshAllPreorders();
+                //gf.debugShowPreorder();
+                                
+                // Separate sppBCDE into sppBC and sppDE
+                gf.addTwoRemoveOne(gf.getLineages(), sppBC, sppDE, sppBCDE);
+                sppBC->setParent(nullptr);
+                sppBC->setRightSib(nullptr);
+                sppDE->setParent(nullptr);
+                sppDE->setRightSib(nullptr);
+                sppBCDE->setLeftChild(nullptr);
+                sppBCDE->setRightSib(nullptr);
+                sppBCDE->setParent(nullptr);
+
+                // Separate sppBC into sppB and sppC
+                gf.addTwoRemoveOne(gf.getLineages(), sppB, sppC, sppBC);
+                sppB->setParent(nullptr);
+                sppB->setRightSib(nullptr);
+                sppC->setParent(nullptr);
+                sppC->setRightSib(nullptr);
+                sppBC->setLeftChild(nullptr);
+                sppBC->setRightSib(nullptr);
+                sppBC->setParent(nullptr);
+                //gf.refreshAllPreorders();
+                //gf.debugShowPreorder();
+
+                // Join sppC and sppDE to form sppCDE
+                // sppBC is no longer being used, so recyle it as sppCDE
+                sppCDE = sppBC;
+                sppCDE->setLeftChild(sppC);
+                sppCDE->setParent(nullptr);
+                sppCDE->setRightSib(nullptr);
+                sppCDE->setEdgeLength(0.0);
+
+                // Finish connecting new trio of nodes
+                sppC->setRightSib(sppDE);
+                sppC->setParent(sppCDE);
+                sppDE->setParent(sppCDE);
+                
+                // Add sppCDE to and remove sppC from _lineages
+                gf.removeTwoAddOne(gf.getLineages(), sppC, sppDE, sppCDE);
+                gf.refreshAllPreorders();
+                gf.debugShowPreorder();
+            }
+            else /* not smctree */ {
+                // Separate sppABCDE into sppA and sppBCDE
+                gf.addTwoRemoveOne(gf.getLineages(), sppA, sppBCDE, sppABCDE);
+                
+                // Separate sppBCDE into sppBC and sppDE
+                gf.addTwoRemoveOne(gf.getLineages(), sppBC, sppDE, sppBCDE);
+                
+                // Tree has been converted to a forest, so recalculate preorders
+                gf.refreshAllPreorders();
+                //gf.debugShowPreorder();
+            }
+        }
+        else /* not forest */ {
+            if (smctree) {
+                // (A,((B,C),(D,E)) --> (A,(B,(C,(D,E))))
+                // Separate sppABCDE into sppA and sppBCDE
+                gf.addTwoRemoveOne(gf.getLineages(), sppA, sppBCDE, sppABCDE);
+                sppA->setParent(nullptr);
+                sppA->setRightSib(nullptr);
+                sppBCDE->setParent(nullptr);
+                sppBCDE->setRightSib(nullptr);
+                sppABCDE->setLeftChild(nullptr);
+                //gf.refreshAllPreorders();
+                //gf.debugShowPreorder();
+                                
+                // Separate sppBCDE into sppBC and sppDE
+                gf.addTwoRemoveOne(gf.getLineages(), sppBC, sppDE, sppBCDE);
+                sppBC->setParent(nullptr);
+                sppBC->setRightSib(nullptr);
+                sppDE->setParent(nullptr);
+                sppDE->setRightSib(nullptr);
+                sppBCDE->setLeftChild(nullptr);
+                sppBCDE->setRightSib(nullptr);
+                sppBCDE->setParent(nullptr);
+
+                // Separate sppBC into sppB and sppC
+                gf.addTwoRemoveOne(gf.getLineages(), sppB, sppC, sppBC);
+                sppB->setParent(nullptr);
+                sppB->setRightSib(nullptr);
+                sppC->setParent(nullptr);
+                sppC->setRightSib(nullptr);
+                sppBC->setLeftChild(nullptr);
+                sppBC->setRightSib(nullptr);
+                sppBC->setParent(nullptr);
+                //gf.refreshAllPreorders();
+                //gf.debugShowPreorder();
+
+                // Join sppC and sppDE to form sppCDE
+                // sppBC is no longer being used, so recyle it as sppCDE
+                sppCDE = sppBC;
+                sppCDE->setLeftChild(sppC);
+                //sppCDE->setParent(sppBCDE);
+                sppCDE->setRightSib(nullptr);
+                sppC->setRightSib(sppDE);
+                sppC->setParent(sppCDE);
+                sppDE->setParent(sppCDE);
+                gf.removeTwoAddOne(gf.getLineages(), sppC, sppDE, sppCDE);
+                //gf.refreshAllPreorders();
+                //gf.debugShowPreorder();
+                
+                // Join sppB and sppCDE to form sppBCDE
+                sppBCDE->setLeftChild(sppB);
+                sppBCDE->setParent(sppABCDE);
+                sppBCDE->setRightSib(nullptr);
+                sppB->setRightSib(sppCDE);
+                sppB->setParent(sppBCDE);
+                sppCDE->setParent(sppBCDE);
+                gf.removeTwoAddOne(gf.getLineages(), sppB, sppCDE, sppBCDE);
+                //gf.refreshAllPreorders();
+                //gf.debugShowPreorder();
+
+                // Join sppA and sppBCDE to form sppABCDE
+                sppABCDE->setLeftChild(sppA);
+                sppABCDE->setParent(nullptr);
+                sppABCDE->setRightSib(nullptr);
+                sppA->setRightSib(sppBCDE);
+                sppA->setParent(sppABCDE);
+                sppBCDE->setParent(sppABCDE);
+                gf.removeTwoAddOne(gf.getLineages(), sppA, sppBCDE, sppABCDE);
+                gf.refreshAllPreorders();
+                //gf.debugShowPreorder();
+            }
+            else {
+                // nothing to do because true tree already built
+            }
+        }
+        
+        bool find_MLEs = true;
+        if (find_MLEs) {
+            assert(forest);
+            optgf = &gf;
+            if (smctree) {
+                double sppCDEheight = sppBCheight;
+                assert(sppCDEheight > sppDEheight);
+                double sppDElogitprop = log(sppDEheight) - log(sppCDEheight-sppDEheight);
+                assert(sppCDEheight > sppCheight);
+                double sppClogitprop  = log(sppCheight) - log(sppCDEheight-sppCheight);
+                assert(sppDEheight > sppDheight);
+                double sppDlogitprop  = log(sppDheight) - log(sppDEheight-sppDheight);
+                assert(sppDEheight > sppEheight);
+                double sppElogitprop  = log(sppEheight) - log(sppDEheight-sppEheight);
+                column_vector starting_point = {
+                    sppAheight,      // starting height of A, ancestor of a^A and b^A
+                    sppBheight,      // starting height of B, ancestor of c^B and d^B
+                    sppCDEheight,    // starting height of ancestor of C and D+E
+                    sppDElogitprop,  // logit-proportion of height of D+E ancestor
+                                     //   to height of ancestor of C and D+E
+                    sppClogitprop,   // logit-proportion of height of e^C and f^C ancestor
+                                     //   to height of ancestor of C and D+E
+                    sppDlogitprop,   // logit-proportion of height of g^D and h^D ancestor
+                                     //   to height of D+E ancestor
+                    sppElogitprop    // logit-proportion of height of i^E and j^E ancestor
+                                     //   to height of D+E ancestor
+                };
+                
+                double maximized_log_likelihood = dlib::find_min_using_approximate_derivatives(
+                    dlib::bfgs_search_strategy(),
+                    dlib::objective_delta_stop_strategy(1e-7),
+                    minWrongForest,
+                    starting_point,
+                    -1);
+                
+                // Unpack variables
+                double hA = starting_point(0);
+                double hB = starting_point(1);
+                double hCDE = starting_point(2);
+                double logitDE = starting_point(3);
+                double hDE = hCDE*exp(logitDE)/(1.0 + exp(logitDE));
+                double logitC = starting_point(4);
+                double hC = hCDE*exp(logitC)/(1.0 + exp(logitC));
+                double logitD = starting_point(5);
+                double hD = hDE*exp(logitD)/(1.0 + exp(logitD));
+                double logitE = starting_point(6);
+                double hE = hDE*exp(logitE)/(1.0 + exp(logitE));
+                
+                string Aclade = str(format("(a^A:%.9f,b^A:%.9f)A:0.0") % hA % hA);
+                string Bclade = str(format("(c^B:%.9f,d^B:%.9f)B:0.0") % hB % hB);
+                string Cclade = str(format("(e^C:%.9f,f^C:%.9f)C:%.9f") % hC % hC % (hCDE-hC));
+                string Dclade = str(format("(g^D:%.9f,h^D:%.9f)D:%.9f") % hD % hD % (hDE-hD));
+                string Eclade = str(format("(i^E:%.9f,j^E:%.9f)E:%.9f") % hE % hE % (hDE-hE));
+                string CDEclade = str(format("(%s,(%s,%s)DE:%.9f)CDE:0.0") % Cclade % Dclade % Eclade % (hCDE-hDE));
+                string newick = str(format("(%s,%s,%s)\n") % Aclade % Bclade % CDEclade);
+                output("Wrong forest maximizing log-likelihood:\n  ", 1);
+                output(newick, 1);
+                output(format("Maximized log-likelihood: %.9f\n") % maximized_log_likelihood,1);
+            }
+            else {
+                double hA = sppAheight;
+                double hB = sppBheight;
+                double hC = sppCheight;
+                double hD = sppDheight;
+                double hE = sppEheight;
+                double hBC = sppBCheight;
+                double hDE = sppDEheight;
+
+                assert(hB < hBC);
+                assert(hC < hBC);
+                assert(hD < hDE);
+                assert(hE < hDE);
+                
+                double logitB = log(hB) - log(hBC-hB);
+                double logitC = log(hC) - log(hBC-hC);
+                double logitD = log(hD) - log(hDE-hD);
+                double logitE = log(hE) - log(hDE-hE);
+
+                column_vector starting_point = {
+                    hA,     // starting height of A, ancestor of a^A and b^A
+                    hBC,    // starting height of ancestor of B and C
+                    hDE,    // starting height of ancestor of D and E
+                    logitB, // logit of proportion hB to hBC
+                    logitC, // logit of proportion hC to hBC
+                    logitD, // logit of proportion hD to hDE
+                    logitE  // logit of proportion hE to hDE
+                };
+                
+                double maximized_log_likelihood = dlib::find_min_using_approximate_derivatives(
+                    dlib::bfgs_search_strategy(),
+                    dlib::objective_delta_stop_strategy(1e-7),
+                    minTrueForest,
+                    starting_point,
+                    -1);
+                
+                // Unpack variables
+                hA = starting_point(0);
+                hBC = starting_point(1);
+                hDE = starting_point(2);
+                logitB = starting_point(3);
+                logitC = starting_point(4);
+                logitD = starting_point(5);
+                logitE = starting_point(6);
+                
+                hB = hBC*exp(logitB)/(1.0 + exp(logitB));
+                hC = hBC*exp(logitC)/(1.0 + exp(logitC));
+                hD = hDE*exp(logitD)/(1.0 + exp(logitD));
+                hE = hDE*exp(logitE)/(1.0 + exp(logitE));
+                
+                assert(hB < hBC);
+                assert(hC < hBC);
+                assert(hD < hDE);
+                assert(hE < hDE);
+                
+                string Aclade = str(format("(a^A:%.9f,b^A:%.9f)A:0.0") % hA % hA);
+                string Bclade = str(format("(c^B:%.9f,d^B:%.9f)B:%.9f") % hB % hB % (hBC - hB));
+                string Cclade = str(format("(e^C:%.9f,f^C:%.9f)C:%.9f") % hC % hC % (hBC-hC));
+                string Dclade = str(format("(g^D:%.9f,h^D:%.9f)D:%.9f") % hD % hD % (hDE-hD));
+                string Eclade = str(format("(i^E:%.9f,j^E:%.9f)E:%.9f") % hE % hE % (hDE-hE));
+                string BCclade = str(format("(%s,%s)BC:0.0") % Bclade % Cclade);
+                string DEclade = str(format("(%s,%s)DE:0.0") % Dclade % Eclade);
+                string newick = str(format("(%s,%s,%s)\n") % Aclade % BCclade % DEclade);
+                output("True forest maximizing log-likelihood:\n  ", 1);
+                output(newick, 1);
+                output(format("Maximized log-likelihood: %.9f\n") % maximized_log_likelihood,1);
+            }
+        }
+        else {
+            // Change height of sppBC and record log-likelihood for each increment
+            if (forest) {
+                if (smctree) {
+                    output("Adjusting height of C+(D+E) node in gene forest:\n", 1);
+                }
+                else {
+                    output("Adjusting height of B+C node in gene forest:\n", 1);
+                }
+            }
+            else {
+                if (smctree) {
+                    output("Adjusting height of C+(D+E) node in full gene tree:\n", 1);
+                }
+                else {
+                    output("Adjusting height of B+C node in full gene tree:\n", 1);
+                }
+            }
+            
+            vector< pair<double, double> > wrong_forest;
+            vector< pair<double, double> > true_forest;
+            vector< pair<double, double> > wrong_tree;
+            vector< pair<double, double> > true_tree;
+
+            output(format("%20s %12s\n") % "logL" % "height", 1);
+            for (double h = hstart; h >= hstop; h -= hincr) {
+                if (forest) {
+                    if (smctree) {
+                        sppCDE->setEdgeLength(0.0);
+                        sppCDE->setHeight(h);
+                        sppC->setEdgeLength(h - sppC->getHeight());
+                        sppDE->setEdgeLength(h - sppDEheight);
+                        gf.calcPartialArray(sppCDE);
+                        logL = gf.calcLogLikelihood();
+                        wrong_forest.push_back(make_pair(h, logL));
+                    }
+                    else {
+                        sppBC->setEdgeLength(0.0);
+                        sppBC->setHeight(h);
+                        sppB->setEdgeLength(h - sppB->getHeight());
+                        sppC->setEdgeLength(h - sppC->getHeight());
+                        gf.calcPartialArray(sppBC);
+                        gf.calcPartialArray(sppDE);
+                        logL = gf.calcLogLikelihood();
+                        true_forest.push_back(make_pair(h, logL));
+                    }
+                }
+                else {
+                    if (smctree) {
+                        sppA->setEdgeLength(sppABCDE->getHeight() - sppA->getHeight());
+                        sppB->setEdgeLength(hBCDE - sppB->getHeight());
+                        sppC->setEdgeLength(h - sppC->getHeight());
+                        sppDE->setEdgeLength(h - sppDE->getHeight());
+                        sppCDE->setHeight(h);
+                        sppCDE->setEdgeLength(hBCDE - h);
+                        sppBCDE->setHeight(hBCDE);
+                        sppBCDE->setEdgeLength(sppABCDE->getHeight() - hBCDE);
+                        gf.calcPartialArray(sppCDE);
+                        gf.calcPartialArray(sppBCDE);
+                        gf.calcPartialArray(sppABCDE);
+                        logL = gf.calcLogLikelihood();
+                        wrong_tree.push_back(make_pair(h, logL));
+                    }
+                    else {
+                        sppBC->setHeight(h);
+                        sppBC->setEdgeLength(sppBCDE->getHeight() - h);
+                        sppB->setEdgeLength(h - sppB->getHeight());
+                        sppC->setEdgeLength(h - sppC->getHeight());
+                        gf.calcPartialArray(sppBC);
+                        gf.calcPartialArray(sppBCDE);
+                        gf.calcPartialArray(sppABCDE);
+                        logL = gf.calcLogLikelihood();
+                        true_tree.push_back(make_pair(h, logL));
+                    }
+                }
+                string newick = gf.makeNewick(9, true, false);
+                output(format("%20.9f %12.5f %s\n") % logL % h % newick, 1);
+            }
+            
+            // Create commands for plotting in R
+            double ymin = G::_infinity;
+            double ymax = G::_negative_infinity;
+            double best_logL   = G::_negative_infinity;
+            double best_height = 0.0;
+            if (forest) {
+                if (smctree) {
+                    bool first = true;
+                    output("height_wrong_forest <- c(", 1);
+                    for (auto & p : wrong_forest) {
+                        if (first)
+                            first = false;
+                        else
+                            output(",", 1);
+                        output(format("%.5f") % p.first, 1);
+                    }
+                    output(")\n", 1);
+                    first = true;
+                    output("logL_wrong_forest <- c(", 1);
+                    for (auto & p : wrong_forest) {
+                        if (first)
+                            first = false;
+                        else
+                            output(",", 1);
+                        if (p.second < ymin)
+                            ymin = p.second;
+                        if (p.second > ymax)
+                            ymax = p.second;
+                        if (p.second > best_logL) {
+                            best_height = p.first;
+                            best_logL = p.second;
+                        }
+                        output(format("%.5f") % p.second, 1);
+                    }
+                    output(")\n", 1);
+                    output(format("ymin <- %.5f\n") % ymin, 1);
+                    output(format("ymax <- %.5f\n") % ymax, 1);
+                    output(format("mle_wrong_forest  <- %.5f\n") % best_height, 1);
+                    output(format("mle_logL_wrong_forest  <- %.5f\n") % best_logL, 1);
+                    output(format("plot(height_wrong_forest, logL_wrong_forest, type=\"l\", lwd=2, col=\"navy\", ylim=c(%.5f,%.5f))\n") % ymin % ymax, 1);
+                    output("#lines(height_wrong_forest, logL_wrong_forest, lwd=2, col=\"red\")\n", 1);
+                    output("abline(v=mle_wrong_forest, lwd=2, lty=\"dotted\", col=\"gray\")\n", 1);
+                }
+                else {
+                    bool first = true;
+                    output("height_true_forest <- c(", 1);
+                    for (auto & p : true_forest) {
+                        if (first)
+                            first = false;
+                        else
+                            output(",", 1);
+                        output(format("%.5f") % p.first, 1);
+                    }
+                    output(")\n", 1);
+                    first = true;
+                    double ymin = G::_infinity;
+                    double ymax = G::_negative_infinity;
+                    output("logL_true_forest <- c(", 1);
+                    for (auto & p : true_forest) {
+                        if (first)
+                            first = false;
+                        else
+                            output(",", 1);
+                        if (p.second < ymin)
+                            ymin = p.second;
+                        if (p.second > ymax)
+                            ymax = p.second;
+                        if (p.second > best_logL) {
+                            best_height = p.first;
+                            best_logL = p.second;
+                        }
+                        output(format("%.5f") % p.second, 1);
+                    }
+                    output(")\n", 1);
+                    output(format("ymin <- %.5f\n") % ymin, 1);
+                    output(format("ymax <- %.5f\n") % ymax, 1);
+                    output(format("mle_true_forest  <- %.5f\n") % best_height, 1);
+                    output(format("mle_logL_true_forest  <- %.5f\n") % best_logL, 1);
+                    output(format("plot(height_true_forest, logL_true_forest, type=\"l\", lwd=2, col=\"navy\", ylim=c(%.5f,%.5f))\n") % ymin % ymax, 1);
+                    output("#lines(height_true_forest, logL_true_forest, lwd=2, col=\"red\")\n", 1);
+                    output("abline(v=mle_true_forest, lwd=2, lty=\"dotted\", col=\"gray\")\n", 1);
+                }
+            }
+            else /* not forest */ {
+                if (smctree) {
+                    bool first = true;
+                    output("height_wrong_tree <- c(", 1);
+                    for (auto & p : wrong_tree) {
+                        if (first)
+                            first = false;
+                        else
+                            output(",", 1);
+                        output(format("%.5f") % p.first, 1);
+                    }
+                    output(")\n", 1);
+                    first = true;
+                    output("logL_wrong_tree <- c(", 1);
+                    for (auto & p : wrong_tree) {
+                        if (first)
+                            first = false;
+                        else
+                            output(",", 1);
+                        if (p.second < ymin)
+                            ymin = p.second;
+                        if (p.second > ymax)
+                            ymax = p.second;
+                            if (p.second > best_logL) {
+                                best_height = p.first;
+                                best_logL = p.second;
+                            }
+                        output(format("%.5f") % p.second, 1);
+                    }
+                    output(")\n", 1);
+                    output(format("ymin <- %.5f\n") % ymin, 1);
+                    output(format("ymax <- %.5f\n") % ymax, 1);
+                    output(format("mle_wrong_tree  <- %.5f\n") % best_height, 1);
+                    output(format("mle_logL_wrong_tree  <- %.5f\n") % best_logL, 1);
+                    output(format("plot(height_wrong_tree, logL_wrong_tree, type=\"l\", lwd=2, col=\"navy\", ylim=c(%.5f,%.5f))\n") % ymin % ymax, 1);
+                    output("#lines(height_wrong_tree, logL_wrong_tree, lwd=2, col=\"red\")\n", 1);
+                    output("abline(v=mle_wrong_tree, lwd=2, lty=\"dotted\", col=\"gray\")\n", 1);
+                }
+                else /* not smctree */ {
+                    bool first = true;
+                    output("height_true_tree <- c(", 1);
+                    for (auto & p : true_tree) {
+                        if (first)
+                            first = false;
+                        else
+                            output(",", 1);
+                        output(format("%.5f") % p.first, 1);
+                    }
+                    output(")\n", 1);
+                    first = true;
+                    output("logL_true_tree <- c(", 1);
+                    for (auto & p : true_tree) {
+                        if (first)
+                            first = false;
+                        else
+                            output(",", 1);
+                        if (p.second < ymin)
+                            ymin = p.second;
+                        if (p.second > ymax)
+                            ymax = p.second;
+                            if (p.second > best_logL) {
+                                best_height = p.first;
+                                best_logL = p.second;
+                            }
+                        output(format("%.5f") % p.second, 1);
+                    }
+                    output(")\n", 1);
+                    output(format("ymin <- %.5f\n") % ymin, 1);
+                    output(format("ymax <- %.5f\n") % ymax, 1);
+                    output(format("mle_true_tree  <- %.5f\n") % best_height, 1);
+                    output(format("mle_logL_true_tree  <- %.5f\n") % best_logL, 1);
+                    output(format("plot(height_true_tree, logL_true_tree, type=\"l\", lwd=2, col=\"navy\", ylim=c(%.5f,%.5f))\n") % ymin % ymax, 1);
+                    output("#lines(height_true_tree, logL_true_tree, lwd=2, col=\"red\")\n", 1);
+                    output("abline(v=mle_true_tree, lwd=2, lty=\"dotted\", col=\"gray\")\n", 1);
+                }
+            }
+        }   // end if find_MLEs else ...
+    }
+#endif
 
     inline void Proj::testSecondLevelSMC() {
         // Read data (only taxon names are used)
@@ -1198,6 +2022,9 @@ namespace proj {
             //POLWAS rng.setSeed(_rnseed);
             rng->setSeed(_rnseed);
             
+#if defined(POLTMP)
+            geneTreeExperiment(/*forest*/true, /*smctree*/false);
+#else
             if (_start_mode == "sim") {
                 simulateData(/*chib*/false);
             }
@@ -1313,6 +2140,7 @@ namespace proj {
                     ensemble.summarize();
                 }
             }
+#endif      //POLTMP
         }
         catch (XProj & x) {
             output(format("Proj encountered a problem:\n  %s\n") % x.what(), 2);

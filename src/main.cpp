@@ -72,6 +72,12 @@ using boost::format;
 #include "smc-func.hpp"
 //#include "policy-parallel-mt.hpp"
 //#include "policy-parallel-mpi.hpp"
+
+#if defined(POLTMP)
+#include <dlib/optimization.h>
+#include <dlib/global_optimization.h>
+#endif
+
 #include "proj.hpp"
 
 using namespace proj;

@@ -36,6 +36,7 @@ namespace proj {
             //void forgetSpeciesTreeAbove(double height);
             
             double getLastLogLikelihood() const {return _prev_log_likelihood;}
+            void computeAllPartials();
             double calcLogLikelihood() const;
             static void computeLeafPartials(unsigned gene, Data::SharedPtr data);
             static void releaseLeafPartials(unsigned gene);
@@ -70,6 +71,8 @@ namespace proj {
             void recordHeights(vector<double> & height_vect) const;
             
             //static pair<double,double> calcTreeDistances(GeneForest & ref, GeneForest & test);
+
+            double calcPartialArray(Node * new_nd);
             
             void operator=(const GeneForest & other);
             
@@ -79,8 +82,6 @@ namespace proj {
                   
             double calcTransitionProbability(unsigned from, unsigned to, double edge_length);
             void debugComputeLeafPartials(unsigned gene, int number, PartialStore::partial_t partial);
-            double calcPartialArray(Node * new_nd);
-            void computeAllPartials();
             PartialStore::partial_t pullPartial();
             void stowPartial(Node * nd);
             void stowAllPartials();

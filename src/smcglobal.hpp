@@ -95,8 +95,29 @@ namespace proj {
         static double                   _lambda;
         
         static double                   _invgamma_shape;
+#if defined(SIMPLIFY_THETA)
+        //  _theta_mean_varies  _theta_varies   Description
+        //
+        //        true              true        theta mean varies across particles
+        //                                      theta varies across species
+        //
+        //        true             false        theta mean varies across particles
+        //                                      theta same for all species
+        //
+        //       false              true        theta mean same across particles
+        //                                      theta varies across species
+        //
+        //       false             false        theta mean same across particles
+        //                                      theta same for all species
+        //                                      theta always equal to _theta_mean
+        //
+        static bool                     _theta_mean_varies;
+        static bool                     _theta_varies;
+        static double                   _theta_mean;
+#else
         static bool                     _theta_mean_frozen;
         static double                   _theta_mean_fixed;
+#endif
         static double                   _theta_proposal_mean;
         static double                   _theta_prior_mean;
         static double                   _lambda_prior_mean;

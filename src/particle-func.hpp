@@ -961,6 +961,9 @@ namespace proj {
 #endif
                                 
         // Choose which gene-species pair in which the coalescence will happen
+        if (probs.size() == 0) {
+            cerr << "debug stop" << endl;
+        }
         unsigned which = G::multinomialDraw(_lot, probs);
         assert(which < probs.size());
         

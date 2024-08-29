@@ -1,7 +1,6 @@
 // Currently this is the only model implemented - do not uncomment!
 #define USE_JUKE_CANTOR_MODEL
 
-// //temporary!
 //#define POLTMP
 
 // Comment out for release version
@@ -28,6 +27,9 @@
 
 // Experimental: devote each step to advancing a single locus
 #define ONE_LOCUS_PER_STEP
+
+// Uncomment to use simpler specification of theta fixedness
+//#define SIMPLIFY_THETA
 
 // Uncomment to produce memory report for partials and data
 //#define LOG_MEMORY
