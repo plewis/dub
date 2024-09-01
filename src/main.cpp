@@ -73,7 +73,7 @@ using boost::format;
 //#include "policy-parallel-mt.hpp"
 //#include "policy-parallel-mpi.hpp"
 
-#if defined(POLTMP)
+#if defined(DLIB_EXPERIMENT)
 #include <dlib/optimization.h>
 #include <dlib/global_optimization.h>
 #endif

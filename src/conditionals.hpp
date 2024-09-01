@@ -1,7 +1,15 @@
 // Currently this is the only model implemented - do not uncomment!
 #define USE_JUKE_CANTOR_MODEL
 
-//#define POLTMP
+// Undefine to perform experiment comparing true forest toplogy
+//   A, (B,C), (D,E)
+// to wrong forest topology
+//   A, B, (C, (D, E))
+// to see if wrong one chosen if edge lengths optimized for both forests.
+// Uses DLib to optimize edge lengths.
+// Ad hoc: uses data from 2nd locus of one particular simulated data set,
+// namely sim.nex in tests/2024-08-06-wrong-forest-better
+//#define DLIB_EXPERIMENT
 
 // Comment out for release version
 //#define DEBUGGING_SANITY_CHECK

@@ -13,7 +13,7 @@ using boost::program_options::parse_config_file;
 using boost::program_options::reading_file;
 using boost::program_options::notify;
 
-#if defined(POLTMP)
+#if defined(DLIB_EXPERIMENT)
 // Define column_vector type used by DLib
 typedef dlib::matrix<double,0,1> column_vector;
 #endif
@@ -84,7 +84,7 @@ namespace proj {
             void                         testSecondLevelSMC();
             void                         chibSim(/*const Particle & test_particle*/);
             
-#if defined(POLTMP)
+#if defined(DLIB_EXPERIMENT)
             void                         geneTreeExperiment(bool forest, bool smctree);
 #endif
 
@@ -893,7 +893,7 @@ namespace proj {
             /*integrate_out_thetas*/true, /*verbose*/true);
     }
 
-#if defined(POLTMP)
+#if defined(DLIB_EXPERIMENT)
     GeneForest * optgf = nullptr;
         
     Node * sppA = nullptr;
@@ -917,7 +917,7 @@ namespace proj {
     Node * sppBCDE = nullptr;
     Node * sppABCDE = nullptr;
     
-    double minTrueForest(const column_vector & m) {
+    double logLTrueForest(const column_vector & m) {
         assert(optgf);
         GeneForest & gf = *optgf;
 
@@ -998,7 +998,7 @@ namespace proj {
         return gf.calcLogLikelihood();
     }
     
-    double minWrongForest(const column_vector & m) {
+    double logLWrongForest(const column_vector & m) {
         assert(optgf);
         GeneForest & gf = *optgf;
 
@@ -1076,7 +1076,9 @@ namespace proj {
         gf.calcPartialArray(sppCDE);
         return gf.calcLogLikelihood();
     }
+#endif
     
+#if defined(DLIB_EXPERIMENT)
     inline void Proj::geneTreeExperiment(bool forest, bool smctree) {
         // forest   smctree   newick
         //    yes        no   A, (B,C), (D,E)
@@ -1370,7 +1372,7 @@ namespace proj {
                 double maximized_log_likelihood = dlib::find_min_using_approximate_derivatives(
                     dlib::bfgs_search_strategy(),
                     dlib::objective_delta_stop_strategy(1e-7),
-                    minWrongForest,
+                    logLWrongForest,
                     starting_point,
                     -1);
                 
@@ -1430,7 +1432,7 @@ namespace proj {
                 double maximized_log_likelihood = dlib::find_min_using_approximate_derivatives(
                     dlib::bfgs_search_strategy(),
                     dlib::objective_delta_stop_strategy(1e-7),
-                    minTrueForest,
+                    logLTrueForest,
                     starting_point,
                     -1);
                 
@@ -2022,8 +2024,8 @@ namespace proj {
             //POLWAS rng.setSeed(_rnseed);
             rng->setSeed(_rnseed);
             
-#if defined(POLTMP)
-            geneTreeExperiment(/*forest*/true, /*smctree*/false);
+#if defined(DLIB_EXPERIMENT)
+            geneTreeExperiment(/*forest*/true, /*smctree*/true);
 #else
             if (_start_mode == "sim") {
                 simulateData(/*chib*/false);
@@ -2140,7 +2142,7 @@ namespace proj {
                     ensemble.summarize();
                 }
             }
-#endif      //POLTMP
+#endif      //DLIB_EXPERIMENT
         }
         catch (XProj & x) {
             output(format("Proj encountered a problem:\n  %s\n") % x.what(), 2);
