@@ -834,7 +834,7 @@ namespace proj {
         double _log_likelihood;
     };
 
-    inline void SMC::saveAllGeneTrees(unsigned gene_index, string fnprefix, const list<Particle> & particle_list, unsigned compression_level) {
+    inline void SMC::saveAllGeneTrees(unsigned gene_index, string fnprefix, list<Particle> & particle_list, unsigned compression_level) {
         assert(compression_level >= 0 && compression_level <= 2);
         typedef tuple<unsigned, double, string, string, string> treeinfo_t;
         treeinfo_t treeinfo;
@@ -842,7 +842,7 @@ namespace proj {
         if (compression_level == 2) {
             // Save only unique newick strings
             map<string,vector<GeneTreeDetails> > tree_info;
-            for (const Particle & p : particle_list) {
+            for (Particle & p : particle_list) {
                 GeneTreeDetails info;
                 
                 // Get count for this particle
@@ -850,7 +850,7 @@ namespace proj {
                 
                 // Get newick tree description for this gene tree
                 assert(gene_index < p.getGeneForestsConst().size());
-                const GeneForest & gf = p.getGeneForestsConst()[gene_index];
+                GeneForest & gf = p.getGeneForests()[gene_index];
                 string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
                 
                 // Calculate log-likelihood for this gene tree

@@ -39,7 +39,7 @@ namespace proj {
             bool compareToReferenceTrees(list<Particle> particle_list, map<string, tuple<unsigned, double, double, double, double> > & m);
             void outputAnnotatedNexusTreefile(string fn, const vector<tuple<unsigned, double, string, string, string> > & treeinfo) const;
             void saveAllSpeciesTrees(string fn, const list<Particle> & particle_list, unsigned compression_level = 2);
-            void saveAllGeneTrees(unsigned gene, string fn, const list<Particle> & particle_list, unsigned compression_level = 2);
+            void saveAllGeneTrees(unsigned gene, string fn, list<Particle> & particle_list, unsigned compression_level = 2);
             //void                         saveUniqueSpeciesTrees(string fn, const vector<Particle> particles, const vector<unsigned> & counts);
 #if defined(EST_THETA)
             void debugSaveThetas(unsigned step) const;

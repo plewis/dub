@@ -62,6 +62,7 @@ namespace proj {
             static bool         subsumed(G::species_t test_species, G::species_t subtending_species);
 
             void        debugShowPreorder() const;
+            void        debugShowLineages() const;
             
             Node::ptr_vect_t & getLineages();
 
@@ -783,6 +784,25 @@ namespace proj {
                 output(format("    rchild  = %s\n") % (nd->_right_sib ? to_string(nd->_right_sib->_number) : "none"), 1);
             }
             sub++;
+        }
+    }
+
+    inline void Forest::debugShowLineages() const {
+        assert(_lineages.size() > 0);
+        output("\n_lineages:\n", 0);
+        for (auto nd : _lineages) {
+            output(format("  %d \"%s\" (%s)\n") % nd->_number % nd->_name % G::memoryAddressAsString(nd), 0);
+            if (nd->_left_child) {
+                output(format("    left child: %d \"%s\" (%s)\n") % nd->_left_child->_number % nd->_left_child->_name % G::memoryAddressAsString(nd->_left_child), 0);
+            }
+                
+            if (nd->_right_sib) {
+                output(format("    right sib: %d \"%s\" (%s)\n") % nd->_right_sib->_number % nd->_right_sib->_name %  G::memoryAddressAsString(nd->_right_sib), 0);
+            }
+                
+            if (nd->_parent) {
+                output(format("    parent: %d \"%s\" (%s)\n") % nd->_parent->_number % nd->_parent->_name %  G::memoryAddressAsString(nd->_parent), 0);
+            }
         }
     }
 

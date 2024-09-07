@@ -28,6 +28,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/format.hpp>
 #include <boost/math/tools/roots.hpp>
+#include <boost/math/tools/minima.hpp>
 #include <boost/program_options.hpp>
 #include <boost/random/gamma_distribution.hpp>
 #include <boost/random/mersenne_twister.hpp>

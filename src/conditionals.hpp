@@ -30,6 +30,10 @@
 // integrate out individual species thetas using Jones (2017)
 #define EST_THETA
 
+// Calculate likelihood using the existing forest with the rest of
+// the tree filled in by UPGMA.
+#define UPGMA_WEIGHTS
+
 // Experimental
 //#define WEIGHT_BY_GENE_LENGTH
 
