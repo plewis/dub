@@ -32,6 +32,7 @@ namespace proj {
             void                            run();
                
             string                          _data_file_name;
+            string                          _start_mode;
             Partition::SharedPtr            _partition;
             Data::SharedPtr                 _data;
             
@@ -64,6 +65,7 @@ namespace proj {
         _data                       = nullptr;
         _data_file_name             = "";
         _species_tree_ref           = nullptr;
+        _start_mode                 = "smc";
         _gene_tree_refs.clear();
         _partition.reset(new Partition());
     }
@@ -71,6 +73,8 @@ namespace proj {
     inline void Proj::processCommandLineOptions(int argc, const char * argv[]) {
         vector<string> partition_subsets;
         vector<string> partition_relrates;
+        bool dummy_bool;
+        int dummy_int;
         variables_map vm;
         options_description desc("Allowed options");
         desc.add_options()
@@ -79,6 +83,7 @@ namespace proj {
         ("datafile",  value(&_data_file_name), "name of a data file in NEXUS format")
         ("speciestreeref",  value(&G::_species_tree_ref_file_name), "name of a tree file containing a single reference species tree")
         ("genetreeref",  value(&G::_gene_trees_ref_file_name), "name of a tree file containing a reference gene tree for each locus")
+        ("startmode", value(&_start_mode), "if 'sim', simulate gene trees, species tree, and data; if 'smc', estimate from supplied datafile; if 'chib', computes prior probability of species species and gene tree topologies; if 'spec', computes coalescent likelihood for specified speciestreeref and genetreeref; if '2ndlevel', tests second-level SMC from gene trees supplied by genetreeref")
         ("subset",  value(&partition_subsets), "a string defining a partition subset, e.g. 'first:1-1234\3' or 'default[codon:standard]:1-3702'")
         ("ambigmissing",  value(&_ambig_missing)->default_value(true), "treat all ambiguities as missing data")
         ("verbosity",  value(&G::_verbosity)->default_value(0), "0, 1, or 2: higher number means more output")
@@ -87,6 +92,9 @@ namespace proj {
         ("lambda",  value(&G::_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
         ("theta",  value(&G::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
         ("rnseed",  value(&_rnseed)->default_value(13579), "pseudorandom number seed")
+        ("freezethetamean",  value(&dummy_bool)->default_value(true), "this option is not used in this version of the program")
+        ("fixedthetamean",  value(&G::_theta)->default_value(0.05), "synonym of theta in this version of the program")
+        ("nthreads",  value(&dummy_int)->default_value(3), "this option is not used in this version of the program")
         ;
         
         store(parse_command_line(argc, argv, desc), vm);
@@ -152,6 +160,10 @@ namespace proj {
     }
              
     inline void Proj::run() {
+    
+        if (_start_mode != "smc") {
+            throw XProj("This program currently only accepts \"smc\" as start mode");
+        }
     
         output("Starting...\n", 2);
 
