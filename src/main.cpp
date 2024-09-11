@@ -87,7 +87,7 @@ bool                                G::_debugging                   = false;
 
 unsigned                            G::_nthreads                    = 1;
 
-unsigned                            G::_treefile_compression        = 2;
+unsigned                            G::_treefile_compression        = 0;
 
 unsigned                            G::_verbosity                   = 3;
 
