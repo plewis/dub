@@ -1,6 +1,5 @@
 #pragma once
 
-//POLWAS extern proj::Lot rng;
 extern proj::Lot::SharedPtr rng;
 extern proj::PartialStore ps;
 
@@ -33,17 +32,25 @@ namespace proj {
             void simulateGeneTree(unsigned gene);
             
             void buildCoalInfoVect();
-            //void forgetSpeciesTreeAbove(double height);
             
 #if defined(UPGMA_WEIGHTS)
             void debugShowDistanceMatrix(const vector<double> & d) const;
+#   if defined(UPGMA_CONSTRAINED)
+            void constructUPGMA(const Forest & species_forest);
+#   else
             void constructUPGMA();
+#   endif
             void destroyUPGMA();
 #endif
 
-            double getLastLogLikelihood() const {return _prev_log_likelihood;}
+            void resetPrevLogLikelihood() {_prev_log_likelihood = _log_likelihood;}
+            double getPrevLogLikelihood() const {return _prev_log_likelihood;}
             void computeAllPartials();
+#if defined(UPGMA_CONSTRAINED)
+            double calcLogLikelihood(const Forest & species_forest);
+#else
             double calcLogLikelihood();
+#endif
             static void computeLeafPartials(unsigned gene, Data::SharedPtr data);
             static void releaseLeafPartials(unsigned gene);
             
@@ -53,7 +60,6 @@ namespace proj {
 
             string lineagesWithinSpeciesKeyError(G::species_t spp);
 
-            //double calcTotalRate(vector<Node::species_tuple_t> & species_tuples, double speciation_increment);
             double calcTotalRate(vector<Node::species_tuple_t> & species_tuples);
 
             void mergeSpecies(double height, G::species_t left_species, G::species_t right_species, G::species_t anc_species);
@@ -62,8 +68,6 @@ namespace proj {
             void clear();
             
             // Overrides of abstract base class functions
-            void revertToMark();
-            void finalizeProposal();
             void createTrivialForest(bool compute_partials = true);
             bool isSpeciesForest() const {return false;}
             void setSpeciesFromNodeName(Node * nd);
@@ -101,11 +105,6 @@ namespace proj {
             // key is species index, value is vector of Node pointers
             map<G::species_t, Node::ptr_vect_t > _lineages_within_species;
 
-#if defined(EST_THETA)
-            // key is species index, value is species-specific theta
-            map<G::species_t, double > _theta_within_species;
-#endif
-            
             Particle * _particle;
             Data::SharedPtr _data;
             double _relrate;
@@ -129,10 +128,6 @@ namespace proj {
     
     inline void GeneForest::clear() {
         _particle = nullptr;
-        
-#if defined(USING_MULTITHREADING)
-        lock_guard<mutex> guard(G::_gene_forest_clear_mutex);
-#endif
         
         // Reset partial pointers for all nodes to decrement
         // their use counts. Note that any given partial may
@@ -159,7 +154,6 @@ namespace proj {
                     assert(nd->_left_child->_right_sib);
                     assert(nd->_left_child->_right_sib->_right_sib == nullptr);
                     nd->_species = (nd->_left_child->_species | nd->_left_child->_right_sib->_species);
-                    nd->emptyPrevSpeciesStack();
                     addCoalInfoElem(nd, _coalinfo);
                 }
                 else {
@@ -169,100 +163,8 @@ namespace proj {
                 }
             }
         }
-        
-        // //temporary!
-        // Forest::debugShowCoalInfo(str(format("===== gene tree %d =====") % (_gene_index + 1)), _coalinfo);
     }
-    
-    inline void GeneForest::revertToMark() {
-        _mark_coalinfo.clear();
-        
-        if (!_mark_anc_nodes.empty()) {
-            // Identify the nodes involved in the coalescent event
-            Node * anc = _mark_anc_nodes.top();
-            _mark_anc_nodes.pop();
-            assert(anc);
-
-            Node * lchild = anc->_left_child;
-            assert(lchild);
-
-            Node * rchild = lchild->_right_sib;
-            assert(rchild);
-
-            // Return partial to be reused next time
-            stowPartial(anc);
-
-            // Reverse the coalescence join
-            unjoinLineagePair(anc, lchild, rchild);
-            stowNode(anc);
-            anc = nullptr;
-        }
-
-        if (!_mark_increments.empty()) {
-            // Reverse the increment associated with the coalescent event
-            // as well as any increments associated with speciation events
-            double dt = 0.0;
-            while (!_mark_increments.empty()) {
-                dt += _mark_increments.top();
-                _mark_increments.pop();
-            }
-
-            advanceAllLineagesBy(-dt, /*mark*/false);
-        }
-        
-        for (auto & nd : _nodes) {
-            nd.revertSpecies();
-        }
-        
-    }
-    
-    inline void GeneForest::finalizeProposal() {
-        // If this gene forest was the one in which the coalescent event occurred,
-        // make the coalescent event permanent by modifying _lineages,
-        // _lineages_within_species, and _coalinfo
-        for (auto & ci : _mark_coalinfo) {
-            _coalinfo.push_back(ci);
-        }
-        _mark_coalinfo.clear();
-        
-        if (!_mark_anc_nodes.empty()) {
-            Node * anc_node = _mark_anc_nodes.top();
-            _mark_anc_nodes.pop();
-            assert(anc_node);
-            G::species_t spp = anc_node->getSpecies();
             
-            // Empty anc_node's _prev_species_stack since this will be a permanent change
-            anc_node->emptyPrevSpeciesStack();
-            
-            Node * first_node = anc_node->getLeftChild();
-            assert(first_node);
-
-            Node * second_node = first_node->getRightSib();
-            assert(second_node);
-
-            // Update _lineages_within_species vector
-            if (_lineages_within_species.count(spp) == 0)
-                throw XProj(lineagesWithinSpeciesKeyError(spp));
-            else {
-                removeTwoAddOne(_lineages_within_species.at(spp), first_node, second_node, anc_node);
-            }
-
-            // Update _lineages vector
-            removeTwoAddOne(_lineages, first_node, second_node, anc_node);
-                        
-            // Update _coalinfo vector
-            //_coalinfo.push_back(make_tuple(anc_node->_height, _gene_index + 1, vector<G::species_t>({first_node->_species, second_node->_species})));
-            
-            refreshAllPreorders();
-        }
-    
-        // Empty the _prev_species_stack
-        for (auto & nd : _nodes) {
-            nd.emptyPrevSpeciesStack();
-        }
-        clearMark();
-    }
-    
     inline void GeneForest::debugCheckPartials(bool verbose) const {
         double tmp = 0.0;
         if (_preorders.size() == 0) {
@@ -335,7 +237,7 @@ namespace proj {
     }
     
     inline void GeneForest::setGeneIndex(unsigned i) {
-        assert(i < G::_ngenes);
+        assert(i < G::_nloci);
         _gene_index = i;
     }
 
@@ -359,15 +261,8 @@ namespace proj {
             // Get number of lineages in this species
             unsigned n = (unsigned)kvpair.second.size();
             if (n > 1) {
-#if defined(EST_THETA)
-                G::species_t spp = kvpair.first;
-                double species_specific_theta = _theta_within_species.at(spp);
-                total_rate += 1.0*n*(n-1)/species_specific_theta;
-                Node::species_tuple_t x = make_tuple(n, _gene_index, kvpair.first, kvpair.second, species_specific_theta);
-#else
                 total_rate += 1.0*n*(n-1)/G::_theta;
                 Node::species_tuple_t x = make_tuple(n, _gene_index, kvpair.first, kvpair.second);
-#endif
                 species_tuples.push_back(x);
             }
         }
@@ -389,34 +284,6 @@ namespace proj {
         return msg;
     }
         
-    //inline void GeneForest::forgetSpeciesTreeAbove(double height) {
-    //    // Reassign species to nodes above specified height
-//
-    //    // Should only be called for complete gene trees
-    //    assert(_lineages.size() == 1);
-//
-    //    // assumes _preorders is up-to-date
-    //    assert(_preorders.size() == 1);
-//
-    //    // Visit nodes in the subtree rooted at _preorders[0] in post-order sequence
-    //    for (auto nd : boost::adaptors::reverse(_preorders[0])) {
-    //        if (nd->_height >= height) {
-    //            if (nd->_left_child) {
-    //                // internal
-    //                G::species_t sleft  = nd->_left_child->_species;
-    //                G::species_t sright = nd->_left_child->_right_sib->_species;
-    //                nd->_species = sleft | sright;
-    //            }
-    //            else {
-    //                // leaf
-    //                unsigned spp_index = G::_taxon_to_species[nd->_name];
-    //                nd->_species = (G::species_t)1 << spp_index;
-    //            }
-    //        }
-    //        assert(nd->_species > 0);
-    //    }
-    //}
-    
     inline void GeneForest::mergeSpecies(double height, G::species_t left_species, G::species_t right_species, G::species_t anc_species) {
         // Every node previously assigned to left_species
         // or right_species should be reassigned to anc_species
@@ -534,10 +401,12 @@ namespace proj {
         assert(G::_ntaxa > 0);
         assert(G::_ntaxa == G::_taxon_names.size());
         clear();
-        _nodes.resize(2*G::_ntaxa - 1);
+        unsigned nnodes = 2*G::_ntaxa - 1;
+        _nodes.resize(nnodes);
         for (unsigned i = 0; i < G::_ntaxa; i++) {
             string taxon_name = G::_taxon_names[i];
-            _nodes[i]._number = i;
+            _nodes[i]._number = (int)i;
+            _nodes[i]._my_index = (int)i;
             _nodes[i]._name = taxon_name;
             _nodes[i].setEdgeLength(0.0);
             _nodes[i]._height = 0.0;
@@ -553,10 +422,20 @@ namespace proj {
             }
             _lineages.push_back(&_nodes[i]);
         }
+        
+        // Add all remaining nodes to _unused_nodes vector
+        _unused_nodes.clear();
+        for (unsigned i = G::_ntaxa; i < nnodes; i++) {
+            _nodes[i]._my_index = (int)i;
+            _nodes[i]._number = -1;
+            _unused_nodes.push_back(i);
+        }
+        
         refreshAllPreorders();
         _forest_height = 0.0;
-        _next_node_index = G::_ntaxa;
-        _next_node_number = G::_ntaxa;
+        //_next_node_index = G::_ntaxa;
+        //_next_node_number = G::_ntaxa;
+        _log_likelihood = 0.0;
         _prev_log_likelihood = 0.0;
         _log_prior = 0.0;
     }
@@ -825,7 +704,11 @@ struct negLogLikeDist {
 #endif
  
 #if defined(UPGMA_WEIGHTS)
+#if defined(UPGMA_CONSTRAINED)
+    inline void GeneForest::constructUPGMA(const Forest & species_forest) {
+#else
     inline void GeneForest::constructUPGMA() {
+#endif
         // Get the name of the gene (data subset)
         string gene_name = _data->getSubsetName(_gene_index);
 
@@ -882,10 +765,25 @@ struct negLogLikeDist {
                     }
                 }
                 
+                double min_dist = 0.0;
+                double max_dist = min_dist + 5.0; //TODO: replace arbitrary value 5.0
+                
+#if defined(UPGMA_CONSTRAINED)
+                // Determine minimum distance based on species tree
+                G::species_t lspp = lnode->getSpecies();
+                G::species_t rspp = rnode->getSpecies();
+                double min_height = 0.0;
+                if (lspp != rspp) {
+                    min_height = species_forest.mrcaHeight(lspp, rspp);
+                }
+                min_dist = 2.0*min_height;
+                max_dist = min_dist + 5.0; //TODO: replace arbitrary value 5.0
+#endif
+
                 // Optimize edge length using black-box maximizer
                 double v0 = lnode->getEdgeLength() + rnode->getEdgeLength();
                 negLogLikeDist f(npatterns, first_pattern, counts, same_state, diff_state, v0);
-                auto r = boost::math::tools::brent_find_minima(f, 0.0, 2.0, std::numeric_limits<double>::digits);
+                auto r = boost::math::tools::brent_find_minima(f, min_dist, max_dist, std::numeric_limits<double>::digits);
                 double maximized_log_likelihood = -r.second;
                 unsigned k = i*(i-1)/2 + j;
                 dij[k] = r.first;
@@ -1044,19 +942,33 @@ struct negLogLikeDist {
     }
 #endif
     
+#if defined(UPGMA_CONSTRAINED)
+    inline double GeneForest::calcLogLikelihood(const Forest & species_forest) {
+#else
     inline double GeneForest::calcLogLikelihood() {
+#endif
         // Computes the log of the Felsenstein likelihood. Note that this function just
         // carries out the final summation. It assumes that all nodes (leaf nodes included)
         // have partial likelihood arrays already computed.
         if (!_data)
             return 0.0;
             
+        
+            
         // Compute log likelihood of every lineage
         double total_log_likelihood = 0.0;
         
 #if defined(UPGMA_WEIGHTS)
-        // Build remainder of the tree using UPGMA
-        constructUPGMA();
+        // Build remainder of the tree using UPGMA if forest has non-zero height
+        // If height is zero, then we do not want to use UPGMA completion
+        bool trivial_forest = (getHeight() == 0.0);
+#   if defined(UPGMA_CONSTRAINED)
+        if (!trivial_forest)
+            constructUPGMA(species_forest);
+#   else
+        if (!trivial_forest)
+            constructUPGMA();
+#   endif
 #endif
         
         // Get the number of patterns
@@ -1089,43 +1001,32 @@ struct negLogLikeDist {
                 log_like += log(site_like)*counts[pp];
             }
 
-#if defined(DEBUG_CHECK_LOGWEIGHT)
-            ofstream tmpf(G::_debugging_text, ios::out | ios::app);
-            tmpf << str(format("*** %d: %s <-- lnL = %.9f (cum = %.9f)") % _gene_index % G::memoryAddressAsString(nd) % log_like % total_log_likelihood) << endl;
-            tmpf.close();
-#endif
             total_log_likelihood += log_like;
             tmp++;
         }
 
+        // output(format("GeneForest::calcLogLikelihood for locus \"%s\"\n") % gene_name, 0);
+        // output(format("  newick = \"%s\"\n") % makeNewick(9, true, false), 0);
+        // output(format("  total_log_likelihood = %.9f\n") % total_log_likelihood, 0);
+
 #if defined(UPGMA_WEIGHTS)
-        destroyUPGMA();
+        if (!trivial_forest)
+            destroyUPGMA();
 #endif
         
+        _log_likelihood = total_log_likelihood;
+
         return total_log_likelihood;
     }
-
+    
     inline void GeneForest::buildLineagesWithinSpeciesMap() {
         // Assumes every node in _lineages is correctly assigned to a species
-#if defined(EST_THETA)
-        _theta_within_species.clear();
-        _lineages_within_species.clear();
-        for (auto nd : _lineages) {
-            // Add nd to the vector of nodes belonging to this species
-            G::species_t spp = nd->getSpecies();
-            _lineages_within_species[spp].push_back(nd);
-            assert(_particle);
-            SpeciesForest & sf = _particle->getSpeciesForest();
-            _theta_within_species[spp] = sf.thetaForSpecies(spp);
-        }
-#else
         _lineages_within_species.clear();
         for (auto nd : _lineages) {
             // Add nd to the vector of nodes belonging to this species
             G::species_t spp = nd->getSpecies();
             _lineages_within_species[spp].push_back(nd);
         }
-#endif
     }
     
     inline void GeneForest::simulateGeneTree(unsigned gene) {
@@ -1143,37 +1044,12 @@ struct negLogLikeDist {
         }
     }
     
-    //inline double GeneForest::computeCoalRatesForSpecies(vector<G::species_t> & species, //vector<double> & rates) {
-    //    unsigned i = 0;
-    //    for (auto & x : _lineages_within_species) {
-    //        // Key is the species s (a set containing one or more integer values)
-    //        G::species_t s = x.first;
-    //        assert(species.size() > i);
-    //        species[i] = s;
-    //
-    //        // Value is vector of node pointers belonging to species s
-    //        unsigned n = (unsigned)x.second.size();
-    //        assert(n > 0);
-    //
-    //        // Rate of coalescence in species s is n choose 2 divided by theta/2
-    //        // or, equivalently, n*(n-1)/theta
-    //        double coal_rate = float(n)*(n-1)/G::_theta;
-    //        rates[i] = coal_rate;
-    //
-    //        ++i;
-    //    }
-    //
-    //    // The total coalescence rate is the sum of individual species-specific rates
-    //    double total_rate = accumulate(rates.begin(), rates.end(), 0.0);
-    //    return total_rate;
-    //}
-    
     inline void GeneForest::setPriorPost(bool use_prior_post) {
         _prior_post = use_prior_post;
     }
     
     inline void GeneForest::releaseLeafPartials(unsigned gene) {
-        assert(_leaf_partials.size() == G::_ngenes);
+        assert(_leaf_partials.size() == G::_nloci);
         _leaf_partials[gene].clear();
     }
     
@@ -1181,26 +1057,19 @@ struct negLogLikeDist {
         PartialStore::partial_t ptr;
         
         // Grab one partial from partial storage
-#if defined(USING_MULTITHREADING)
-        {
-            lock_guard<mutex> guard(G::_mutex);
-            ptr = ps.getPartial(_gene_index);
-        }
-#else
         ptr = ps.getPartial(_gene_index);
-#endif
         return ptr;
     }
 
     inline void GeneForest::computeLeafPartials(unsigned gene, Data::SharedPtr data) {
         assert(data);
-        assert(_leaf_partials.size() == 0 || _leaf_partials.size() == G::_ngenes);
-        assert(G::_ngenes > 0);
+        assert(_leaf_partials.size() == 0 || _leaf_partials.size() == G::_nloci);
+        assert(G::_nloci > 0);
         assert(G::_ntaxa > 0);
         assert(G::_nstates == 4);
         
         // Allocate a vector of leaf partials for each gene
-        _leaf_partials.resize(G::_ngenes);
+        _leaf_partials.resize(G::_nloci);
                 
         // Get reference to raw data matrix, which is a vector of vector<state_t>
         auto data_matrix = data->getDataMatrix();
@@ -1239,26 +1108,13 @@ struct negLogLikeDist {
     inline void GeneForest::stowPartial(Node * nd) {
         assert(nd);
         assert(nd->_partial);
-#if defined(USING_MULTITHREADING)
-        {
-            lock_guard<mutex> guard(G::_mutex);
-            ps.putPartial(_gene_index, nd->_partial);
-            
-            // Decrement shared pointer reference count
-            nd->_partial.reset();
-        }
-#else
         ps.putPartial(_gene_index, nd->_partial);
 
         // Decrement shared pointer reference count
         nd->_partial.reset();
-#endif
     }
 
     inline void GeneForest::stowAllPartials() {
-#if defined(USING_MULTITHREADING)
-        lock_guard<mutex> guard(G::_gene_forest_clear_mutex);
-#endif
         for (auto & nd : _nodes) {
             // Stow partials belonging to internal nodes
             // Partials for leaf nodes should be reset but not stowed
@@ -1279,11 +1135,6 @@ struct negLogLikeDist {
         if (_preorders.size() == 0) {
             refreshAllPreorders();
         }
-#if defined(DEBUGGING_SANITY_CHECK)
-        else {
-            debugCheckAllPreorders();
-        }
-#endif
         
         for (auto & preorder : _preorders) {
             // Visit nodes in the subtree rooted at preorder in post-order sequence

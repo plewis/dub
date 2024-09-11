@@ -6,21 +6,12 @@ namespace proj {
     class ParallelPolicyNone {
         protected:
             bool multithreading() {return false;}
-#if defined(ONE_LOCUS_PER_STEP)
-            void particleLoop(unsigned step, unsigned locus, const vector<unsigned> & update_seeds);
-#else
-            void particleLoop(unsigned step, const vector<unsigned> & update_seeds);
-#endif
+            void particleLoop(unsigned step, unsigned locus, const vector<unsigned> & update_seeds, bool refresh_species_tree);
             void balanceThreads() {}
     };
     
-#if defined(ONE_LOCUS_PER_STEP)
     template <class T>
-    inline void ParallelPolicyNone<T>::particleLoop(unsigned step, unsigned locus, const vector<unsigned> & update_seeds) {
-#else
-    template <class T>
-    inline void ParallelPolicyNone<T>::particleLoop(unsigned step, const vector<unsigned> & update_seeds) {
-#endif
+    inline void ParallelPolicyNone<T>::particleLoop(unsigned step, unsigned locus, const vector<unsigned> & update_seeds, bool refresh_species_tree) {
         // Get reference to the SMC object to which this policy applies
         T & smc = static_cast<T &>(*this);
         
@@ -60,11 +51,6 @@ namespace proj {
             // n is the number of copies of particle p
             unsigned n = p.getCount();
             
-#if defined(MINIMIZE_PARTIALS)
-            // Recompute all partials
-            p.computeAllPartials();
-#endif
-            
             while (n > 0) {
             
 #if defined(DEBUGGING_SANITY_CHECK)
@@ -72,20 +58,16 @@ namespace proj {
 #endif
                 pair<double, unsigned> proposed;
                 if (smc.isJointMode()) {
-#if defined(ONE_LOCUS_PER_STEP)
                     // Propose a coalescence event in gene tree locus (which
                     // may involve also proposing one or more intervening
                     // speciation events). The variable "proposed" is a pair
                     // in which first is the log_weight and second is the
                     // current number of species tree lineages
-                    proposed = p.proposeCoalescence(update_seeds[i], step, locus, i, /*compute_partial*/true, /*make_permanent*/false);
-#else
-                    // Propose a coalescence event (which may involve also
-                    // proposing one or more intervening speciation events)
-                    // proposed is a pair in which first is the log_weight and
-                    // second is the current number of species tree lineages
-                    proposed = p.proposeCoalescence(update_seeds[i], step, i, /*compute_partial*/true, /*make_permanent*/false);
-#endif
+                    double starting_height = -1.0; // negative value means don't rebuild species tree
+                    if (refresh_species_tree) {
+                        starting_height = p.getMaxGeneTreeHeight();
+                    }
+                    proposed = p.proposeCoalescence(update_seeds[i], step, locus, i, /*compute_partial*/true, /*make_permanent*/false, starting_height);
                 }
                 else if (smc.isConditionalMode()) {
                     proposed = p.proposeSpeciation(update_seeds[i], step, i, /*make_permanent*/false);
@@ -95,7 +77,13 @@ namespace proj {
                 }
                 
                 // Store log weight (phi is heating factor, default = 1.0)
+#if defined(UPGMA_WEIGHTS)
+                double lnL = p.calcLogLikelihood();
+                double lnL0 = p.calcPrevLogLikelihood();
+                smc._log_weights[i] = G::_phi*(lnL - lnL0);
+#else
                 smc._log_weights[i] = G::_phi*proposed.first;
+#endif
                 
 #if defined(DEBUGGING_SANITY_CHECK)
                 p.debugCheckForests();
@@ -105,10 +93,6 @@ namespace proj {
                 i++;
             }
             j++;    // parent particle index
-            
-#if defined(MINIMIZE_PARTIALS)
-            p.stowAllPartials();
-#endif
         }
         assert(i == smc._nparticles);
     }

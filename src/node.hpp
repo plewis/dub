@@ -25,20 +25,11 @@ namespace proj {
                                         ~Node();
 
                     typedef vector<Node *>  ptr_vect_t;
-#if defined(EST_THETA)
-                    //  0. number of lineages
-                    //  1. gene index
-                    //  2. species within gene
-                    //  3. vector<Node *> lineage roots for gene/species combination
-                    //  4. theta for species
-                    typedef tuple<unsigned, unsigned, G::species_t, Node::ptr_vect_t, double>  species_tuple_t;
-#else
                     //  0. number of lineages
                     //  1. gene index
                     //  2. species within gene
                     //  3. vector<Node *> lineage roots for gene/species combination
                     typedef tuple<unsigned, unsigned, G::species_t, Node::ptr_vect_t>  species_tuple_t;
-#endif
         
                     Node *              getParent()                 {return _parent;}
                     const Node *        getParent() const           {return _parent;}
@@ -56,6 +47,7 @@ namespace proj {
                     const string        getName() const             {return _name;}
 
                     int                 getNumber() const           {return _number;}
+                    int                 getMyIndex() const          {return _my_index;}
                     Split               getSplit()                  {return _split;}
         
                     bool                isSelected()                {return _flags & Flag::Selected;}
@@ -91,7 +83,6 @@ namespace proj {
                     void                            setSpeciesToUnion(const G::species_t left, const G::species_t right);
                                         
                     void                            revertSpecies();
-                    void                            emptyPrevSpeciesStack();
                     bool                            canRevertSpecies() const;
         
                     double              getHeight() const       {return _height;}
@@ -129,14 +120,12 @@ namespace proj {
             Node *          _right_sib;
             Node *          _parent;
             int             _number;
+            int             _my_index;
             string          _name;
             double          _edge_length;
             
             // distance from node to any leaf
             double          _height;
-            
-            // set when _species is reassigned
-            stack<G::species_t> _prev_species_stack;
             
             // Bitset of species (indices) compatible with this node
             G::species_t    _species;
@@ -158,10 +147,10 @@ namespace proj {
         _flags = 0;
         clearPointers();
         _number = -1;
+        //_my_index should not be cleared because clear is called by Forest::stowNode
         _name = "";
         _edge_length = _smallest_edge_length;
         _height = 0.0;
-        _prev_species_stack = {};
         _species = (G::species_t)0;
         _partial = nullptr;
     }
@@ -216,27 +205,7 @@ namespace proj {
     }
     
     inline void Node::setSpecies(const G::species_t spp) {
-        _prev_species_stack.push(_species);
         _species = spp;
-    }
-    
-    inline void Node::revertSpecies() {
-        while (!_prev_species_stack.empty()) {
-            _species = _prev_species_stack.top();
-            _prev_species_stack.pop();
-        }
-    }
-    
-    inline void Node::emptyPrevSpeciesStack() {
-        //assert(!_prev_species_stack.empty());
-        _prev_species_stack = {};
-        //while (!_prev_species_stack.empty()) {
-        //    _prev_species_stack.pop();
-        //}
-    }
-    
-    inline bool Node::canRevertSpecies() const {
-        return (_prev_species_stack.empty() ? false : true);
     }
     
     inline void Node::setSpeciesToUnion(const G::species_t left, const G::species_t right) {
@@ -244,9 +213,6 @@ namespace proj {
         // leaf nodes should be assigned to just a single species. This function should only
         // be called for internal nodes.
         assert(_left_child);
-
-        assert(_prev_species_stack.empty());
-        _prev_species_stack.push(_species);
         _species = left;
         Node::setSpeciesBits(_species, right, /*init_to_zero_first*/false);
     }

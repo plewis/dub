@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>   // shared_ptr
@@ -43,14 +44,6 @@
 using namespace std;
 using boost::format;
 
-// See https://www.jviotti.com/2022/02/21/emitting-signposts-to-instruments-on-macos-using-cpp.html
-#if defined(USING_SIGNPOSTS)
-#   include <os/log.h>
-#   include <os/signpost.h>
-    os_log_t log_handle;
-    os_signpost_id_t signpost_id;
-#endif
-
 #include "conditionals.hpp"
 #include "xproj.hpp"
 #include "lot.hpp"
@@ -65,150 +58,67 @@ using boost::format;
 #include "node.hpp"
 #include "forest.hpp"
 #include "species-forest.hpp"
-#include "policy-parallel-none.hpp"
-#include "smc.hpp"
-#include "particle.hpp"
 #include "gene-forest.hpp"
-#include "particle-func.hpp"
-#include "smc-func.hpp"
-//#include "policy-parallel-mt.hpp"
-//#include "policy-parallel-mpi.hpp"
-
-#if defined(DLIB_EXPERIMENT)
-#include <dlib/optimization.h>
-#include <dlib/global_optimization.h>
-#endif
+#include "particle.hpp"
+#include "smc.hpp"
 
 #include "proj.hpp"
 
 using namespace proj;
 
-#if defined(USING_MPI) && defined(USING_MULTITHREADING)
-#error USING_MPI and USING_MULTITHREADING are mutually exclusive: undefine one or the other to compile
-#endif
+void output(format & fmt, unsigned level) {
+    if (G::_verbosity > 0 && level <= G::_verbosity)
+        cout << str(fmt);
+}
 
-#if defined(USING_MPI)
-    int my_rank = 0;
-    int ntasks = 0;
+void output(string msg, unsigned level) {
+    if (G::_verbosity > 0 && level <= G::_verbosity)
+        cout << msg;
+}
 
-    unsigned my_first_particle = 0;
-    unsigned my_last_particle = 0;
-
-    void output(format & fmt, unsigned level) {
-        if (my_rank == 0 && G::_verbosity > 0 && level <= G::_verbosity)
-            cout << str(fmt);
-    }
-
-    void output(string msg, unsigned level) {
-        if (my_rank == 0 && G::_verbosity > 0 && level <= G::_verbosity)
-            cout << msg;
-    }
-#else
-    void output(format & fmt, unsigned level) {
-        if (G::_verbosity > 0 && level <= G::_verbosity)
-            cout << str(fmt);
-    }
-
-    void output(string msg, unsigned level) {
-        if (G::_verbosity > 0 && level <= G::_verbosity)
-            cout << msg;
-    }
-#endif
-
-#if defined(LOG_MEMORY)
-    char dummy_char;
-    ofstream memfile;
-#endif
-
-//POLWAS Lot                                 rng;
 Lot::SharedPtr                      rng(new Lot());
 StopWatch                           stopwatch;
 PartialStore                        ps;
 
-#if defined(LOG_MEMORY)
-vector<unsigned>                    Partial::_nconstructed;
-vector<unsigned>                    Partial::_ndestroyed;
-vector<unsigned>                    Partial::_max_in_use;
-vector<unsigned long>               Partial::_bytes_per_partial;
-unsigned long                       Partial::_total_max_in_use  = 0;
-unsigned long                       Partial::_total_max_bytes   = 0;
-unsigned                            Partial::_nstates           = 4;
-#endif
+string                              G::_species_tree_ref_file_name  = "";
+string                              G::_gene_trees_ref_file_name    = "";
 
-string                              G::_species_tree_ref_file_name = "";
-string                              G::_gene_trees_ref_file_name = "";
+bool                                G::_debugging                   = false;
 
-string                              G::_debugging_text          = "doof.txt";
-bool                                G::_debugging               = false;
+unsigned                            G::_nthreads                    = 1;
 
-unsigned                            G::_nthreads        = 1;
-#if defined(USING_MULTITHREADING)
-mutex                               G::_mutex;
-mutex                               G::_gene_forest_clear_mutex;
-mutex                               G::_debug_mutex;
-//vector<unsigned>                    G::_thread_first_gene;
-//vector<unsigned>                    G::_thread_last_gene;
-#endif
+unsigned                            G::_treefile_compression        = 2;
 
-// Let Nup be the number of unique particles
-// Let Np be the nominal number of particles (i.e. count = 1 for each particle)
-// Nup < Np if count > 1 for some particles
-// 0: Save all species trees even if they are identical to others
-//    File will contain Np species trees
-// 1: Save species tree from each unique particle and, for each, show that particle's count
-//    File will contain Nup species trees
-// 2: Save unique species trees along with their frequency in the sample
-//    Is this effectively the same as compression level 1?
-//    Creates map in which species tree newicks are keys and cumulative count is value,
-//    but will there ever be exactly the same newick in different particles?
-unsigned                            G::_treefile_compression = 0;
+unsigned                            G::_verbosity                   = 3;
 
-unsigned                            G::_verbosity          = 3;
+unsigned                            G::_nstates                     = 4;
 
-unsigned                            G::_nstates            = 4;
-
-unsigned                            G::_ntaxa              = 0;
+unsigned                            G::_ntaxa                       = 0;
 vector<string>                      G::_taxon_names;
 map<string, unsigned>               G::_taxon_to_species;
 
-unsigned                            G::_nspecies           = 0;
-G::species_t                        G::_species_mask       = (G::species_t)0;
+unsigned                            G::_nspecies                    = 0;
+G::species_t                        G::_species_mask                = (G::species_t)0;
 vector<string>                      G::_species_names;
 map<unsigned,unsigned>              G::_nexus_taxon_map;
 
-unsigned                            G::_ngenes              = 0;
+unsigned                            G::_nloci                      = 0;
 vector<string>                      G::_gene_names;
 vector<unsigned>                    G::_nsites_per_gene;
 map<unsigned, double>               G::_relrate_for_gene;
 
-double                              G::_phi                 = 1.0;
-double                              G::_theta               = 0.05;
-double                              G::_lambda              = 1.0;
+double                              G::_phi                         = 1.0;
+double                              G::_theta                       = 0.05;
+double                              G::_lambda                      = 1.0;
 
-double                              G::_invgamma_shape      = 2.0;
-bool                                G::_theta_mean_frozen   = false;
-double                              G::_theta_mean_fixed    = -1.0;
-double                              G::_theta_prior_mean    = 1.0;
-double                              G::_theta_proposal_mean = 0.1;
-double                              G::_lambda_prior_mean   = 1.0;
+double                              G::_small_enough                = 0.00001;
 
-//bool                                G::_update_theta       = true;
-//bool                                G::_update_lambda      = true;
-
-double                              G::_small_enough         = 0.00001;
-
-unsigned                            G::_nparticles           = 500;
-unsigned                            G::_nkept                = 500;
-unsigned                            G::_nparticles2          = 1000;
-
-//temporary!
-map<unsigned, vector<G::SpecLog> >  G::_speclog;
+unsigned                            G::_nparticles                  = 500;
+unsigned                            G::_nparticles2                 = 1000;
 
 static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in order to use infinity()");
 double                              G::_infinity = numeric_limits<double>::infinity();
 double                              G::_negative_infinity = -numeric_limits<double>::infinity();
-
-bool                                G::_prior_post        = false;
 
 PartialStore::leaf_partials_t       GeneForest::_leaf_partials;
 
@@ -241,23 +151,6 @@ GeneticCode::genetic_code_definitions_t GeneticCode::_definitions = {
 
 int main(int argc, const char * argv[]) {
 
-#if defined(USING_MPI)
-	MPI_Init(NULL, NULL);
-	MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-	MPI_Comm_size(MPI_COMM_WORLD, &ntasks);
-#   if defined(LOG_MEMORY)
-        memfile.open(str(format("allocs-%d.txt") % my_rank));
-#   endif
-#elif defined(LOG_MEMORY)
-    memfile.open("allocs.txt");
-#endif
-
-#if defined(USING_SIGNPOSTS)
-    log_handle  = os_log_create("edu.uconn.eeb.phylogeny", OS_LOG_CATEGORY_POINTS_OF_INTEREST);
-    signpost_id = os_signpost_id_generate(log_handle);
-    assert(signpost_id != OS_SIGNPOST_ID_INVALID);
-#endif
-
     Proj proj;
     bool normal_termination = true;
     try {
@@ -279,13 +172,5 @@ int main(int argc, const char * argv[]) {
         normal_termination = false;
     }
     
-#if defined(LOG_MEMORY)
-    if (normal_termination) {
-        proj.memoryReport(memfile);
-        ps.memoryReport(memfile);
-    }
-    memfile.close();
-#endif
-
     return 0;
 }

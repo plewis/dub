@@ -2,16 +2,13 @@
 
 extern void output(string msg, unsigned level);
 extern void output(format & fmt, unsigned level);
-//POLWAS extern proj::Lot rng;
 extern proj::Lot::SharedPtr rng;
 
 namespace proj {
 
     struct G {
         typedef unsigned long           species_t;
-        
-        static string                   _debugging_text;
-        
+                
         static string                   _species_tree_ref_file_name;
         static string                   _gene_trees_ref_file_name;
         
@@ -19,57 +16,6 @@ namespace proj {
         
         static bool                     _debugging;
         
-        //temporary!
-        struct SpecLog {
-            species_t _left;
-            species_t _right;
-            species_t _anc;
-            double    _maxh;
-            double    _incr;
-            double    _height;
-            double    _logw;
-            unsigned  _seed;
-            unsigned  _freq;
-            bool      _filtered;
-
-            SpecLog() :
-                _left((species_t)0),
-                _right((species_t)0),
-                _anc((species_t)0),
-                _maxh(0.0),
-                _incr(0.0),
-                _height(0.0),
-                _logw(0.0),
-                _seed(0),
-                _freq(0),
-                _filtered(false) {}
-                
-            string calcColor() {
-                if ((_left == 4 && _right == 8) || (_left == 8 && _right == 4)) {
-                    return "\"blue\"";
-                }
-                else if ((_left == 1 && _right == 12) || (_left == 12 && _right == 1)) {
-                    return "\"red\"";
-                }
-                else if ((_left == 2 && _right == 13) || (_left == 13 && _right == 2)) {
-                    return "\"green\"";
-                }
-                else if ((_left == 13 && _right == 16) || (_left == 16 && _right == 13)) {
-                    return "\"magenta\"";
-                }
-                else if ((_left == 2 && _right == 16) || (_left == 16 && _right == 2)) {
-                    return "\"orange\"";
-                }
-                else if ((_left == 15 && _right == 16) || (_left == 16 && _right == 15)) {
-                    return "\"purple]\"";
-                }
-                else {
-                    return "\"black\"";
-                }
-            }
-        };
-        static map<unsigned, vector<SpecLog> >   _speclog;
-
         static unsigned                 _nthreads;
         
         static unsigned                 _verbosity;
@@ -85,7 +31,7 @@ namespace proj {
         static vector<string>           _species_names;
         static map<unsigned,unsigned>   _nexus_taxon_map;
 
-        static unsigned                 _ngenes;
+        static unsigned                 _nloci;
         static vector<string>           _gene_names;
         static vector<unsigned>         _nsites_per_gene;
         static map<unsigned, double>    _relrate_for_gene;
@@ -93,46 +39,12 @@ namespace proj {
         static double                   _phi;
         static double                   _theta;
         static double                   _lambda;
-        
-        static double                   _invgamma_shape;
-#if defined(SIMPLIFY_THETA)
-        //  _theta_mean_varies  _theta_varies   Description
-        //
-        //        true              true        theta mean varies across particles
-        //                                      theta varies across species
-        //
-        //        true             false        theta mean varies across particles
-        //                                      theta same for all species
-        //
-        //       false              true        theta mean same across particles
-        //                                      theta varies across species
-        //
-        //       false             false        theta mean same across particles
-        //                                      theta same for all species
-        //                                      theta always equal to _theta_mean
-        //
-        static bool                     _theta_mean_varies;
-        static bool                     _theta_varies;
-        static double                   _theta_mean;
-#else
-        static bool                     _theta_mean_frozen;
-        static double                   _theta_mean_fixed;
-#endif
-        static double                   _theta_proposal_mean;
-        static double                   _theta_prior_mean;
-        static double                   _lambda_prior_mean;
-        
-        //static bool                     _update_theta;
-        //static bool                     _update_lambda;
-        
-        static bool                     _prior_post;
-        
+                        
         static double                   _small_enough;
         static double                   _infinity;
         static double                   _negative_infinity;
         
         static unsigned                 _nparticles;
-        static unsigned                 _nkept;
         static unsigned                 _nparticles2;
 
         static void     showSettings();
@@ -153,23 +65,8 @@ namespace proj {
     
     inline void G::showSettings() {
         output(format("Speciation rate (lambda): %.9f\n") % G::_lambda, 2);
-#if defined(EST_THETA)
-        if (G::_theta_mean_fixed > 0.0) {
-            if (G::_theta_mean_frozen) {
-                output(format("Mutation-scaled pop. size (theta) mean fixed to the value %.9f for all species\n") % G::_theta_mean_fixed, 2);
-            }
-            else {
-                output(format("Mutation-scaled pop. size (theta) mean fixed to the value %.9f but theta for each species drawn from an Inverse Gamma distribution with shape %.9f\n") % G::_theta_mean_fixed % G::_invgamma_shape, 2);
-            }
-        }
-        else {
-           output(format("Mutation-scaled pop. size (theta) mean drawn from an Exponential distribution\n with mean %.9f and theta for each species drawn from an Inverse Gamma distribution\n with that mean and shape %.9f\n") % _theta_proposal_mean % G::_invgamma_shape, 2);
-        }
-#else
         output(format("Coalescent parameter (theta): %.9f\n") % G::_theta, 2);
-#endif
         output(format("Number of 1st-level particles: %d\n") % G::_nparticles, 2);
-        output(format("Number of 1st-level particles kept: %d\n") % G::_nkept, 2);
         output(format("Number of 2nd-level particles: %d\n") % G::_nparticles2, 2);
     }
 
@@ -186,7 +83,7 @@ namespace proj {
         }
         
         // Get gene tree increment names
-        for (unsigned g = 0; g < G::_ngenes; g++) {
+        for (unsigned g = 0; g < G::_nloci; g++) {
             for (unsigned i = 0; i < G::_ntaxa - 1; i++) {
                 names.push_back(G::_gene_names[g] + "." + to_string(i));
             }
@@ -196,8 +93,7 @@ namespace proj {
     inline void G::generateUpdateSeeds(vector<unsigned> & seeds) {
         unsigned psuffix = 1;
         for (auto & s : seeds) {
-            //POLWAS s = rng.randint(1,9999) + psuffix;
-            s = rng->randint(1,9999) + psuffix;
+            s = ::rng->randint(1,9999) + psuffix;
             psuffix += 2;    // pure superstition (I always use odd seeds)
         }
     }

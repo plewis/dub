@@ -13,23 +13,10 @@ namespace proj {
             SpeciesForest();
              ~SpeciesForest();
              
-            void speciationEvent(Lot::SharedPtr lot, G::species_t & left, G::species_t & right, G::species_t & anc, bool mark);
+            void speciationEvent(Lot::SharedPtr lot, G::species_t & left, G::species_t & right, G::species_t & anc);
             
             Node * findSpecies(G::species_t spp);
-            
-#if defined(EST_THETA)
-            void drawLineageSpecificThetas(Lot::SharedPtr lot);
-            double drawThetaForSpecies(G::species_t s, Lot::SharedPtr lot);
-            void drawThetaMean(double exponential_prior_rate, Lot::SharedPtr lot);
-            void setThetaMean(double thetamean) {_theta_mean = thetamean;}
-            double getThetaMean() const {return _theta_mean;}
-            double thetaForSpecies(G::species_t s) const;
-            map<G::species_t, double> & getThetaMap();
-            const map<G::species_t, double> & getThetaMapConst() const;
-#endif
-            
-            void setJointEstimation(bool is_joint_estimation) {_joint_estimation = is_joint_estimation;}
-                        
+                                                
             void fixupCoalInfo(vector<coalinfo_t> & coalinfo_vect, vector<coalinfo_t> & sppinfo_vect) const;
             tuple<double,double,double> drawTruncatedIncrement(Lot::SharedPtr lot, double truncate_at);
             pair<double,double> drawIncrement(Lot::SharedPtr lot);
@@ -40,17 +27,18 @@ namespace proj {
             void operator=(const SpeciesForest & other);
             
             // Overrides of abstract base class functions
-            void revertToMark();
             void finalizeProposal();
             void createTrivialForest(bool compute_partials = false);
             bool isSpeciesForest() const {return true;}
             void setSpeciesFromNodeName(Node * nd);
-            void recordCoalInfoAndClearMark();
             void addCoalInfoElem(const Node * nd, vector<coalinfo_t> & recipient);
             
             void buildCoalInfoVect();
             void saveCoalInfo(vector<Forest::coalinfo_t> & coalinfo_vect, bool cap = false) const;
             void recordHeights(vector<double> & height_vect) const;
+            
+            tuple<double, G::species_t, G::species_t, G::species_t> findNextSpeciationEvent(double starting_height) const;
+            void rebuildStartingFromHeight(double starting_height);
             
             typedef shared_ptr<SpeciesForest> SharedPtr;
 
@@ -59,11 +47,6 @@ namespace proj {
             double advanceSpeciesForest(unsigned particle, unsigned step);
             
             // NOTE: any variables added must be copied in operator=
-            bool _joint_estimation;
-#if defined(EST_THETA)
-            map<G::species_t, double> _theta_map;
-            double _theta_mean;
-#endif
     };
     
     inline SpeciesForest::SpeciesForest() {
@@ -75,143 +58,8 @@ namespace proj {
 
     inline void SpeciesForest::clear() {
         Forest::clear();
-        _joint_estimation = true;
-    }
-
-#if defined(EST_THETA)
-    inline void SpeciesForest::drawLineageSpecificThetas(Lot::SharedPtr lot) {
-        // Draw a theta value for each leaf species
-        _theta_map.clear();
-        for (auto nd : _lineages) {
-            G::species_t s = nd->_species;
-            drawThetaForSpecies(s, lot);
-        }
     }
     
-    inline double SpeciesForest::drawThetaForSpecies(G::species_t s, Lot::SharedPtr lot) {
-        assert(_theta_map.count(s) == 0);
-        double theta_variate = 0.0;
-        if (G::_theta_mean_fixed > 0.0 && G::_theta_mean_frozen)
-            theta_variate = G::_theta_mean_fixed;
-        else {
-            double b = (G::_invgamma_shape - 1.0)*_theta_mean;
-            theta_variate = G::inverseGammaVariate(G::_invgamma_shape, b, lot);
-        }
-        _theta_map[s] = theta_variate;
-        return theta_variate;
-    }
-    
-    inline void SpeciesForest::drawThetaMean(double exponential_prior_rate, Lot::SharedPtr lot) {
-        // Should only be called for trivial forests
-        assert(_lineages.size() == G::_nspecies);
-        
-        // Draw _theta_mean from Exponential prior
-        _theta_mean = -log(1.0 - lot->uniform())/exponential_prior_rate;
-    }
-#endif
-
-//    inline pair<double,double> SpeciesForest::calcTreeDistances(SpeciesForest & ref, SpeciesForest & test) {
-//        // Store splits from reference tree
-//        Split::treeid_t ref_splits;
-//        ref.storeSplits(ref_splits);
-//        
-//        // Store edge lengths from reference tree
-//        map<Split, double> ref_edgelen_map;
-//        ref.storeEdgelensBySplit(ref_edgelen_map);
-//                
-//        // Store splits from test tree
-//        Split::treeid_t test_splits;
-//        test.storeSplits(test_splits);
-//        
-//        // Store edge lengths from test tree
-//        map<Split, double> test_edgelen_map;
-//        test.storeEdgelensBySplit(test_edgelen_map);
-//                
-//        // Now calculate squares for leaf nodes, storing in KLleaves
-//        std::vector<double> KLleaves(G::_nspecies);
-//        Split s;
-//        s.resize(G::_nspecies);
-//        Split sroot;
-//        sroot.resize(G::_nspecies);
-//        for (unsigned i = 0; i < G::_nspecies; i++) {
-//            s.clear();
-//            s.setBitAt(i);
-//            sroot.setBitAt(i);
-//            assert(ref_edgelen_map.count(s) == 1);
-//            assert(test_edgelen_map.count(s) == 1);
-//            double ref_edge_length  = ref_edgelen_map[s];
-//            double test_edge_length = test_edgelen_map[s];
-//            double square = pow(test_edge_length - ref_edge_length, 2.0);
-//            KLleaves[i] = square;
-//        }
-//        
-//        // Store union of refsplits and testsplits in allsplits
-//        Split::treeid_t all_splits;
-//        set_union(
-//            ref_splits.begin(), ref_splits.end(),
-//            test_splits.begin(), test_splits.end(),
-//            std::inserter(all_splits, all_splits.begin()));
-//        
-//        // Traverse allsplits, storing squared branch length differences in KLinternals
-//        std::vector<double> KLinternals(all_splits.size());
-//        double RFdist = 0.0;
-//        unsigned i = 0;
-//        for (auto s : all_splits) {
-//            if (s == sroot)
-//                continue;
-//            bool s_in_ref  = ref_edgelen_map.count(s) == 1;
-//            bool s_in_test = test_edgelen_map.count(s) == 1;
-//            assert(s_in_ref || s_in_test);
-//            if (!s_in_ref) {
-//                double test_edge_length = test_edgelen_map[s];
-//                double test_square = pow(test_edge_length, 2.0);
-//                KLinternals[i++] = test_square;
-//                RFdist += 1.0;
-//            }
-//            else if (!s_in_test) {
-//                double ref_edge_length = ref_edgelen_map[s];
-//                double ref_square = pow(ref_edge_length, 2.0);
-//                KLinternals[i++] = ref_square;
-//                RFdist += 1.0;
-//            }
-//            else {
-//                double test_edge_length = test_edgelen_map[s];
-//                double ref_edge_length = ref_edgelen_map[s];
-//                double square = pow(test_edge_length - ref_edge_length, 2.0);
-//                KLinternals[i++] = square;
-//            }
-//        }
-//            
-//        // Calculate KL distance
-//        double KFSS = 0.0;
-//        for (auto square : KLinternals) {
-//            KFSS += square;
-//        }
-//        for (auto square : KLleaves) {
-//            KFSS += square;
-//        }
-//        assert(KFSS >= 0.0);
-//        double KFdist = sqrt(KFSS);
-//        return make_pair(KFdist, RFdist);
-//    }
-    
-#if defined(EST_THETA)
-    inline double SpeciesForest::thetaForSpecies(G::species_t s) const {
-        if (_theta_map.count(s) == 0) {
-            throw XProj(format("Could not find theta for species %d") % s);
-        }
-        return _theta_map.at(s);
-    }
-    
-    inline map<G::species_t, double> & SpeciesForest::getThetaMap() {
-        return _theta_map;
-    }
-    
-    inline const map<G::species_t, double> & SpeciesForest::getThetaMapConst() const {
-        return _theta_map;
-    }
-#endif
-
     inline Node * SpeciesForest::findSpecies(G::species_t spp) {
         Node * the_node = nullptr;
         for (auto nd : _lineages) {
@@ -264,20 +112,32 @@ namespace proj {
     inline void SpeciesForest::createTrivialForest(bool compute_partials) {
         assert(!compute_partials); // catch non-sensical true value
         clear();
-        Forest::_nodes.resize(2*G::_nspecies - 1);
+        unsigned nnodes = 2*G::_nspecies - 1;
+        Forest::_nodes.resize(nnodes);
         for (unsigned i = 0; i < G::_nspecies; i++) {
             string species_name = G::_species_names[i];
             _nodes[i]._number = (int)i;
+            _nodes[i]._my_index = (int)i;
             _nodes[i]._name = species_name;
             _nodes[i]._edge_length = 0.0;
             _nodes[i]._height = 0.0;
             Node::setSpeciesBit(_nodes[i]._species, i, /*init_to_zero_first*/true);
             _lineages.push_back(&_nodes[i]);
         }
+
+        // Add all remaining nodes to _unused_nodes vector
+        _unused_nodes.clear();
+        for (unsigned i = G::_nspecies; i < nnodes; i++) {
+            _nodes[i]._my_index = (int)i;
+            _nodes[i]._number = -1;
+            _unused_nodes.push_back(i);
+        }
+        
         refreshAllPreorders();
         _forest_height = 0.0;
-        _next_node_index = G::_nspecies;
-        _next_node_number = G::_nspecies;
+        //_next_node_index = G::_nspecies;
+        //_next_node_number = G::_nspecies;
+        _log_likelihood = 0.0;
         _prev_log_likelihood = 0.0;
     }
     
@@ -399,179 +259,8 @@ namespace proj {
             }
         }
     }
-    
-    inline void SpeciesForest::recordCoalInfoAndClearMark() {
-        double species_forest_height = _forest_height;
-        unsigned nanc   = (unsigned)_mark_anc_nodes.size();
-        unsigned nincr  = (unsigned)_mark_increments.size();
-        unsigned nlrpos = (unsigned)_mark_left_right_pos.size();
-        assert(nincr > 0);
-        assert(nlrpos == nanc);
-        assert(nincr == nlrpos || nincr == nlrpos + 1);
         
-        if (nincr == nlrpos + 1) {
-            // Remove increment corresponding to the coalescent event
-            double dt = _mark_increments.top();
-            species_forest_height -= dt;
-            _mark_increments.pop();
-            nincr = (unsigned)_mark_increments.size();
-        }
-                
-        while (!_mark_left_right_pos.empty()) {
-            //pair<unsigned, unsigned> p = _mark_left_right_pos.top();
-            _mark_left_right_pos.pop();
-            //unsigned left_pos  = p.first;
-            //unsigned right_pos = p.second;
-            
-            // Get pointer to ancestral node representing the speciation event
-            Node * anc = _mark_anc_nodes.top();
-            assert(anc);
-            //anc->_height = species_forest_height;
-            _mark_anc_nodes.pop();
-            
-            // Get pointer to ancestral node's left child
-            Node * lchild = anc->getLeftChild();
-            assert(lchild);
-
-            // Get pointer to ancestral node's right child
-            Node * rchild = lchild->getRightSib();
-            rchild = lchild->_right_sib;
-            assert(rchild);
-            
-            // Update _coalinfo vector
-            //_coalinfo.push_back(make_tuple(anc->_height, 0, vector<G::species_t>({lchild->_species, rchild->_species})));
-
-            // Remove increment associated with this speciation event
-            double dt = _mark_increments.top();
-            species_forest_height -= dt;
-            _mark_increments.pop();
-        }
-        
-        assert(_mark_increments.empty());
-        assert(_mark_anc_nodes.empty());
-        assert(_mark_left_right_pos.empty());
-    }
-    
-    inline void SpeciesForest::revertToMark() {
-        unsigned nanc  = (unsigned)_mark_anc_nodes.size();
-        unsigned nincr = (unsigned)_mark_increments.size();
-        unsigned nlrpos = (unsigned)_mark_left_right_pos.size();
-        if (_lineages.size() > 1) {
-            assert(nincr > 0);
-            assert(nincr == nlrpos || nincr == nlrpos + 1);
-        }
-        assert(nlrpos == nanc);
-        
-        if (nincr == nlrpos + 1) {
-            // There is one more increment than the number of joins.
-            // This is because either:
-            // 1) _joint_estimation == true and the extra increment is from the
-            //    coalescence event that ends the step; or
-            // 2) _joint_estimation == false and the extra increment is from
-            //    the first step in which there is only an increment and no join.
-            // Either way, to revert we must first remove this extra (or only)
-            // increment.
-            double dt = _mark_increments.top();
-            _mark_increments.pop();
-            nincr = (unsigned)_mark_increments.size();
-            advanceAllLineagesBy(-dt, /*mark*/false);
-        }
-        
-        while (!_mark_left_right_pos.empty()) {
-            if (_lineages.size() > 1 && !_joint_estimation) {
-                // If species forests are being built conditional on
-                // full gene trees, then each speciation event (except
-                // the final one) is followed by an increment, so
-                // reversion must remove the increment first.
-                double dt = _mark_increments.top();
-                _mark_increments.pop();
-                advanceAllLineagesBy(-dt, /*mark*/false);
-            }
-            
-            pair<unsigned, unsigned> p = _mark_left_right_pos.top();
-            _mark_left_right_pos.pop();
-            unsigned left_pos  = p.first;
-            unsigned right_pos = p.second;
-            
-            // Get pointer to ancestral node representing the speciation event
-            Node * anc = _mark_anc_nodes.top();
-            _mark_anc_nodes.pop();
-            assert(anc);
-            assert(fabs(anc->getEdgeLength()) < 0.00001);
-            
-#if defined(EST_THETA)
-            if (_joint_estimation) {
-                // Each proposed ancestral species has its own theta
-                // Erase theta corresponding to ancestral species
-                G::species_t s = anc->getSpecies();
-                
-                // //temporary!
-                // cerr << "erasing " << s << " from _theta_map" << endl;
-                // cerr << "_theta_map.count(" << s << ") = " << // _theta_map.count(s) << endl;
-                // cerr << "_theta_map before:" << endl;
-                // for (const auto & z : _theta_map) {
-                //     cerr << "  " << z.first << ": " << z.second << endl;
-                // }
-                
-                unsigned n = (unsigned)_theta_map.erase(s);
-                assert(n > 0);
-                assert(_theta_map.count(s) == 0);
-                
-                // //temporary!
-                // cerr << n << " element(s) erased" << endl;
-                // cerr << "_theta_map after:" << endl;
-                // for (const auto & z : _theta_map) {
-                //     cerr << "  " << z.first << ": " << z.second << endl;
-                // }
-            }
-#endif
-
-            // Get pointer to ancestral node's left child
-            Node * lchild = anc->getLeftChild();
-            assert(lchild);
-
-            // Get pointer to ancestral node's right child
-            Node * rchild = lchild->getRightSib();
-            rchild = lchild->_right_sib;
-            assert(rchild);
-                        
-            // Reverse the speciation join
-            unjoinLineagePair(anc, lchild, rchild);
-            
-            // Update lineage vector
-            addTwoRemoveOneAt(_lineages, left_pos, lchild, right_pos, rchild, anc);
-
-            // Return anc to the pool of unused nodes
-            stowNode(anc);
-            anc = nullptr;
-
-            if (_joint_estimation) {
-                // If species forests are being built jointly with gene forests, then
-                // each speciation event is preceded by an increment, so
-                // reversion must remove the increment last
-                double dt = _mark_increments.top();
-                _mark_increments.pop();
-                advanceAllLineagesBy(-dt, /*mark*/false);
-            }
-        }
-        assert(_mark_increments.empty());
-        assert(_mark_anc_nodes.empty());
-        assert(_mark_left_right_pos.empty());
-        _mark_coalinfo.clear();
-    }
-    
-    inline void SpeciesForest::finalizeProposal() {
-        // Empty the _prev_species_stack for all nodes in the species tree
-        for (auto & nd : _nodes) {
-            nd.emptyPrevSpeciesStack();
-        }
-
-        //recordCoalInfoAndClearMark();
-        debugCheckMarkEmpty();
-    }
-    
-    inline void SpeciesForest::speciationEvent(Lot::SharedPtr lot, G::species_t & left_spp, G::species_t & right_spp, G::species_t & anc_spp, bool mark) {
-        //MARK: speciationEvent
+    inline void SpeciesForest::speciationEvent(Lot::SharedPtr lot, G::species_t & left_spp, G::species_t & right_spp, G::species_t & anc_spp) {
         unsigned nlineages = (unsigned)_lineages.size();
         
         // Choose two lineages to join
@@ -590,54 +279,17 @@ namespace proj {
         Node * anc_node = pullNode();
         joinLineagePair(anc_node, first_node, second_node);
         anc_node->setSpeciesToUnion(left_spp, right_spp);
-
+        
         // Get species for the new ancestral node
         anc_spp = anc_node->getSpecies();
-
-// This function is only called when SMC is in conditional mode, which means
-// we never need to draw any values of theta as they are integrated out of the
-// coalescence likelihood
-// #if defined(EST_THETA)
-//         if (_theta_map.count(anc_spp) != 0) {
-//             cerr << "_theta_map.count for species " << anc_spp << " is " << _theta_map.count(anc_spp) << endl;
-//         }
-//         _theta_map[anc_spp] = G::inverseGammaVariate(G::_invgamma_shape,  _theta_mean);
-// #endif
         
         // Update _lineages vector
         removeTwoAddOne(_lineages, first_node, second_node, anc_node);
         refreshAllPreorders();
-        
-        if (mark) {
-            addCoalInfoElem(anc_node, _mark_coalinfo);
-            _mark_anc_nodes.push(anc_node);
-            _mark_left_right_pos.push(make_pair(left_pos, right_pos));
-        }
-        else {
-            addCoalInfoElem(anc_node, _coalinfo);
-        }
     }
         
     inline void SpeciesForest::operator=(const SpeciesForest & other) {
         Forest::operator=(other);
-        _joint_estimation = other._joint_estimation;
-        
-#if defined(EST_THETA)
-        _theta_mean = other._theta_mean;
-        _theta_map = other._theta_map;
-#endif
-
-        // Should not be anything in the mark stacks if copying
-        assert(_mark_increments.empty());
-        assert(_mark_anc_nodes.empty());
-        assert(_mark_left_right_pos.empty());
-
-#if defined(DEBUGGING_SANITY_CHECK)
-        // Sanity check: make sure that _partials do not exist for either this nor other
-        for (unsigned i = 0; i < _nodes.size(); i++) {
-            assert((_nodes[i]._partial == nullptr && other._nodes[i]._partial == nullptr));
-        }
-#endif
     }
     
     inline void SpeciesForest::addCoalInfoElem(const Node * nd, vector<coalinfo_t> & recipient) {
@@ -666,11 +318,6 @@ namespace proj {
             coalinfo_vect.insert(coalinfo_vect.begin(), _coalinfo.begin(), _coalinfo.end());
         }
         
-        // Dump _mark_coalinfo into coalinfo_vect
-        if (!_mark_coalinfo.empty()) {
-            coalinfo_vect.insert(coalinfo_vect.begin(), _mark_coalinfo.begin(), _mark_coalinfo.end());
-        }
-
         if (cap) {
             // Create an entry pooling the remaining species
             if (_lineages.size() > 1) {
@@ -717,7 +364,6 @@ namespace proj {
                     assert(nd->_left_child->_right_sib);
                     assert(nd->_left_child->_right_sib->_right_sib == nullptr);
                     nd->_species = (nd->_left_child->_species | nd->_left_child->_right_sib->_species);
-                    nd->emptyPrevSpeciesStack();
                     addCoalInfoElem(nd, _coalinfo);
                 }
                 else {
@@ -727,6 +373,144 @@ namespace proj {
                 }
             }
         }
+    }
+    
+    inline tuple<double, G::species_t, G::species_t, G::species_t> SpeciesForest::findNextSpeciationEvent(double starting_height) const {
+        // Assumes that species forest is a tree with just one subtree
+        assert(_preorders.size() == 1);
+        assert(_lineages.size() == 1);
+        
+        double speciation_height = G::_infinity;
+        G::species_t left_spp    = (G::species_t)0;
+        G::species_t right_spp   = (G::species_t)0;
+        G::species_t anc_spp     = (G::species_t)0;
+        
+        Node * root = _lineages[0];
+        double root_height = root->getHeight();
+        assert(fabs(root_height - getHeight()) < G::_small_enough);
+
+        if (root_height > starting_height) {
+                
+            // Find node with smallest height that is nevertheless higher than starting_height
+            pair<double, Node *> best = make_pair(G::_infinity, nullptr);
+            for (auto nd : _preorders[0]) {
+                if (nd->getLeftChild()) {  // Only internal nodes specify speciation events
+                    double h = nd->getHeight();
+                    if (h > starting_height && h < best.first) {
+                        best = make_pair(h, nd);
+                    }
+                }
+            }
+            assert(best.first < G::_infinity);
+            speciation_height = best.first;
+            left_spp  = best.second->getLeftChild()->getSpecies();
+            right_spp = best.second->getLeftChild()->getRightSib()->getSpecies();
+            anc_spp   = best.second->getSpecies();
+        }
+
+        return make_tuple(speciation_height, left_spp, right_spp, anc_spp);
+    }
+    
+    void SpeciesForest::rebuildStartingFromHeight(double starting_height) {
+        refreshAllHeightsAndPreorders();
+        
+        if (_lineages.size() == 1) {
+            // Species forest is a complete tree
+            
+            // Start at root (highest node)
+            Node * nd = _lineages[0];
+            if (nd->getHeight() <= starting_height) {
+                // Nothing to be done
+                return;
+            }
+        
+            bool done = false;
+            while (!done) {
+                vector<Node *> nodes_to_remove;
+                vector<Node *> nodes_to_add;
+                bool found = false;
+                for (auto nd : _lineages) {
+                    // Remove nd if its height is greater than starting_height
+                    if (nd->getHeight() > starting_height) {
+                        found = true;
+                        
+                        // Identify left and right child
+                        Node * lchild = nd->getLeftChild();
+                        Node * rchild = lchild->getRightSib();
+                        assert(lchild);
+                        assert(rchild);
+                        assert(!rchild->getRightSib());
+                        
+                        // Store nodes to add or remove (cannot do it now because we
+                        // are currently iterating through _lineages
+                        nodes_to_remove.push_back(nd);
+                        nodes_to_add.push_back(lchild);
+                        nodes_to_add.push_back(rchild);
+                        
+                        // Detach nd from its children and its children
+                        // from the rest of the tree (the children are
+                        // now independent subtrees in the forest)
+                        lchild->setParent(nullptr);
+                        rchild->setParent(nullptr);
+                        lchild->setRightSib(nullptr);
+                        rchild->setRightSib(nullptr);
+                        nd->setLeftChild(nullptr);
+                        assert(!nd->getRightSib());
+                    }
+                }
+                
+                for (auto nd : nodes_to_remove) {
+                    // Get iterator to node to be deleted and remove from _lineages
+                    auto it = find(_lineages.begin(), _lineages.end(), nd);
+                    assert(it != _lineages.end());
+                    _lineages.erase(it);
+                    stowNode(nd);
+                }
+                
+                for (auto nd : nodes_to_add) {
+                    _lineages.push_back(nd);
+                }
+                
+                if (!found)
+                    done = true;
+            }
+        }
+        else {
+            // If species forest is not a complete tree, then it should
+            // still be a trivial forest that needs to be constructed
+            assert(_lineages.size() == G::_nspecies);
+        }
+        
+        // Trim edge lengths of nodes remaining in _lineages so that
+        // species tree height is exactly starting_height
+        for (auto nd : _lineages) {
+            double node_height = nd->getHeight();
+            double node_edgelen = nd->getEdgeLength();
+            double overlap = node_height + node_edgelen - starting_height;
+            assert(overlap >= 0.0);
+            nd->setEdgeLength(node_edgelen - overlap);
+        }
+        
+        // Now build up complete species tree again staring with current height
+        while (_lineages.size() > 1) {
+
+            // Draw a speciation increment Delta. Note: speciation_increment will
+            // equal "infinity" if species tree is complete.
+            auto incr_rate = drawIncrement(::rng);
+            double Delta = incr_rate.first;
+            
+            // advance all lineages by an amount Delta
+            advanceAllLineagesBy(Delta);
+            
+            // Create speciation event
+            G::species_t left_spp, right_spp, anc_spp;
+            speciationEvent(::rng, left_spp, right_spp, anc_spp);
+        }
+        
+        refreshAllHeightsAndPreorders();
+        
+        // debugging
+        //output(format("  Rebuilt species tree starting from %g: %s\n") % starting_height % makeNewick(9, true, false), 0);
     }
     
 }

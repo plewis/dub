@@ -3,11 +3,6 @@
 extern void output(string msg, unsigned level);
 extern void output(format & fmt, unsigned level);
 
-#if defined(USING_SIGNPOSTS)
-extern os_log_t log_handle;
-extern os_signpost_id_t signpost_id;
-#endif
-
 namespace proj {
 
     class Proj;
@@ -273,9 +268,6 @@ namespace proj {
     }
 
     inline void Data::compressPatterns() {
-#if 0 && defined(USING_SIGNPOSTS)
-        os_signpost_event_emit(log_handle, signpost_id, "compressPatterns", "start");
-#endif
         // Perform sanity checks
         if (_data_matrix.empty())
             throw XProj("Attempted to compress an empty data matrix");

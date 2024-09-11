@@ -5,7 +5,6 @@ extern proj::PartialStore ps;
 
 class Particle;
 
-//POLWAS extern proj::Lot rng;
 extern proj::Lot::SharedPtr rng;
 
 namespace proj {
@@ -41,14 +40,13 @@ namespace proj {
                                         bool coalunits = false) const;
             void                buildFromNewick(const string newick);
             void                storeSplits(Forest::treeid_t & splitset);
-            void                alignTaxaUsing(const map<unsigned, unsigned> & taxon_map);
+            //void                alignTaxaUsing(const map<unsigned, unsigned> & taxon_map);
             
-            unsigned            advanceAllLineagesBy(double dt, bool mark);
+            unsigned            advanceAllLineagesBy(double dt);
             void                heightsInternalsPreorders();
 
-            virtual void        clearMark();
-            virtual void        revertToMark() = 0;
-            virtual void        finalizeProposal() = 0;
+            double              mrcaHeight(G::species_t lspp, G::species_t rspp) const;
+
             virtual void        createTrivialForest(bool compute_partials) = 0;
             virtual bool        isSpeciesForest() const = 0;
             virtual void        recordHeights(vector<double> & height_vect) const = 0;
@@ -91,7 +89,6 @@ namespace proj {
             void        unjoinLineagePair(Node * anc, Node * first, Node * second);
             
             void        debugCheckCoalInfoSorted(const vector<coalinfo_t> & coalinfo_vect) const;
-            void        debugCheckMarkEmpty() const;
             void        debugCheckAllPreorders() const;
             void        debugCheckPreorder(const Node::ptr_vect_t & preorder) const;
             void        debugShowNodeInfo(string title);
@@ -100,25 +97,21 @@ namespace proj {
             virtual void operator=(const Forest & other);
 
             // NOTE: any variables added must be copied in operator=
+            
+            vector<unsigned>        _unused_nodes;
 
-            double                  _prev_forest_height;
             double                  _forest_height;
-            unsigned                _next_node_index;
-            unsigned                _next_node_number;
+            //unsigned                _next_node_index;
+            double                  _log_likelihood;
             double                  _prev_log_likelihood;
             double                  _log_prior;
             vector<Node>            _nodes;
             Node::ptr_vect_t        _lineages;
             vector<coalinfo_t>      _coalinfo;
-            
-            // These not copied in operator because they should be empty when particles are copied
-            vector<coalinfo_t>                  _mark_coalinfo;
-            stack<double>                       _mark_increments;
-            stack<Node *>                       _mark_anc_nodes;
-            stack<pair<unsigned, unsigned> >    _mark_left_right_pos;
-                                    
+                                                
             // Because these can be recalculated at any time, they should not
             // affect the const status of the Forest object
+            mutable unsigned                 _next_node_number;
             mutable vector<Node::ptr_vect_t> _preorders;
 };
     
@@ -130,28 +123,21 @@ namespace proj {
     }
 
     inline void Forest::clear() {
-        _prev_forest_height = 0.0;
+        _unused_nodes.clear();
         _forest_height = 0.0;
-        _next_node_index = 0;
+        //_next_node_index = 0;
         _next_node_number = 0;
+        _log_likelihood = 0.0;
         _prev_log_likelihood = 0.0;
         _log_prior = 0.0;
         _nodes.clear();
         _preorders.clear();
         _lineages.clear();
         _coalinfo.clear();
-        _mark_coalinfo.clear();
-        _mark_increments = {};
-        _mark_anc_nodes = {};
-        _mark_left_right_pos = {};
     }
     
     inline Node::ptr_vect_t & Forest::getLineages() {
         return _lineages;
-    }
-    
-    inline double Forest::getPrevHeight() const {
-        return _prev_forest_height;
     }
     
     inline double Forest::getHeight() const {
@@ -214,6 +200,7 @@ namespace proj {
     }
 
     inline void Forest::setNodeNameFromNumber(Node * nd) {
+        assert(nd->_number > -1);
         unsigned n = nd->_number;
         if (isSpeciesForest()) {
             assert(n < 2*G::_species_names.size() - 1);
@@ -285,11 +272,6 @@ namespace proj {
     }
     
     inline string Forest::makeNewick(unsigned precision, bool use_names, bool coalunits) const  {
-#if defined(EST_THETA)
-        if (coalunits) {
-            throw XProj("Not yet ready for coalunits if thetas can vary across species tree (i.e. EST_THETA is #defined)");
-        }
-#endif
         refreshAllPreorders();
         //refreshAllHeightsAndPreorders();
         // Place basal polytomy (if there is one) at a height 10% greater than
@@ -308,6 +290,7 @@ namespace proj {
             string subtree_newick;
             stack<Node *> node_stack;
             for (auto nd : preorder) {
+                assert(nd->_number > -1);
                 if (nd->_left_child) {
                     subtree_newick += "(";
                     node_stack.push(nd);
@@ -390,27 +373,27 @@ namespace proj {
         return newick;
     }
 
-    inline void Forest::alignTaxaUsing(const map<unsigned, unsigned> & taxon_map) {
-        for (auto & preorder : _preorders) {
-            for (auto nd : boost::adaptors::reverse(preorder)) {
-                if (!nd->_left_child) {
-                    // leaf node
-                    if (taxon_map.count(nd->_number + 1) == 0) {
-                        output("\ntaxon_map:\n",1);
-                        for (auto t : taxon_map) {
-                            output(format("  key: %d --> value: %d\n") % t.first % t.second,1);
-                        }
-                        throw XProj(format("%d is not a key in taxon_map") % (nd->_number + 1));
-                    }
-                    else {
-                        unsigned leaf_index = taxon_map.at(nd->_number + 1);
-                        nd->_number = leaf_index;
-                        nd->_name = G::_species_names[leaf_index];
-                    }
-                }
-            }
-        }
-    }
+    //inline void Forest::alignTaxaUsing(const map<unsigned, unsigned> & taxon_map) {
+    //    for (auto & preorder : _preorders) {
+    //        for (auto nd : boost::adaptors::reverse(preorder)) {
+    //            if (!nd->_left_child) {
+    //                // leaf node
+    //                if (taxon_map.count(nd->_number + 1) == 0) {
+    //                    output("\ntaxon_map:\n",1);
+    //                    for (auto t : taxon_map) {
+    //                        output(format("  key: %d --> value: %d\n") % t.first % t.second,1);
+    //                    }
+    //                    throw XProj(format("%d is not a key in taxon_map") % (nd->_number + 1));
+    //                }
+    //                else {
+    //                    unsigned leaf_index = taxon_map.at(nd->_number + 1);
+    //                    nd->_number = leaf_index;
+    //                    nd->_name = G::_species_names[leaf_index];
+    //                }
+    //            }
+    //        }
+    //    }
+    //}
     
     inline void Forest::buildFromNewick(const string newick) {
         // Builds strictly-bifurcating ultrametric, rooted, complete (i.e.
@@ -457,11 +440,18 @@ namespace proj {
         // Resize the _nodes vector
         _nodes.resize(max_nodes);
         
+        // Set _number for each node to its index in _nodes vector
+        _unused_nodes.clear();
+        for (int i = 0; i < _nodes.size(); i++) {
+            _nodes[i]._number = -1;
+            _nodes[i]._my_index = i;
+            _unused_nodes.push_back(i);
+        }
+        
         try {
-            // Root node is the first one in the _nodes array
-            assert(_next_node_index == 0);
-            Node * nd   = pullNode(); //&_nodes[_next_node_index];
-            Node * root = nd; //&_nodes[_next_node_index++];
+            // Root node
+            Node * nd   = pullNode();
+            Node * root = nd;
             
             // The _lineages vector will have just one entry because
             // this will be a complete tree
@@ -512,6 +502,7 @@ namespace proj {
                         inside_quoted_name = false;
                         node_name_position = 0;
                         if (!nd->_left_child) {
+                            // leaf node
                             int num = extractNodeNumberFromName(nd->_name, used);
                             assert(num > 0);
                             nd->_number = G::_nexus_taxon_map[(unsigned)num];
@@ -540,10 +531,10 @@ namespace proj {
                             throw XProj(str(format("Unexpected node name (%s) at position %d in tree description") % nd->_name % node_name_position));
 
                         if (!nd->_left_child) {
+                            // leaf node
                             int num = extractNodeNumberFromName(nd->_name, used);
                             assert(num > 0);
                             nd->_number = G::_nexus_taxon_map[(unsigned)num];
-                            //nd->_number = (unsigned)(num - 1);
                             setNodeNameFromNumber(nd);
                             setSpeciesFromNodeName(nd);
                             curr_leaf++;
@@ -614,7 +605,7 @@ namespace proj {
                         }
 
                         // Create the sibling
-                        nd->_right_sib = pullNode(); //&_nodes[_next_node_index++];
+                        nd->_right_sib = pullNode();
                         nd->_right_sib->_parent = nd->_parent;
                         nd = nd->_right_sib;
                         previous = Prev_Tok_Comma;
@@ -628,7 +619,7 @@ namespace proj {
 
                         // Create new node above and to the left of the current node
                         assert(!nd->_left_child);
-                        nd->_left_child = pullNode(); //&_nodes[_next_node_index++];
+                        nd->_left_child = pullNode();
                         nd->_left_child->_parent = nd;
                         nd = nd->_left_child;
                         previous = Prev_Tok_LParen;
@@ -677,7 +668,7 @@ namespace proj {
             if (inside_edge_length && !(nd == root))
                 throw XProj(str(format("Tree description ended before end of edge length starting at position %d was found") % edge_length_position));
             if (inside_quoted_name)
-                throw XProj(str(format("Expecting single quote to mark the end of node name at position %d in tree description") % node_name_position));
+                throw XProj(str(format("Expecting single quote to end node name at position %d in tree description") % node_name_position));
 
             heightsInternalsPreorders();
         }
@@ -686,7 +677,7 @@ namespace proj {
             throw x;
         }
     }
-    
+        
     inline void Forest::debugCheckPreorder(const Node::ptr_vect_t & preorder) const {
         unsigned which = 0;
         Node * nd = preorder[which++];
@@ -703,13 +694,17 @@ namespace proj {
     
     inline void Forest::refreshPreorder(Node::ptr_vect_t & preorder) const {
         // Assumes preorder just contains the root node when this function is called
+        // Also assumes that _next_node_number was initialized prior to calling this function
         assert(preorder.size() == 1);
         
         Node * nd = preorder[0];
         while (true) {
             nd = findNextPreorder(nd);
-            if (nd)
+            if (nd) {
                 preorder.push_back(nd);
+                if (nd->_left_child)
+                    nd->_number = _next_node_number++;
+            }
             else
                 break;
         }
@@ -836,11 +831,16 @@ namespace proj {
     
     inline void Forest::refreshAllPreorders() const {
         // For each subtree stored in _lineages, create a vector of node pointers in preorder sequence
+        _next_node_number = isSpeciesForest() ? G::_nspecies : G::_ntaxa;
         _preorders.clear();
         if (_lineages.size() == 0)
             return;
         
         for (auto nd : _lineages) {
+            if (nd->_left_child) {
+                nd->_number = _next_node_number++;
+            }
+            
             // lineage is a Node::ptr_vect_t (i.e. vector<Node *>)
             // lineage[0] is the first node pointer in the preorder sequence for this lineage
             // Add a new vector to _preorders containing, for now, just the root of the subtree
@@ -863,6 +863,7 @@ namespace proj {
         // Set heights for each lineage in turn
         for (auto & preorder : _preorders) {
             for (auto nd : boost::adaptors::reverse(preorder)) {
+                assert(nd->_number > -1);
                 if (nd->_left_child) {
                     // nd is an internal node
                     assert(nd->_height != G::_infinity);
@@ -904,7 +905,7 @@ namespace proj {
         _forest_height = 0.0;
 
         // First internal node number is the number of leaves
-        _next_node_number = (unsigned)(isSpeciesForest() ? G::_species_names.size() : G::_taxon_names.size());
+        int next_node_number = (unsigned)(isSpeciesForest() ? G::_species_names.size() : G::_taxon_names.size());
 
         // Renumber internal nodes in postorder sequence for each lineage in turn
         for (auto & preorder : _preorders) {
@@ -914,7 +915,7 @@ namespace proj {
                     assert(nd->_height != G::_infinity);
                     if (nd->_height > _forest_height)
                         _forest_height = nd->_height;
-                    nd->_number = _next_node_number++;
+                    nd->_number = next_node_number++;
                     nd->_species = nd->_left_child->_species;
                     assert(nd->_left_child->_right_sib);
                     nd->_species |= nd->_left_child->_right_sib->_species;
@@ -923,6 +924,7 @@ namespace proj {
                 }
                 else {
                     // nd is a leaf node
+                    assert(nd->_number > -1);
                     nd->_height = 0.0;
                 }
                                 
@@ -1067,12 +1069,7 @@ namespace proj {
         nexus_reader.DeleteBlocksFromFactories();
     }
             
-    inline unsigned Forest::advanceAllLineagesBy(double dt, bool mark) {
-        // Note: dt may be negative
-        if (mark && dt > 0.0) {
-            _mark_increments.push(dt);
-        }
-                
+    inline unsigned Forest::advanceAllLineagesBy(double dt) {
         // Add t to the edge length of all lineage root nodes, unless there
         // is just one lineage, in which case do nothing
         unsigned n = (unsigned)_lineages.size();
@@ -1084,37 +1081,41 @@ namespace proj {
                 ++n;
             }
         
-            // Save previous forest height so that this increment can be reversed
-            _prev_forest_height = _forest_height;
-
             // Add to to the current forest height
             _forest_height += dt;
-        }
-        else {
-            // Ensure that reversal has no effect on forest height
-            _prev_forest_height = _forest_height;
         }
         
         return n;
     }
     
     inline Node * Forest::pullNode() {
-        if (_next_node_index == _nodes.size()) {
+        //if (_next_node_index == _nodes.size()) {
+        if (_unused_nodes.empty()) {
             unsigned nleaves = 2*(isSpeciesForest() ? G::_nspecies : G::_ntaxa) - 1;
-            throw XProj(str(format("Forest::pullNode tried to return a node beyond the end of the _nodes vector (_next_node_index = %d equals %d nodes allocated for %d leaves)") % _next_node_index % _nodes.size() % nleaves));
+            //throw XProj(str(format("Forest::pullNode tried to return a node beyond the end of the _nodes vector (_next_node_index = %d equals %d nodes allocated for %d leaves)") % _next_node_index % _nodes.size() % nleaves));
+            throw XProj(str(format("Forest::pullNode tried to return a node beyond the end of the _nodes vector (%d nodes allocated for %d leaves)") % _nodes.size() % nleaves));
         }
-        Node * new_nd = &_nodes[_next_node_index++];
+        double node_index = _unused_nodes.back();
+        _unused_nodes.pop_back();
+        
+        //Node * new_nd = &_nodes[_next_node_index++];
+        Node * new_nd = &_nodes[node_index];
+        assert(new_nd->getMyIndex() == node_index);
+        
         assert(!new_nd->_partial);
         new_nd->clear();
-        new_nd->_number = _next_node_number++;
+        new_nd->_number = -2;
         return new_nd;
     }
     
     inline void Forest::stowNode(Node * nd) {
-        _next_node_index--;
-        _next_node_number--;
-        //TODO: next line trips on HPC using dubmt
-        assert(nd == &_nodes[_next_node_index]);
+        // Get index of nd in _nodes vector
+        int offset = nd->_my_index;
+        assert(offset > -1);
+        _unused_nodes.push_back(offset);
+        //_next_node_index--;
+        //_next_node_number--;
+        //assert(nd == &_nodes[_next_node_index]);
         nd->clear();
     }
     
@@ -1123,7 +1124,8 @@ namespace proj {
         assert(new_nd);
         assert(subtree1);
         assert(subtree2);
-        new_nd->_name        = "anc-" + to_string(new_nd->_number);
+        assert(new_nd->_my_index > -1);
+        new_nd->_name        = "anc-" + to_string(new_nd->_my_index);
         new_nd->_left_child  = subtree1;
         new_nd->_edge_length = 0.0;
         new_nd->_species = 0;
@@ -1280,13 +1282,15 @@ namespace proj {
     }
     
     inline void Forest::operator=(const Forest & other) {
-        _prev_forest_height             = other._prev_forest_height;
         _forest_height                  = other._forest_height;
-        _next_node_index                = other._next_node_index;
+        //_next_node_index                = other._next_node_index;
+        _unused_nodes                   = other._unused_nodes;
         _next_node_number               = other._next_node_number;
+        _log_likelihood                 = other._log_likelihood;
         _prev_log_likelihood            = other._prev_log_likelihood;
         
-        // Create node map: if _nodes[3]._number = 2, then node_map[2] = 3 (i.e. node number 2 is at index 3 in _nodes vector)
+        // Create node map: if other._nodes[3]._number = 2, then node_map[2] = 3
+        // (i.e. node number 2 is at index 3 in _nodes vector)
         map<unsigned, unsigned> node_map;
         for (unsigned i = 0; i < other._nodes.size(); ++i) {
             int other_node_number = other._nodes[i]._number;
@@ -1328,18 +1332,13 @@ namespace proj {
             }
             
             _nodes[i]._number      = other._nodes[i]._number;
+            _nodes[i]._my_index    = other._nodes[i]._my_index;
             _nodes[i]._name        = other._nodes[i]._name;
             _nodes[i]._edge_length = other._nodes[i]._edge_length;
             _nodes[i]._height      = other._nodes[i]._height;
             _nodes[i]._species     = other._nodes[i]._species;
             _nodes[i]._split       = other._nodes[i]._split;
             _nodes[i]._flags       = other._nodes[i]._flags;
-            
-            // The _prev_species_stack should always be empty
-            // when tree is copied
-            assert(other._nodes[i]._prev_species_stack.empty());
-            
-            // _nodes[i]._partial copied by GeneForest::operator=
         }
 
         // Build _lineages
@@ -1464,29 +1463,24 @@ namespace proj {
     }
     
     inline void Forest::debugCheckCoalInfoSorted(const vector<coalinfo_t> & coalinfo_vect) const {
-#if defined(DEBUG_SECOND_LEVEL)
-        double h = 0.0;
-        for (const auto & ci : coalinfo_vect) {
-            if (get<0>(ci) < h) {
-                throw XProj("coalinfo vector not sorted");
-            }
-        }
-#endif
     }
             
-    inline void Forest::debugCheckMarkEmpty() const {
-        assert(_mark_coalinfo.empty());
-        assert(_mark_increments.empty());
-        assert(_mark_anc_nodes.empty());
-        assert(_mark_left_right_pos.empty());
+    inline double Forest::mrcaHeight(G::species_t lspp, G::species_t rspp) const {
+        double h = G::_infinity;
+        for (auto & preorder : _preorders) {
+            for (auto nd : boost::adaptors::reverse(preorder)) {
+                if (nd->_left_child) {
+                    // nd is an internal node
+                    G::species_t aspp = nd->getSpecies();
+                    if ((aspp & lspp) && (aspp & rspp)) {
+                        if (nd->_height < h)
+                            h = nd->_height;
+                    }
+                }
+            }
+        }
+        assert(h != G::_infinity);
+        return h;
     }
-    
-    inline void Forest::clearMark() {
-        // Clear the stacks so that future coalescence or speciation events can be recorded
-        _mark_coalinfo = {};
-        _mark_increments = {};
-        _mark_anc_nodes = {};
-        _mark_left_right_pos = {};
-    }
-    
+
 }

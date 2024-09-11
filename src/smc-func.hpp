@@ -99,14 +99,8 @@ namespace proj {
         template_particle.resetGeneForests(/*compute_partials*/true);
 
         // Compute initial log likelihood
-        _starting_log_likelihood = template_particle.calcLogLikelihood();
-        //template_particle.calcLogLikelihood();
-        //_starting_log_likelihood *= G::_phi;
+        _starting_log_likelihood = template_particle.calcLogLikelihood(/*initializing*/true);
 
-#if defined(MINIMIZE_PARTIALS)
-        stowAllPartials();
-#endif
-    
         // Initialize particle map with one particle having count _nparticles
         _particle_list.clear();
         _particle_list.push_back(template_particle);
@@ -132,9 +126,7 @@ namespace proj {
     inline void SMC::run() {
         assert(_nsteps > 0);
         
-#if defined(ONE_LOCUS_PER_STEP)
         vector< pair<double, unsigned> > locus_ordering(G::_ngenes);
-#endif
         
         _log_marg_like = 0.0;
         double cum_secs = 0.0;
@@ -162,7 +154,6 @@ namespace proj {
             // Advance each particle by one coalescent event (if SPECIES_AND_GENE mode)
             // or one speciation event (if SPECIES_GIVEN_GENE mode)
             // Implementation provided by parallelization policy
-#if defined(ONE_LOCUS_PER_STEP)
             unsigned step_modulus = step % G::_ngenes;
             assert(step_modulus < G::_ngenes);
             if (step_modulus == 0) {
@@ -172,11 +163,11 @@ namespace proj {
                     locus_ordering[i] = make_pair(u, i);
                 }
                 sort(locus_ordering.begin(), locus_ordering.end());
+                particleLoop(step, locus_ordering[step_modulus].second, _update_seeds, /*refresh_species_tree*/true);
             }
-            particleLoop(step, locus_ordering[step_modulus].second, _update_seeds);
-#else
-            particleLoop(step, _update_seeds);
-#endif
+            else {
+                particleLoop(step, locus_ordering[step_modulus].second, _update_seeds, /*refresh_species_tree*/false);
+            }
 
             // Determine minimum and maximum log weight
             double minlogw = *min_element(_log_weights.begin(), _log_weights.end());
@@ -185,11 +176,12 @@ namespace proj {
             // Filter particles using normalized weights and multinomial sampling
             // The _counts vector will be filled with the number of times each particle was chosen.
             double ess = _nparticles;
-#if defined(ONE_LOCUS_PER_STEP)
-            ess = filterParticles(step, locus_ordering[step_modulus].second, _particle_list, _log_weights, _counts, _update_seeds);
-#else
-            ess = filterParticles(step, _particle_list, _log_weights, _counts, _update_seeds);
-#endif
+            if (step_modulus == 0) {
+                ess = filterParticles(step, locus_ordering[step_modulus].second, _particle_list, _log_weights, _counts, _update_seeds, /*refresh_species_tree*/true);
+            }
+            else {
+                ess = filterParticles(step, locus_ordering[step_modulus].second, _particle_list, _log_weights, _counts, _update_seeds, /*refresh_species_tree*/false);
+            }
             
 #if defined(EST_THETA)
             debugSaveThetas(step);
@@ -411,11 +403,7 @@ namespace proj {
         }
     }
     
-#if defined(ONE_LOCUS_PER_STEP)
-    inline double SMC::filterParticles(unsigned step, unsigned locus, list<Particle> & particle_list, vector<double> & log_weights, vector<unsigned> & counts, vector<unsigned> & rnseeds) {
-#else
-    inline double SMC::filterParticles(unsigned step, list<Particle> & particle_list, vector<double> & log_weights, vector<unsigned> & counts, vector<unsigned> & rnseeds) {
-#endif
+    inline double SMC::filterParticles(unsigned step, unsigned locus, list<Particle> & particle_list, vector<double> & log_weights, vector<unsigned> & counts, vector<unsigned> & rnseeds, bool refresh_species_tree) {
         //MARK: Proj::filterParticles
         // Sanity checks
         assert(counts.size() == _nparticles);
@@ -504,15 +492,11 @@ namespace proj {
                     // Advance to same coalescence event created when
                     // log weight was calculated but this time keep it
                     // by setting make_permanent to true.
-#if defined(MINIMIZE_PARTIALS)
-                    plast.proposeCoalescence(rnseeds[k], step, k,  /*compute_partial*/false, /*make_permanent*/true);
-#else
-#   if defined(ONE_LOCUS_PER_STEP)
-                    plast.proposeCoalescence(rnseeds[k], step, locus, k,  /*compute_partial*/true, /*make_permanent*/true);
-#   else
-                    plast.proposeCoalescence(rnseeds[k], step, k,  /*compute_partial*/true, /*make_permanent*/true);
-#   endif
-#endif
+                    double starting_height = -1.0; // negative value means don't rebuild species tree
+                    if (refresh_species_tree) {
+                        starting_height = p.getMaxGeneTreeHeight();
+                    }
+                    plast.proposeCoalescence(rnseeds[k], step, locus, k,  /*compute_partial*/true, /*make_permanent*/true, starting_height);
                 }
                 else if (_mode == SMC::SPECIES_GIVEN_GENE) {
                     // Advance to same speciation event created when
@@ -617,7 +601,7 @@ namespace proj {
                 gf.heightsInternalsPreorders();
                 //gf.forgetSpeciesTreeAbove(0.0);
                 //gf.saveCoalInfo(coalinfo_vect);
-                log_likelihood += gf.calcLogLikelihood();
+                log_likelihood += gf.calcLogLikelihood(false);
             }
             log_likelihood *= G::_phi;
             
@@ -854,7 +838,7 @@ namespace proj {
                 string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
                 
                 // Calculate log-likelihood for this gene tree
-                info._log_likelihood = gf.calcLogLikelihood();
+                info._log_likelihood = gf.calcLogLikelihood(false);
                 
                 // Record everything for this particle
                 tree_info[newick].push_back(info);

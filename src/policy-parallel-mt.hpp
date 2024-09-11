@@ -47,11 +47,6 @@ namespace proj {
             // Second element of pair is number of copies of particle
             unsigned n = p.getCount();
         
-#if defined(MINIMIZE_PARTIALS)
-            // Recompute all partials
-            p.computeAllPartials();
-#endif
-        
             while (n > 0) {
                 
 #if defined(DEBUGGING_SANITY_CHECK)
@@ -63,7 +58,11 @@ namespace proj {
                 auto proposed = p.proposeCoalescence(update_seeds[i], step, i,  /*compute_partial*/true, /*make_permanent*/false);
                 
                 // Save the log weight
+#if defined(UPGMA_WEIGHTS)
+                throw XProj("UPGMA_WEIGHTS not yet implemented for ParallelPolicyMultithreading");
+#else
                 _log_weights[i] = G::_phi*proposed.first;
+#endif
                 
                 // This is the current number of lineages in the species tree
                 // This information is used only for sanity checking (should
@@ -86,10 +85,6 @@ namespace proj {
                 n--;
                 i++;
             }
-            
-#if defined(MINIMIZE_PARTIALS)
-            p.stowAllPartials();
-#endif
         }
     }
 

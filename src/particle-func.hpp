@@ -102,12 +102,20 @@ namespace proj {
         }
     }
     
-    inline double Particle::calcLogLikelihood() {
+    inline double Particle::calcLogLikelihood(bool initializing) {
         double log_likelihood = 0.0;
         for (unsigned g = 0; g < G::_ngenes; g++) {
-            log_likelihood += _gene_forests[g].calcLogLikelihood();
+            log_likelihood += _gene_forests[g].calcLogLikelihood(initializing);
         }
         return log_likelihood;
+    }
+    
+    inline double Particle::calcPrevLogLikelihood() {
+        double prev_log_likelihood = 0.0;
+        for (unsigned g = 0; g < G::_ngenes; g++) {
+            prev_log_likelihood += _gene_forests[g].getPrevLogLikelihood();
+        }
+        return prev_log_likelihood;
     }
     
     struct bitless {
@@ -508,15 +516,25 @@ namespace proj {
     }
 
     inline void Particle::finalizeProposalSpeciesForest() {
-        //MARK: Particle::finalizeProposalSpeciesForest
         _species_forest.finalizeProposal();
         debugCheckAllPrevSpeciesStacksEmpty();
     }
     
-    inline void Particle::finalizeProposalAllForests() {
-        //MARK: Particle::finalizeProposalAllForests
-        _species_forest.finalizeProposal();
+    inline void Particle::finalizeProposalGeneForest(unsigned locus) {
+        // note: _smc is nullptr when simulating
+        if (!_smc || _smc->isJointMode()) {
+            //for (auto & gf : _gene_forests) {
+            //    gf.finalizeProposal();
+            //}
+            _gene_forests[locus].finalizeProposal();
+        }
         
+        //debugCheckAllPrevSpeciesStacksEmpty();
+    }
+    
+    inline void Particle::finalizeProposalAllForests() {
+        _species_forest.finalizeProposal();
+
         // note: _smc is nullptr when simulating
         if (!_smc || _smc->isJointMode()) {
             for (auto & gf : _gene_forests) {
@@ -524,7 +542,7 @@ namespace proj {
             }
         }
         
-        debugCheckAllPrevSpeciesStacksEmpty();
+        //debugCheckAllPrevSpeciesStacksEmpty();
     }
     
     inline void Particle::debugCheckAllPrevSpeciesStacksEmpty() const {
@@ -808,11 +826,7 @@ namespace proj {
         return log_weight_modifier;
     }
     
-#if defined(ONE_LOCUS_PER_STEP)
-    inline pair<double, unsigned> Particle::proposeCoalescence(unsigned seed, unsigned step, unsigned locus, unsigned pindex, bool compute_partial, bool make_permanent) {
-#else
-    inline pair<double, unsigned> Particle::proposeCoalescence(unsigned seed, unsigned step, unsigned pindex, bool compute_partial, bool make_permanent) {
-#endif
+    inline pair<double, unsigned> Particle::proposeCoalescence(unsigned seed, unsigned step, unsigned locus, unsigned pindex, bool compute_partial, bool make_permanent, double starting_species_tree_height) {
         //MARK: Particle::proposeCoalescence
         setSeed(seed);
         
@@ -820,7 +834,7 @@ namespace proj {
         double prev_log_likelihood = 0.0;
         if (make_permanent) {
             G::_debugging_text = "tmp0.txt";
-            prev_log_likelihood = calcLogLikelihood();
+            prev_log_likelihood = calcLogLikelihood(step == 0);
         }
 #endif
         
@@ -832,26 +846,35 @@ namespace proj {
         }
 #endif
         
-#if defined(ONE_LOCUS_PER_STEP)
-        advance(step, locus, pindex, compute_partial, make_permanent);
-        while (lastEventSpeciation()) {
-            advance(step, locus, pindex, compute_partial, make_permanent);
+        if (starting_species_tree_height > -0.5) {
+            // starting_species_tree_height equals -1 if not yet time to rebuild,
+            // so the -0.5 above has no significance other than the fact that
+            // it is -1 < -0.5 < 0
+            _species_forest.rebuildStartingFromHeight(_lot, starting_species_tree_height, make_permanent);
+            
+            // debugging
+            output(format("\nSpecies tree rebuilt starting from height %g:\n") % starting_species_tree_height, 0);
+            output(format("--> %s:\n") % _species_forest.makeNewick(9, true, false), 0);
+            debugShowMarkVariables("After species tree rebuild");
         }
-#else
-        advance(step, pindex, compute_partial, make_permanent);
-        while (lastEventSpeciation()) {
-            advance(step, pindex, compute_partial, make_permanent);
+        
+        advanceByOneCoalescence(step, locus, pindex, compute_partial, make_permanent);
+        while (_last_event == Particle::LAST_EVENT_SPECIATION) {
+            advanceByOneCoalescence(step, locus, pindex, compute_partial, make_permanent);
         }
-#endif
         
         double log_weight = log_weight_modifier + getLogWeight();
+
+        // debugging
+        // output(format("\nGene forest for locus %d (logw = %g):\n") % locus % log_weight, 0);
+        // output(format("--> %s:\n") % _gene_forests[locus].makeNewick(9, true, false), 0);
 
         unsigned num_species_tree_lineages = _species_forest.getNumLineages();
         
         if (make_permanent)
             finalizeProposalAllForests();
         else
-            revertToMarkAllForests();
+            revertToMarkGeneForest(locus);
 
 #if defined(DEBUG_CHECK_LOGWEIGHT)
         if (make_permanent) {
@@ -867,22 +890,11 @@ namespace proj {
         return make_pair(log_weight, num_species_tree_lineages);
     }
     
-#if defined(ONE_LOCUS_PER_STEP)
     inline double Particle::calcTotalCoalRate(unsigned locus) {
         double total_rate = 0.0;
         total_rate += _gene_forests[locus].calcTotalRate(_species_tuples);
         return total_rate;
     }
-#else
-    inline double Particle::calcTotalCoalRate() {
-        double total_rate = 0.0;
-        for (auto & gene_forest : _gene_forests) {
-            //total_rate += gene_forest.calcTotalRate(_species_tuples, speciation_increment);
-            total_rate += gene_forest.calcTotalRate(_species_tuples);
-        }
-        return total_rate;
-    }
-#endif
     
     inline void Particle::clearMarkAllForests() {
         _species_forest.clearMark();
@@ -897,6 +909,16 @@ namespace proj {
 
     inline void Particle::revertToMarkSpeciesForest() {
         _species_forest.revertToMark();
+    }
+    
+    inline void Particle::revertToMarkGeneForest(unsigned locus) {
+        // note: _smc is nullptr when simulating
+        if (!_smc || _smc->isJointMode()) {
+            //for (auto & gf : _gene_forests) {
+            //    gf.revertToMark();
+            //}
+            _gene_forests[locus].revertToMark();
+        }
     }
     
     inline void Particle::revertToMarkAllForests() {
@@ -917,11 +939,7 @@ namespace proj {
         }
     }
     
-#if defined(ONE_LOCUS_PER_STEP)
     inline double Particle::priorPrior(unsigned step, unsigned locus, unsigned pindex, double total_rate, bool compute_partial) {
-#else
-    inline double Particle::priorPrior(unsigned step, unsigned pindex, double total_rate, bool compute_partial) {
-#endif
         //MARK: priorPrior
         double log_weight = 0.0;
         
@@ -944,9 +962,7 @@ namespace proj {
         vector<double> probs(_species_tuples.size());
         transform(_species_tuples.begin(), _species_tuples.end(), probs.begin(), [total_rate,locus](Node::species_tuple_t & spp_tuple){
             double n = (double)get<0>(spp_tuple);
-#if defined(ONE_LOCUS_PER_STEP)
             assert(locus == (unsigned)get<1>(spp_tuple));
-#endif
 #if defined(EST_THETA)
             double theta = (double)get<4>(spp_tuple);
             return n*(n - 1.0)/(theta*total_rate);
@@ -967,26 +983,15 @@ namespace proj {
         unsigned which = G::multinomialDraw(_lot, probs);
         assert(which < probs.size());
         
-#if defined(ONE_LOCUS_PER_STEP)
         GeneForest & gf = _gene_forests[locus];
-#else
-        // Get a reference to the relevant gene forest
-        unsigned g = get<1>(_species_tuples[which]);
-        GeneForest & gf = _gene_forests[g];
-#endif
         
         // Get the species involved
         G::species_t spp = get<2>(_species_tuples[which]);
             
         // Pull next available node
         Node * anc_node = gf.pullNode();
-#if defined(ONE_LOCUS_PER_STEP)
         if (compute_partial)
             anc_node->_partial = pullPartial(locus);
-#else
-        if (compute_partial)
-            anc_node->_partial = pullPartial(g);
-#endif
                 
         // Create variables in which to store indexes (relative
         // to spp) of nodes joined
@@ -1031,10 +1036,25 @@ namespace proj {
             assert(anc_node->_left_child);
             assert(anc_node->_left_child->_right_sib);
             assert(anc_node->_partial);
-
+            
             log_weight = gf.calcPartialArray(anc_node);
             assert(!isnan(log_weight));
             assert(!isinf(log_weight));
+
+#if defined(UPGMA_WEIGHTS)
+            gf.removeTwoAddOne(gf._lineages, first_node, second_node, anc_node);
+            gf.refreshAllPreorders();
+
+            double logL = gf.calcLogLikelihood(/*initializing*/false);
+            double prevLogL = gf.getPrevLogLikelihood();
+            log_weight = logL - prevLogL;
+
+            output(format("\nLocus %d gene forest (logL = %g, prevLogL = %g, logw = %g):\n") % locus % logL % prevLogL % log_weight, 0);
+            output(format("%s\n") % gf.makeNewick(9, true, false), 0);
+
+            gf.addTwoRemoveOne(gf._lineages, first_node, second_node, anc_node);
+            gf.refreshAllPreorders();
+#endif
         }
         
         gf.addCoalInfoElem(anc_node, gf._mark_coalinfo);
@@ -1053,188 +1073,8 @@ namespace proj {
                 
         return log_weight;
     }
-
-    inline double Particle::priorPost(unsigned step, unsigned pindex, bool make_permanent) {
-    //    // Prior-post tries every possible join within each locus-species pair,
-    //    // then chooses one of these possibilities using a multinomial draw from
-    //    // the normalized weights. The log weight of the proposal is the log of
-    //    // the normalizing constant for the multinomial draw.
-        double log_weight = 0.0;
-        throw XProj("Particle::priorPost not yet implemented");
-    //    
-    //    if (make_permanent) {
-    //        unsigned                       g = _last_proposed_gene;
-    //        G::species_t         spp = _last_proposed_spp;
-    //        unsigned             first_index = _last_proposed_first_index;
-    //        unsigned            second_index = _last_proposed_second_index;
-    //        
-    //        // Get reference to correct gene forest
-    //        GeneForest & gf = _gene_forests[g];
-    //        
-    //        // Pull next available node
-    //        Node * anc_node = gf.pullNode();
-    //        anc_node->_partial = pullPartial(g);
-    //        
-    //        // Join the chosen pair of lineages
-    //        if (gf._lineages_within_species.count(spp) == 0)
-    //            throw XProj(gf.lineagesWithinSpeciesKeyError(spp));
-    //        else {
-    //            auto & node_vect = gf._lineages_within_species.at(spp);
-    //            Node * first_node  = node_vect[first_index];
-    //            Node * second_node = node_vect[second_index];
-    //            gf.joinLineagePair(anc_node, first_node, second_node);
-    //        }
-    //        
-    //        anc_node->setSpecies(spp);
-    //
-    //        // Recalculate partial for anc_node
-    //        double logw = gf.calcPartialArray(anc_node);
-    //        assert(!isnan(logw));
-    //        assert(!isinf(logw));
-    //
-    //        gf._mark_anc_nodes.push(anc_node);
-    //        gf._mark_left_right_pos.push(make_pair(first_index, second_index));
-    //    }
-    //    else {
-    //        // Create a vector to hold the log weight from every possible join.
-    //        vector<double> log_weights;
-    //        
-    //        // Create a map relating an index into log_weights (key) to a tuple (value)
-    //        // containing:
-    //        //  <0> the index into _species_tuples
-    //        //  <1> the first index of the join, and
-    //        //  <2> the second index of the join.
-    //        map<unsigned, tuple<unsigned, unsigned, unsigned> > index_map;
-    //        
-    //        // The element at index 3 of _species_tuples provides
-    //        // pointers to the root nodes of each lineage in that
-    //        // locus-species combination
-    //        unsigned log_weight_index = 0;
-    //        unsigned species_tuples_index = 0;
-    //        Node * first_node = nullptr;
-    //        Node * second_node = nullptr;
-    //        for (auto t : _species_tuples) {
-    //            // Get number of lineages
-    //            unsigned n = get<0>(t);
-    //            
-    //            // Get locus
-    //            unsigned g = get<1>(t);
-    //            
-    //            // Get species
-    //            G::species_t spp = get<2>(t);
-    //            
-    //            // Get vector of nodes in the specified species spp
-    //            Node::ptr_vect_t & node_vect = get<3>(t);
-    //            assert(n == node_vect.size());
-    //            assert(n > 1);
-    //            
-    //            // Get reference to correct gene forest
-    //            GeneForest & gf = _gene_forests[g];
-    //            
-    //            // Pull next available node
-    //            Node * anc_node = gf.pullNode();
-    //            anc_node->_partial = pullPartial(g);
-    //
-    //            // Visit each possible pair of nodes to join and compute
-    //            // log weight of that join
-    //            for (unsigned i = 0; i < n - 1; i++) {
-    //                for (unsigned j = i + 1; j < n; j++) {
-    //                    index_map[log_weight_index] = make_tuple(species_tuples_index, i, j);
-    //                    
-    //                    // Join the chosen pair of lineages
-    //                    first_node  = node_vect[i];
-    //                    second_node = node_vect[j];
-    //
-    //                    // Coalescent events should not cross species boundaries
-    //                    assert(first_node->getSpecies() == spp);
-    //                    assert(second_node->getSpecies() == spp);
-    //                    
-    //                    gf.joinLineagePair(anc_node, first_node, second_node);
-    //
-    //                    // Compute partial likelihood array of ancestral node
-    //                    assert(anc_node->_left_child);
-    //                    assert(anc_node->_left_child->_right_sib);
-    //                    assert(anc_node->_partial);
-    //
-    //                    double logw = gf.calcPartialArray(anc_node);
-    //                    assert(!isnan(logw));
-    //                    assert(!isinf(logw));
-    //                    log_weights.push_back(logw);
-    //                    assert(log_weights.size() == log_weight_index + 1);
-    //                    
-    //                    // Unjoin the chosen pair of lineages
-    //                    gf.unjoinLineagePair(anc_node, first_node, second_node);
-    //                    
-    //                    log_weight_index++;
-    //                }   // j loop
-    //            } // i loop
-    //            
-    //            // Return partial
-    //            gf.stowPartial(anc_node);
-    //
-    //            // Return anc node
-    //            gf.stowNode(anc_node);
-    //            anc_node = nullptr;
-    //            
-    //            species_tuples_index++;
-    //        } // species_tuples loop
-    //        
-    //        // Compute log of sum of weights
-    //        double sum_log_weights = G::calcLogSum(log_weights);
-    //                          
-    //        // Create multinomial probability distribution by normalizing
-    //        // the log weights
-    //        vector<double> probs(log_weights.size(), 0.0);
-    //        transform(log_weights.begin(), log_weights.end(), probs.begin(), [sum_log_weights](double logw){return exp(logw - sum_log_weights);});
-    //        
-    //        // Choose one pair
-    //        unsigned which = G::multinomialDraw(_lot, probs);
-    //        auto chosen = index_map[which];
-    //        species_tuples_index  = get<0>(chosen);
-    //        unsigned first_index  = get<1>(chosen);
-    //        unsigned second_index = get<2>(chosen);
-    //
-    //        unsigned             g         = get<1>(_species_tuples[species_tuples_index]);
-    //        G::species_t spp       = get<2>(_species_tuples[species_tuples_index]);
-    //        Node::ptr_vect_t &   node_vect = get<3>(_species_tuples[species_tuples_index]);
-    //
-    //        log_weight = sum_log_weights;
-    //
-    //        // Get reference to correct gene forest
-    //        GeneForest & gf = _gene_forests[g];
-    //        
-    //        // Pull next available node
-    //        Node * anc_node = gf.pullNode();
-    //        anc_node->_partial = pullPartial(g);
-    //        
-    //        // Join the chosen pair of lineages
-    //        first_node  = node_vect[first_index];
-    //        second_node = node_vect[second_index];
-    //        gf.joinLineagePair(anc_node, first_node, second_node);
-    //        
-    //        anc_node->setSpecies(spp);
-    //
-    //        //TODO: necessary?
-    //        double logw = gf.calcPartialArray(anc_node);
-    //        assert(!isnan(logw));
-    //        assert(!isinf(logw));
-    //
-    //        gf._mark_anc_nodes.push(anc_node);
-    //        gf._mark_left_right_pos.push(make_pair(first_index, second_index));
-    //
-    //        _last_proposed_gene = g;
-    //        _last_proposed_spp = spp;
-    //        _last_proposed_first_index = first_index;
-    //        _last_proposed_second_index = second_index;
-    //    }
-        return log_weight;
-    }
-
-#if defined(ONE_LOCUS_PER_STEP)
-    inline void Particle::advance(unsigned step, unsigned locus, unsigned pindex, bool compute_partial, bool make_permanent) {
-#else
-    inline void Particle::advance(unsigned step, unsigned pindex, bool compute_partial, bool make_permanent) {
-#endif
+    
+    inline void Particle::advanceByOneCoalescence(unsigned step, unsigned locus, unsigned pindex, bool compute_partial, bool make_permanent) {
         //MARK: advance
         // Clear species_tuples vector. Each tuple entry stores:
         //  0. number of lineages
@@ -1244,76 +1084,43 @@ namespace proj {
         //  4. theta for species (if #define EST_THETA)
         _species_tuples.clear();
         
-        // Draw a speciation increment Delta. Note: speciation_increment will
-        // equal "infinity" if species tree is complete.
-        auto incr_rate = _species_forest.drawIncrement(_lot);
-        double Delta = incr_rate.first;
-        //double speciation_rate = incr_rate.second;
+        // Get current height of this locus' gene forest
+        double gene_forest_height = _gene_forests[locus].getHeight();
         
-#if defined(ONE_LOCUS_PER_STEP)
+        // Find height of next speciation event
+        auto speciation_tuple = _species_forest.findNextSpeciationEvent(gene_forest_height);
+        double speciation_height = get<0>(speciation_tuple);
+        double speciation_delta  = (speciation_height == G::_infinity) ? G::_infinity : speciation_height - gene_forest_height;
+        G::species_t left_spp    = get<1>(speciation_tuple);
+        G::species_t right_spp   = get<2>(speciation_tuple);
+        G::species_t anc_spp     = get<3>(speciation_tuple);
+                        
         // Visit each species within the specified locus, storing
         // the number of lineages in _species_tuples and computing
         // the total coalescence rate (total_rate).
         double total_rate = calcTotalCoalRate(locus);
-#else
-        // Visit each species within each locus, storing the number of lineages in
-        // _species_tuples and computing the total coalescence rate (total_rate).
-        //double total_rate = calcTotalCoalRate(Delta);
-        double total_rate = calcTotalCoalRate();
-#endif
         
         // Draw coalescence increment delta ~ Exponential(total_rate)
         double delta = (total_rate > 0.0 ? -log(1.0 - _lot->uniform())/total_rate : G::_infinity);
         
-        // If delta < Delta, then a coalescent event happened; otherwise a speciation event happened.
-        bool is_speciation = (delta > Delta);
-                
-        // Advance all forests by increment dt
-        double dt = is_speciation ? Delta : delta;
-
-        // Forests save dt to allow reversion
-        advanceAllLineagesBy(dt, /*mark*/!make_permanent);
-        
-        if (is_speciation) {
+        if (delta > speciation_delta) {
             _last_event = Particle::LAST_EVENT_SPECIATION;
-            
-            // Create speciation event
-            G::species_t left_spp, right_spp, anc_spp;
-            _species_forest.speciationEvent(_lot, left_spp, right_spp, anc_spp, /*mark*/!make_permanent);
-            double species_forest_height = _species_forest.getHeight();
-                                    
-#if defined(EST_THETA)
-            double q = _species_forest.drawThetaForSpecies(anc_spp, _lot);
-#endif
 
-//#if defined(ONE_LOCUS_PER_STEP)
-//            // Advise gene tree of the change in the species tree
-//            // Nodes that are reassigned save their previous state
-//            // to allow reversion
-//            _gene_forests[locus].mergeSpecies(species_forest_height, left_spp, right_spp, anc_spp);
-//#else
-            // Advise all gene trees of the change in the species tree
+            // Forests save delta to allow reversion
+            _gene_forests[locus].advanceAllLineagesBy(speciation_delta, /*mark*/!make_permanent);
+                                                
+            // Advise gene tree of the change in the species tree
             // Nodes that are reassigned save their previous state
             // to allow reversion
-            for (auto & gene_forest : _gene_forests) {
-                gene_forest.mergeSpecies(species_forest_height, left_spp, right_spp, anc_spp);
-            }
-//#endif
+            _gene_forests[locus].mergeSpecies(speciation_height, left_spp, right_spp, anc_spp);
         }
         else {
             _last_event = Particle::LAST_EVENT_COALESCENCE;
 
-            if (G::_prior_post) {
-                // Note: priorPost not implemented and will throw an exception if entered
-                _log_weight = priorPost(step, pindex, make_permanent);
-            }
-            else {
-#if defined(ONE_LOCUS_PER_STEP)
-                _log_weight = priorPrior(step, locus, pindex, total_rate, compute_partial);
-#else
-                _log_weight = priorPrior(step, pindex, total_rate, compute_partial);
-#endif
-            }
+            // Forests save delta to allow reversion
+            _gene_forests[locus].advanceAllLineagesBy(delta, /*mark*/!make_permanent);
+
+            _log_weight = priorPrior(step, locus, pindex, total_rate, compute_partial);
         }
     }
 
@@ -1471,4 +1278,15 @@ namespace proj {
         double log_factor = get<2>(incr_rate_cum);
         return make_pair(log_factor,incr);
     }
+    
+    inline double Particle::getMaxGeneTreeHeight() const {
+        double maxh = 0.0;
+        for (unsigned i = 0; i < G::_ngenes; i++) {
+            double h = _gene_forests[i].getHeight();
+            if (h > maxh)
+                maxh = h;
+        }
+        return maxh;
+    }
+    
 }
