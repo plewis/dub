@@ -245,14 +245,25 @@ namespace proj {
             jstart = j;
             
             // Perform replacements in all subsequent gene tree coalinfo elements
+            map<G::species_t, G::species_t> replacements;
             while (j < coalinfo_vect.size()) {
                 h = get<0>(coalinfo_vect[j]);
                 vector<G::species_t> & v = get<2>(coalinfo_vect[j]);
                 assert(v.size() == 2);
+                for (auto & kv : replacements) {
+                    if (subsumed(kv.first, v[0])) {
+                        v[0] |= kv.second;
+                    }
+                    if (subsumed(kv.first, v[1])) {
+                        v[1] |= kv.second;
+                    }
+                }
                 if (subsumed(v[0], s0)) {
+                    replacements[v[0]] = s0;
                     v[0] = s0;
                 }
                 if (subsumed(v[1], s0)) {
+                    replacements[v[1]] = s0;
                     v[1] = s0;
                 }
                 j++;
@@ -353,7 +364,7 @@ namespace proj {
     inline void SpeciesForest::buildCoalInfoVect() {
         //TODO: GeneForest has same function: move to base class Forest?
         // Should only be called for complete species trees
-        assert(_lineages.size() == 1);
+        //assert(_lineages.size() == 1);
 
         _coalinfo.clear();
         for (auto & preorder : _preorders) {

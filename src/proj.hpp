@@ -30,6 +30,8 @@ namespace proj {
             void                            processCommandLineOptions(int argc, const char * argv[]);
             void                            readData();
             void                            run();
+            
+            void                            selectParticlesToKeep(list<Particle> & first_level_particles, vector<unsigned> & kept);
                
             string                          _data_file_name;
             string                          _start_mode;
@@ -73,6 +75,7 @@ namespace proj {
     inline void Proj::processCommandLineOptions(int argc, const char * argv[]) {
         vector<string> partition_subsets;
         vector<string> partition_relrates;
+        bool do_compress;
         bool dummy_bool;
         int dummy_int;
         variables_map vm;
@@ -87,8 +90,11 @@ namespace proj {
         ("subset",  value(&partition_subsets), "a string defining a partition subset, e.g. 'first:1-1234\3' or 'default[codon:standard]:1-3702'")
         ("ambigmissing",  value(&_ambig_missing)->default_value(true), "treat all ambiguities as missing data")
         ("verbosity",  value(&G::_verbosity)->default_value(0), "0, 1, or 2: higher number means more output")
-        ("nparticles",  value(&G::_nparticles)->default_value(500), "number of particles in a population for joint estimation")
-        ("nspeciesparticles",  value(&G::_nparticles2)->default_value(1000), "number of particles in a population for species tree only estimation")
+        ("nparticles",  value(&G::_nparticles)->default_value(500), "number of particles in a population for joint estimation (1st level SMC)")
+        ("nkept",  value(&G::_nkept)->default_value(0), "number of particles from joint smc kept for conditional (2nd level) smc")
+        ("nspeciesparticles",  value(&G::_nparticles2)->default_value(0), "number of particles in a population for (2nd level) species tree only estimation")
+        ("nspecieskept",  value(&G::_nkept2)->default_value(0), "number of particles from conditional smc kept")
+        ("treefilecompression", value(&do_compress)->default_value(0), "no=no compression, yes=maximum compression")
         ("lambda",  value(&G::_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
         ("theta",  value(&G::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
         ("rnseed",  value(&_rnseed)->default_value(13579), "pseudorandom number seed")
@@ -119,6 +125,11 @@ namespace proj {
             exit(1);
         }
         
+        // If user specified --treefilecompression on command line, set G::_treefile_compression to 2
+        if (vm.count("treefilecompression") > 0) {
+            G::_treefile_compression = (do_compress ? 2 : 0);
+        }
+        
         // If user specified --subset on command line, break specified partition subset
         // definition into name and character set string and add to _partition
         if (vm.count("subset") > 0) {
@@ -127,6 +138,23 @@ namespace proj {
                 _partition->parseSubsetDefinition(s);
             }
         }
+        
+        // If user specified --nkept on command line, check to ensure
+        // that nkept <= nparticles.
+        if (vm.count("nkept") > 0) {
+            if (G::_nkept > G::_nparticles) {
+                throw XProj("nkept cannot be greater than nparticles");
+            }
+        }
+        
+        // If user specified --nspecieskept on command line, check to ensure
+        // that nkept2 <= nspeciesparticles.
+        if (vm.count("nspecieskept") > 0) {
+            if (G::_nkept2 > G::_nparticles2) {
+                throw XProj("nspecieskept cannot be greater than nspeciesparticles");
+            }
+        }
+        
     }
     
     inline void Proj::readData() {
@@ -201,10 +229,64 @@ namespace proj {
             
             // First-level particle filtering
             SMC smc;
+            smc.setNParticles(G::_nparticles);
             smc.setData(_data);
             smc.init();
             smc.run();
             smc.summarize();
+            
+            if (G::_nparticles2 > 0) {
+                output(format("Performing 2nd-level SMC on %d 1st-level particles...\n") % G::_nkept, 2);
+                
+                vector<Particle> & first_level_particles = smc.getParticles();
+                assert(first_level_particles.size() == G::_nparticles);
+
+                // Choose (discrete-uniform-randomly) G::_nkept 1st-level particles for use in 2nd level
+                // Save indices in kept vector
+                vector<unsigned> kept;
+                kept.reserve(first_level_particles.size());
+                for (unsigned k = 0; k < G::_nkept; k++) {
+                    unsigned i = rng->randint(0, G::_nparticles-1);
+                    kept.push_back(i);
+                }
+
+                // Second-level particle filtering
+                SMC ensemble;
+                ensemble.setMode(SMC::SPECIES_GIVEN_GENE);
+                for (auto k : kept) {
+                    Particle & p = first_level_particles[k];
+
+                    // Rebuild coal info vectors, stripping effect of previous species tree
+                    vector<GeneForest> & gtvect = p.getGeneForests();
+                    for (auto & gt : gtvect) {
+                        // Each gene forest's _coalinfo vector stores a tuple for each internal node:
+                        // <1> height
+                        // <2> gene_index + 1
+                        // <3> left child species
+                        // <4> right child species
+                        gt.buildCoalInfoVect();
+                    }
+                                            
+                    SMC smc2;
+                    smc2.setNParticles(G::_nparticles2);
+                    smc2.setMode(SMC::SPECIES_GIVEN_GENE);
+                    smc2.initFromParticle(p);
+                    smc2.run();
+                    
+                    // Choose (discrete-uniform-randomly) G::_nkept2 2nd-level particles
+                    vector<unsigned> kept2;
+                    vector<Particle> & second_level_particles = smc2.getParticles();
+                    assert(second_level_particles.size() == G::_nparticles2);
+                    kept2.reserve(second_level_particles.size());
+                    for (unsigned k = 0; k < G::_nkept2; k++) {
+                        unsigned i = rng->randint(0, G::_nparticles2-1);
+                        kept2.push_back(i);
+                    }
+                    
+                    smc2.dumpParticles(ensemble, kept2);
+                }
+                ensemble.summarize();
+            }
         }
         catch (XProj & x) {
             output(format("Proj encountered a problem:\n  %s\n") % x.what(), 2);

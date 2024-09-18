@@ -28,7 +28,10 @@ namespace proj {
             double calcLogLikelihood();
             double calcPrevLogLikelihood();
             void   resetAllPrevLogLikelihood();
+
             double calcLogCoalescentLikelihood(vector<Forest::coalinfo_t> & coalinfo_vect, bool integrate_out_thetas, bool verbose) const;
+            double calcPrevLogCoalLike();
+            void   resetPrevLogCoalLike();
             
             double getMaxGeneTreeHeight() const;
                                     
@@ -36,6 +39,7 @@ namespace proj {
             double findHeightNextCoalescentEvent(double hstart, vector<Forest::coalinfo_t> & coalinfo_vect);
             double calcTotalCoalRate(unsigned locus);
 
+            unsigned proposeSpeciation(unsigned step);
             void proposeCoalescence(unsigned step, unsigned locus);
 
             bool advanceByOneCoalescence(unsigned step, unsigned locus);
@@ -95,12 +99,14 @@ namespace proj {
             Data::SharedPtr            _data;
 
             vector<GeneForest>         _gene_forests;
-            
             SpeciesForest              _species_forest;
             
             vector<Node::species_tuple_t> _species_tuples;
             
-            mutable double          _log_weight;
+            mutable double              _log_coal_like;
+            mutable double              _prev_log_coal_like;
+
+            mutable double              _log_weight;
             
             // Even though a shared pointer, _lot is a private random number
             // generator not shared with any other particle and has nothing to
@@ -132,6 +138,8 @@ namespace proj {
     }
 
     inline void Particle::clear() {
+        _log_coal_like = 0.0;
+        _prev_log_coal_like = 0.0;
         _log_weight = 0.0;
         _gene_forests.clear();
         _species_forest.clear();
@@ -184,6 +192,10 @@ namespace proj {
         }
     }
     
+    inline void Particle::resetPrevLogCoalLike() {
+        _prev_log_coal_like = _log_coal_like;
+    }
+    
     inline double Particle::calcPrevLogLikelihood() {
         double prev_log_likelihood = 0.0;
         for (unsigned g = 0; g < G::_nloci; g++) {
@@ -223,8 +235,6 @@ namespace proj {
     }
     
     inline double Particle::calcLogCoalescentLikelihood(vector<Forest::coalinfo_t> & coalinfo_vect, bool integrate_out_thetas, bool verbose) const {
-        //cerr << "*** inside Particle::calcLogCoalescentLikelihood ***" << endl;
-        
         // This function assumes gene forests are complete gene trees (not partial states) and
         // that preorders and heights have been precalculated.
         
@@ -256,15 +266,28 @@ namespace proj {
         //    beta  = (mean of theta)/4
         //    sigma = 1
         
-        // //temporary!
-        //Forest::debugShowCoalInfo("Particle::calcLogCoalescentLikelihood", coalinfo_vect);
-        
+#if defined(DEBUG_COALLIKE)
+        if (!coalinfo_vect.empty()) {
+            output("\nContents of coalinfo_vect:\n", 0);
+            output(format("%12s %6s %s\n") % "height" % "locus" % "species", 0);
+            for (auto & cinfo : coalinfo_vect) {
+                double      height = get<0>(cinfo);
+                unsigned     locus = get<1>(cinfo);
+                auto & sppvect = get<2>(cinfo);
+                vector<string> s;
+                for (auto x : sppvect) {
+                    s.push_back(to_string(x));
+                }
+                output(format("%12.9f %6d %s\n") % height % locus % boost::algorithm::join(s, ","), 0);
+            }
+        }
+#endif
+                
         // Create maps to hold quantities needed by Graham Jones' (2017) formula
         // for coalescent likelihood integrating out theta.
-        //typedef map<G::species_t, unsigned, bitless> nmap;
         typedef map<G::species_t, double> dmap;
         
-        // n_jb[g][b] holds current number of lineages for gene g, branch b
+        // n_jb[g][b] holds starting (leaf-end) number of lineages for locus g, branch b
         vector<dmap> n_jb(G::_nloci);
         
         // log_r_b[b] holds sum of log(r_b) for branch b
@@ -276,26 +299,46 @@ namespace proj {
         // gamma_b[b] holds cumulative gamma_b for branch b
         dmap gamma_b;
         
-        // Initialize n_jb for gene 0
+        // Initialize n_jb for locus 0
         for (auto & nm : G::_taxon_names) {
+            // Find index of species corresponding to taxon name nm
             unsigned i = G::_taxon_to_species[nm];
+            
+            // Get species from index
             G::species_t b = (G::species_t)1 << i;
+            
+            // Increment count of species b in locus 0
             if (n_jb[0].count(b) == 0)
                 n_jb[0][b] = 1;
             else
                 n_jb[0][b]++;
         }
         
-        // Initialize n_jb for other genes by copying n_jb for gene 0
+        // Initialize n_jb for other loci by copying n_jb for locus 0
+        // Assumes the same number of individuals have been sampled from each species for all loci
         for (unsigned g = 1; g < G::_nloci; g++) {
             n_jb[g] = n_jb[0];
         }
         
-        // prev_height[g][b] holds previous height for gene g and branch b
+        // prev_height[g][b] holds previous height for locus g and branch b
         vector<map<G::species_t, double> > prev_height(G::_nloci);
         
-        // Ploidy for each gene (currently all genes assumed to be diploid)
+        // Ploidy for each locus (currently all loci assumed to be diploid)
         vector<double> p_j(G::_nloci, 2.0);
+
+#if defined(HACK_FOR_SNAKE_ATP)
+        if (G::_hack_atp_index < 0) {
+            // Find index of ATP gene
+            for (unsigned i = 0; i < G::_nloci; i++) {
+                if (G::_gene_names[i] == "ATP") {
+                    G::_hack_atp_index = i;
+                    break;
+                }
+            }
+        }
+        assert(G::_hack_atp_index > -1);
+        p_j[G::_hack_atp_index] = 1.0;
+#endif
         
         // Vector branches stores branches (including ancestral ones)
         vector<G::species_t> branches;
@@ -311,31 +354,34 @@ namespace proj {
             output("\nParticle::calcLogCoalescentLikelihood:\n", 1);
             output("Key:\n", 1);
             output("  height:   height above leaf-level of this coalescence or speciation event\n", 1);
-            output("  gene:     0 if speciation event, gene index for coalescence events\n", 1);
+            output("  locus:    0 if speciation event, locus index for coalescence events\n", 1);
             output("  spp:      species of the two lineages involved in a coalescence/speciation event\n", 1);
             output("  b:        the species tree branch (i.e. species) to which this event contributes\n", 1);
             output("  n_jbk:    the number of coalescences for branch b\n", 1);
             output("  c_jbk:    the sojourn time prior to coalescence k\n", 1);
-            output("  log(r_b): the log of 4/pj, where pj is the ploidy of gene j\n", 1);
-            output("  q_b:      the cumulative number of coalescences over all genes for branch b\n", 1);
-            output(format("%12s %12s %24s %12s %12s %12s %12s %12s\n") % "height" % "gene" % "spp" % "b" % "n_jbk" % "c_jbk" % "log(r_b)" % "q_b", 1);
+            output("  log(r_b): the log of 4/pj, where pj is the ploidy of locus j\n", 1);
+            output("  gamma_b:  cumulative 2*n*(n-1)*c_jbk/pj over all loci for branch b\n", 1);
+            output("  q_b:      the cumulative number of coalescences over all loci for branch b\n", 1);
+            output(format("%12s %12s %25s %12s %12s %12s %12s %12s\n") % "height" % "locus" % "spp" % "b" % "n_jbk" % "c_jbk" % "gamma_b" % "q_b", 1);
         }
 
         // Walk down coalinfo_vect, accumulating Graham Jones r_b, q_b, and gamma_b
         for (auto & cinfo : coalinfo_vect) {
             double               height = get<0>(cinfo);
-            unsigned             gene_plus_one   = get<1>(cinfo);
-            int                  gene   = gene_plus_one - 1;
+            unsigned             locus_plus_one   = get<1>(cinfo);
+            int                  locus   = locus_plus_one - 1;
             
             ostringstream oss;
             vector<G::species_t> & b_vect = get<2>(cinfo);
             copy(b_vect.begin(), b_vect.end(), ostream_iterator<G::species_t>(oss, " "));
+            string spp_joined = oss.str();
+            boost::algorithm::trim_right(spp_joined);
             
             G::species_t banc = 0;
             for (auto b : b_vect)
                 banc |= b;
                 
-            if (gene_plus_one == 0) {
+            if (locus_plus_one == 0) {
                 // Speciation event
                 
                 // If banc represents a new branch in the species tree,
@@ -379,34 +425,35 @@ namespace proj {
                 bavail.insert(banc);
 
                 if (verbose) {
-                    output(format("%12.5f %12d %24s %12s %12s %12s %12s %12s\n") % height % 0 % banc % oss.str() % "-" % "-" % "-" % "-", 1);
+                    output(format("%12.9f %12d %25s %12s %12s %12s %12s %12s\n") % height % 0 % spp_joined % banc % "-" % "-" % "-" % "-", 1);
                 }
             }
             else {
                 // Coalescent event
-                //auto it = bavail.find(banc);
+
+                // Determine b, the edge of the species tree we're dealing with
+                // Note that b may be an edge that is not yet in the species tree (i.e. the root edge)
                 auto it = find_if(bavail.begin(), bavail.end(), [banc](G::species_t v){return (banc & v) > 0;});
-                
                 assert(it != bavail.end());
                 G::species_t b = *it;
                 
-                if (prev_height[gene].count(b) == 0) {
-                    prev_height[gene][b] = 0.0;
+                if (prev_height[locus].count(b) == 0) {
+                    prev_height[locus][b] = 0.0;
                 }
-                double height0 = prev_height[gene].at(b);
+                double height0 = prev_height[locus].at(b);
                 
                 // Coalescent event: update Jones quantities
-                log_r_b[b] += log(4/p_j[gene]);
+                log_r_b[b] += log(4/p_j[locus]);
                 q_b[b]++;
-                double n_jbk = n_jb[gene][b];
+                double n_jbk = n_jb[locus][b];
                 double c_jbk = height - height0;
-                gamma_b[b] += 2.0*n_jbk*(n_jbk-1)*c_jbk/p_j[gene];
+                gamma_b[b] += 2.0*n_jbk*(n_jbk-1)*c_jbk/p_j[locus];
 
-                prev_height[gene][b] = height;
-                n_jb[gene][b]--;
+                prev_height[locus][b] = height;
+                n_jb[locus][b]--;
 
                 if (verbose) {
-                    output(format("%12.5f %12d %24s %12d %12d %12.5f %12.5f %12d\n") % height % gene_plus_one % oss.str() % b % n_jbk % c_jbk % gamma_b[b] % q_b[b], 1);
+                    output(format("%12.9f %12d %25s %12d %12d %12.9f %12.9f %12d\n") % height % locus_plus_one % spp_joined % b % n_jbk % c_jbk % gamma_b[b] % q_b[b], 1);
                 }
             }
         }
@@ -430,7 +477,7 @@ namespace proj {
                 log_likelihood += boost::math::lgamma(alpha + q_b[b]);
                 
                 if (verbose) {
-                    output(format("%12d %12d %12.5f %12.5f %12.5f %12.5f\n") % b % q_b[b] % log_r_b[b] % gamma_b[b] % beta % log_likelihood, 1);
+                    output(format("%12d %12d %12.9f %12.9f %12.9f %12.9f\n") % b % q_b[b] % log_r_b[b] % gamma_b[b] % beta % log_likelihood, 1);
                 }
             }
 
@@ -453,7 +500,7 @@ namespace proj {
                 log_likelihood += log_r_b[b] - gamma_b[b]/theta_b - q_b[b]*log(theta_b);
                 
                 if (verbose) {
-                    output(format("%12d %12d %12.5f %12.5f %12.5f %12.5f\n") % b % q_b[b] % log_r_b[b] % gamma_b[b] % theta_b % log_likelihood, 1);
+                    output(format("%12d %12d %12.9f %12.9f %12.9f %12.9f\n") % b % q_b[b] % log_r_b[b] % gamma_b[b] % theta_b % log_likelihood, 1);
                 }
             }
             
@@ -464,7 +511,8 @@ namespace proj {
                 output(format("log(coalescent likelihood) = %.5f\n") % log_likelihood, 1);
             }
         }
-                            
+
+        _log_coal_like = log_likelihood;
         return log_likelihood;
     }
     
@@ -549,6 +597,183 @@ namespace proj {
         
         assert(min_height < G::_infinity);
         return min_height;
+    }
+    
+    inline unsigned Particle::proposeSpeciation(unsigned step) {
+        // This function is only used for proposing speciation events when there are
+        // complete gene trees available. It thus draws increments from a truncated
+        // exponential distribution where the trunction point is the next height at
+        // which at least one coalescent event combines lineages from two different
+        // species.
+        unsigned num_species_tree_lineages = 0;
+        
+        // Stores tuple (height, 0, vector of species) for each join in the current species forest.
+        // Do not cap with ancestral species at this point.
+        vector<Forest::coalinfo_t> sppinfo_vect;
+        _species_forest.saveCoalInfo(sppinfo_vect);
+
+        // Sort sppinfo_vect from smallest height to largest height
+        sort(sppinfo_vect.begin(), sppinfo_vect.end());
+        
+        // coalinfo_vect stores a tuple (height, gene + 1, vector of species)
+        // for each join in any gene tree. To get 0-offset gene index,
+        // subtract 1 from 2nd element of tuple (if 2nd element is 0, then
+        // tuple represents a species tree join)
+        vector<Forest::coalinfo_t> coalinfo_vect;
+        
+        // Add gene tree joins to coalinfo_vect
+        // Just need coalescent events at this point in order to choose
+        // limits for species tree increments
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            GeneForest & gf = _gene_forests[g];
+            gf.saveCoalInfo(coalinfo_vect);
+        }
+        
+        // Sort coalinfo_vect from smallest to largest height
+        sort(coalinfo_vect.begin(), coalinfo_vect.end());
+
+        // //temporary!
+        // G::SpecLog speclog_element;
+        // speclog_element._seed = seed;
+        
+        // Get maximum height of any gene tree
+        double max_height = get<0>((*coalinfo_vect.rbegin()));
+        
+        if (step > 0) {
+#if defined(DEBUG_COALLIKE)
+            output("\nSpecies tree before creating speciation:\n", 0);
+            output(format("  %s\n") % _species_forest.makeNewick(9, true, false), 0);
+#endif
+
+            // Create speciation event
+            G::species_t left_spp, right_spp, anc_spp;
+            _species_forest.speciationEvent(rng, left_spp, right_spp, anc_spp);
+            
+#if defined(DEBUG_COALLIKE)
+            output("\nSpecies tree after creating speciation:\n", 0);
+            output(format("  %s\n") % _species_forest.makeNewick(9, true, false), 0);
+#endif
+
+            // Let sppinfo_vect reflect current state of species forest
+            sppinfo_vect.clear();
+            _species_forest.buildCoalInfoVect();
+            _species_forest.saveCoalInfo(sppinfo_vect, /*cap*/false);
+            
+            // Sort sppinfo_vect from smallest height to largest height
+            sort(sppinfo_vect.begin(), sppinfo_vect.end());
+
+#if defined(DEBUG_COALLIKE)
+            // Show coalinfo_vect before fixing up
+            _species_forest.debugShowCoalInfo("sppinfo_vect after speciation event", sppinfo_vect, /*fn*/"");
+            _species_forest.debugShowCoalInfo("coalinfo_vect before fixup", coalinfo_vect, /*fn*/"");
+#endif
+                
+            // Adjust elements of coalinfo_vect affected by species tree joins
+            _species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect);
+
+#if defined(DEBUG_COALLIKE)
+            // Show coalinfo_vect before fixing up
+            _species_forest.debugShowCoalInfo("coalinfo_vect after fixup", coalinfo_vect, /*fn*/"");
+#endif
+                
+            // //temporary!
+            // speclog_element._left = left_spp;
+            // speclog_element._right = right_spp;
+            // speclog_element._anc = anc_spp;
+        }
+        
+        // Draw a speciation increment dt.
+        double forest_height = _species_forest.getHeight();
+        //speclog_element._height = forest_height;
+        double h = findHeightNextCoalescentEvent(forest_height, coalinfo_vect);
+        assert(h <= max_height);
+        
+        pair<double,double> tmp = chooseTruncatedSpeciesForestIncrement(h);
+        double log_weight_factor = tmp.first;
+        //double increment = tmp.second;
+        
+        num_species_tree_lineages = _species_forest.getNumLineages();
+        if (num_species_tree_lineages == 2) {
+#if defined(DEBUG_COALLIKE)
+            output("\nSpecies tree before creating FINAL speciation:\n", 0);
+            output(format("  %s\n") % _species_forest.makeNewick(9, true, false), 0);
+#endif
+            // Create final speciation event
+            G::species_t left_spp, right_spp, anc_spp;
+            _species_forest.speciationEvent(rng, left_spp, right_spp, anc_spp);
+            
+#if defined(DEBUG_COALLIKE)
+            output("\nSpecies tree after creating FINAL speciation:\n", 0);
+            output(format("  %s\n") % _species_forest.makeNewick(9, true, false), 0);
+#endif
+            // Let sppinfo_vect reflect current state of species forest
+            //sppinfo_vect.clear();
+            //_species_forest.buildCoalInfoVect();
+            //_species_forest.saveCoalInfo(sppinfo_vect, /*cap*/false);
+            
+            // Sort sppinfo_vect from smallest height to largest height
+            //sort(sppinfo_vect.begin(), sppinfo_vect.end());
+
+#if defined(DEBUG_COALLIKE)
+            // Show coalinfo_vect before fixing up
+            //_species_forest.debugShowCoalInfo("sppinfo_vect after FINAL speciation event", sppinfo_vect, /*fn*/"");
+            //_species_forest.debugShowCoalInfo("coalinfo_vect before fixup", coalinfo_vect, /*fn*/"");
+#endif
+            // Adjust elements of coalinfo_vect affected by species tree joins
+            //_species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect);
+
+#if defined(DEBUG_COALLIKE)
+            // Show coalinfo_vect before fixing up
+            //_species_forest.debugShowCoalInfo("coalinfo_vect after fixup", coalinfo_vect, /*fn*/"");
+#endif
+        }
+        
+        // Add species tree joins to sppinfo_vect. Cap with ancestral species
+        // in order to compute complete coalescent likelihood.
+        sppinfo_vect.clear();
+        _species_forest.buildCoalInfoVect();
+        _species_forest.saveCoalInfo(sppinfo_vect, /*cap*/true);
+
+        // Sort sppinfo_vect from smallest height to largest height
+        sort(sppinfo_vect.begin(), sppinfo_vect.end());
+        
+#if defined(DEBUG_COALLIKE)
+        // Show coalinfo_vect before fixing up
+        _species_forest.debugShowCoalInfo("sppinfo_vect", sppinfo_vect, /*fn*/"");
+        _species_forest.debugShowCoalInfo("coalinfo_vect before fixup", coalinfo_vect, /*fn*/"");
+#endif
+                
+        // Adjust elements of coalinfo_vect affected by species tree joins
+        _species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect);
+
+#if defined(DEBUG_COALLIKE)
+        // Show coalinfo_vect after fixing up
+        _species_forest.debugShowCoalInfo("coalinfo_vect after fixup", coalinfo_vect, /*fn*/"");
+#endif
+
+        // Add speciations into coalinfo_vect
+        //BUG lines below fix 2nd level bug 2024-06-19
+        // see also Particle::recordAllForests
+        coalinfo_vect.insert(coalinfo_vect.begin(), sppinfo_vect.begin(), sppinfo_vect.end());
+        sort(coalinfo_vect.begin(), coalinfo_vect.end());
+
+        // Compute coalescent likelihood and log weight
+        //double prev_log_coallike = _prev_log_coallike;
+#if defined(DEBUG_COALLIKE)
+        calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/false, /*verbose*/true);
+#else
+        calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/false, /*verbose*/false);
+#endif
+        _log_weight = _log_coal_like - _prev_log_coal_like + log_weight_factor;
+
+        resetPrevLogCoalLike();
+        
+        // //temporary!
+        // speclog_element._logw = log_weight;
+        // speclog_element._filtered = true;
+        // G::_speclog[step].push_back(speclog_element);
+
+        return num_species_tree_lineages;
     }
     
     inline void Particle::proposeCoalescence(unsigned step, unsigned locus) {
@@ -814,7 +1039,13 @@ namespace proj {
         }
         
         // Copy species forest
-        _species_forest = other._species_forest;
+        _species_forest     = other._species_forest;
+        
+        _log_coal_like      = other._log_coal_like;
+        _prev_log_coal_like = other._prev_log_coal_like;
+        _log_weight         = other._log_weight;
+        
+        _species_tuples     = other._species_tuples;        
     }
     
     inline void Particle::operator=(const Particle & other) {

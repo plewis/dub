@@ -8,6 +8,10 @@ namespace proj {
 
     struct G {
         typedef unsigned long           species_t;
+        
+#if defined(HACK_FOR_SNAKE_ATP)
+        static int                      _hack_atp_index;
+#endif
                 
         static string                   _species_tree_ref_file_name;
         static string                   _gene_trees_ref_file_name;
@@ -46,6 +50,8 @@ namespace proj {
         
         static unsigned                 _nparticles;
         static unsigned                 _nparticles2;
+        static unsigned                 _nkept;
+        static unsigned                 _nkept2;
 
         static void     showSettings();
         static double   inverseGammaVariate(double shape, double rate, Lot::SharedPtr lot);
@@ -67,6 +73,7 @@ namespace proj {
         output(format("Speciation rate (lambda): %.9f\n") % G::_lambda, 2);
         output(format("Coalescent parameter (theta): %.9f\n") % G::_theta, 2);
         output(format("Number of 1st-level particles: %d\n") % G::_nparticles, 2);
+        output(format("Number of 1st-level particles kept: %d\n") % G::_nkept, 2);
         output(format("Number of 2nd-level particles: %d\n") % G::_nparticles2, 2);
     }
 

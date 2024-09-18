@@ -1253,9 +1253,9 @@ namespace proj {
                 ostringstream oss;
                 copy(spp.begin(), spp.end(), ostream_iterator<G::species_t>(oss, " "));
                 if (gene_plus_1 == 0)
-                    tmpf << str(format("%12.5f %12s %12s\n") % h % "(0)" % oss.str());
+                    tmpf << str(format("%12.9f %12s %12s\n") % h % "(0)" % oss.str());
                 else
-                    tmpf << str(format("%12.5f %12d %12s\n") % h % gene_plus_1 % oss.str());
+                    tmpf << str(format("%12.9f %12d %12s\n") % h % gene_plus_1 % oss.str());
             }
             tmpf << endl;
             tmpf.close();
@@ -1273,9 +1273,9 @@ namespace proj {
                 ostringstream oss;
                 copy(spp.begin(), spp.end(), ostream_iterator<G::species_t>(oss, " "));
                 if (gene_plus_1 == 0)
-                    output(format("%12.5f %12s %12s\n") % h % "(0)" % oss.str(), 1);
+                    output(format("%12.9f %12s %12s\n") % h % "(0)" % oss.str(), 1);
                 else
-                    output(format("%12.5f %12d %12s\n") % h % gene_plus_1 % oss.str(), 1);
+                    output(format("%12.9f %12d %12s\n") % h % gene_plus_1 % oss.str(), 1);
             }
             output("\n", 1);
         }
@@ -1463,6 +1463,10 @@ namespace proj {
     }
     
     inline void Forest::debugCheckCoalInfoSorted(const vector<coalinfo_t> & coalinfo_vect) const {
+        double h0 = get<0>(coalinfo_vect[0]);
+        for (auto & ci : coalinfo_vect) {
+            assert(get<0>(ci) >= h0);
+        }
     }
             
     inline double Forest::mrcaHeight(G::species_t lspp, G::species_t rspp) const {

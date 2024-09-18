@@ -80,6 +80,10 @@ Lot::SharedPtr                      rng(new Lot());
 StopWatch                           stopwatch;
 PartialStore                        ps;
 
+#if defined(HACK_FOR_SNAKE_ATP)
+int                                 G::_hack_atp_index              = -1;
+#endif
+
 string                              G::_species_tree_ref_file_name  = "";
 string                              G::_gene_trees_ref_file_name    = "";
 
@@ -114,7 +118,9 @@ double                              G::_lambda                      = 1.0;
 double                              G::_small_enough                = 0.00001;
 
 unsigned                            G::_nparticles                  = 500;
-unsigned                            G::_nparticles2                 = 1000;
+unsigned                            G::_nparticles2                 = 0;
+unsigned                            G::_nkept                       = 0;
+unsigned                            G::_nkept2                      = 0;
 
 static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in order to use infinity()");
 double                              G::_infinity = numeric_limits<double>::infinity();
