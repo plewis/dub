@@ -769,9 +769,9 @@ namespace proj {
         // Compute coalescent likelihood and log weight
         //double prev_log_coallike = _prev_log_coallike;
 #if defined(DEBUG_COALLIKE)
-        calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/false, /*verbose*/true);
+        calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/true, /*verbose*/true);
 #else
-        calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/false, /*verbose*/false);
+        calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/true, /*verbose*/false);
 #endif
         _log_weight = _log_coal_like - _prev_log_coal_like + log_weight_factor;
 
@@ -1099,6 +1099,10 @@ namespace proj {
         double incr = get<0>(incr_rate_cum);
         double rate = get<1>(incr_rate_cum);
         assert(rate > 0.0);
+#if defined(ADHOC_REMOVE_BEFORE_RELEASE)
+        //temporary!
+        incr = 0.15;
+#endif
         _species_forest.advanceAllLineagesBy(incr);
         double log_factor = get<2>(incr_rate_cum);
         return make_pair(log_factor,incr);

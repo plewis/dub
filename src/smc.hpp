@@ -105,9 +105,9 @@ namespace proj {
         vector<Forest::coalinfo_t> coalinfo_vect;
         p.recordAllForests(coalinfo_vect);
 #if defined(DEBUG_COALLIKE)
-        p.calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/false, /*verbose*/true);
+        p.calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/true, /*verbose*/true);
 #else
-        p.calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/false, /*verbose*/false);
+        p.calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/true, /*verbose*/false);
 #endif
         p.resetPrevLogCoalLike();
             
