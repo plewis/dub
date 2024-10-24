@@ -47,13 +47,13 @@ using boost::format;
 #include "conditionals.hpp"
 #include "xproj.hpp"
 #include "lot.hpp"
+#include "split.hpp"
 #include "smcglobal.hpp"
 #include "stopwatch.hpp"
 #include "genetic-code.hpp"
 #include "datatype.hpp"
 #include "partition.hpp"
 #include "data.hpp"
-#include "split.hpp"
 #include "partial_store.hpp"
 #include "node.hpp"
 #include "forest.hpp"
@@ -88,6 +88,7 @@ string                              G::_species_tree_ref_file_name  = "";
 string                              G::_gene_trees_ref_file_name    = "";
 
 bool                                G::_debugging                   = false;
+bool                                G::_simulating                  = false;
 
 unsigned                            G::_nthreads                    = 1;
 
@@ -121,6 +122,12 @@ unsigned                            G::_nparticles                  = 500;
 unsigned                            G::_nparticles2                 = 0;
 unsigned                            G::_nkept                       = 0;
 unsigned                            G::_nkept2                      = 0;
+
+#if defined(UPGMA_WEIGHTS)
+vector<vector<double> >             G::_dmatrix;
+vector<Split>                       G::_dmatrix_rows;
+#endif
+
 
 static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in order to use infinity()");
 double                              G::_infinity = numeric_limits<double>::infinity();

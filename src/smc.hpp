@@ -142,6 +142,7 @@ namespace proj {
         template_particle.setData(_data);
         template_particle.resetSpeciesForest();
         template_particle.resetGeneForests(/*compute_partials*/true);
+        //template_particle.resetDistanceMatrix();
 
         // Compute initial log likelihood
         _starting_log_likelihoods.resize(G::_nloci, 0.0);
@@ -176,8 +177,12 @@ namespace proj {
             unsigned locus = G::_nloci;
             
             if (isJointMode()) {
+#if defined(RANDOM_LOCUS_ORDERING)
+#               error random locus ordering not yet implemented except for sim
+#else
                 locus = step % G::_nloci;
                 assert(locus < G::_nloci);
+#endif
             
                 for (unsigned i = 0; i < _nparticles; i++) {
                     // Advance each particle by one coalescent event in one locus
@@ -322,7 +327,6 @@ namespace proj {
         assert(_counts.size() == _nparticles);
         
         vector<double> log_weights(_nparticles, 0.0);
-        unsigned i = 0;
         for (unsigned i = 0; i < _particles.size(); i++) {
             log_weights[i] = _particles[i].getLogWeight();
         }
@@ -437,7 +441,8 @@ namespace proj {
                 // Get newick tree description for this species tree
                 string newick = p.getSpeciesForestConst().makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
                 
-                if (isConditionalMode()) { //temporary! while debugging only want to call calcLogCoalescentLikelihood while in 2nd level
+                if (isConditionalMode()) {
+                    //temporary! while debugging only want to call calcLogCoalescentLikelihood while in 2nd level
                     // Calculate log coalescent likelihood for this species tree
                     vector<Forest::coalinfo_t> coalinfo_vect;
                     p.recordAllForests(coalinfo_vect);
@@ -545,7 +550,7 @@ namespace proj {
                 string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
                 
                 // Calculate log-likelihood for this gene tree
-#if defined(UPGMA_CONSTRAINED)
+#if defined(UPGMA_WEIGHTS)
                 info._log_likelihood = gf.calcLogLikelihood(p.getSpeciesForestConst());
 #else
                 info._log_likelihood = gf.calcLogLikelihood();

@@ -3,9 +3,11 @@
 
 // Calculate likelihood using the existing forest with the rest of
 // the tree filled in by UPGMA.
-//#define UPGMA_WEIGHTS
-//#define UPGMA_CONSTRAINED
+#define UPGMA_WEIGHTS
+//#define DEBUG_UPGMA
 
 //#define DEBUG_COALLIKE
 //#define DEBUGGING_INITFROMPARTICLE
 //#define HACK_FOR_SNAKE_ATP
+
+//#define RANDOM_LOCUS_ORDERING

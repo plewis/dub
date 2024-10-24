@@ -1105,6 +1105,7 @@ namespace proj {
         assert(!new_nd->_partial);
         new_nd->clear();
         new_nd->_number = -2;
+        new_nd->_split.resize(G::_ntaxa);
         return new_nd;
     }
     

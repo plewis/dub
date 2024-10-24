@@ -19,6 +19,10 @@ namespace proj {
             
             void resetSpeciesForest();
             void resetGeneForests(bool compute_partials);
+
+//#if defined(UPGMA_WEIGHTS)
+//            void resetDistanceMatrix();
+//#endif
             
             void threadComputePartials(unsigned first, unsigned last);
             void computeAllPartials();
@@ -101,6 +105,11 @@ namespace proj {
             vector<GeneForest>         _gene_forests;
             SpeciesForest              _species_forest;
             
+//#if defined(UPGMA_WEIGHTS)
+//            vector<vector<double> >     _dmatrix;
+//            vector<Split>               _dmatrix_rows;
+//#endif
+            
             vector<Node::species_tuple_t> _species_tuples;
             
             mutable double              _log_coal_like;
@@ -177,7 +186,7 @@ namespace proj {
     inline double Particle::calcLogLikelihood() {
         double log_likelihood = 0.0;
         for (unsigned g = 0; g < G::_nloci; g++) {
-#if defined(UPGMA_CONSTRAINED)
+#if defined(UPGMA_WEIGHTS)
             log_likelihood += _gene_forests[g].calcLogLikelihood(_species_forest);
 #else
             log_likelihood += _gene_forests[g].calcLogLikelihood();
@@ -777,6 +786,8 @@ namespace proj {
     }
     
     inline void Particle::proposeCoalescence(unsigned step, unsigned locus) {
+        // If first locus, rebuild species tree starting from
+        // the height of the tallest gene forest over all loci
         if (locus == 0) {
             double max_gene_forest_height = 0.0;
             for (unsigned g = 0; g < G::_nloci; g++) {
@@ -785,9 +796,17 @@ namespace proj {
                     max_gene_forest_height = h;
             }
             _species_forest.rebuildStartingFromHeight(max_gene_forest_height);
+            
+            // //temporary!
+            // cerr << _species_forest.makeNewick(9, /*use_names*/true, /*coalunitstrue*/false) << endl;
         }
         
+        // Copy _log_likelihood to _prev_log_likelihood
         _gene_forests[locus].resetPrevLogLikelihood();
+        
+        // Advance locus gene forest by one coalescent event.
+        // Returns true if a coalescence event was created, and
+        // returns false if the next speciation event occurred first
         bool done = advanceByOneCoalescence(step, locus);
         while (!done) {
             done = advanceByOneCoalescence(step, locus);
@@ -817,14 +836,14 @@ namespace proj {
         //  2. species within gene
         //  3. vector<Node *> holding lineage roots for gene/species combination
 
-        // Prior-prior chooses a locus and species in which to have a coalescence
+        // Prior-prior chooses species in which to have a coalescence event drawn
         // from the prior. The probability of coalescence in one particular
-        // gene-species pair i is
+        // species i is
         //   p(i) = r_i/total_rate
         // where
         //   r_i = n_i*(n_i-1)/theta
         //   total_rate = sum_i r_i
-        //   n_i = number of lineages in pair i.
+        //   n_i = number of lineages in i.
         vector<double> probs(_species_tuples.size());
         transform(_species_tuples.begin(), _species_tuples.end(), probs.begin(), [total_rate,locus](Node::species_tuple_t & spp_tuple){
             double n = (double)get<0>(spp_tuple);
@@ -832,10 +851,8 @@ namespace proj {
             return n*(n - 1.0)/(G::_theta*total_rate);
         });
                 
-        // Choose which gene-species pair in which the coalescence will happen
-        if (probs.size() == 0) {
-            cerr << "debug stop" << endl;
-        }
+        // Choose the species in which the coalescence will happen
+        assert(probs.size() > 0);
         unsigned which = G::multinomialDraw(::rng, probs);
         assert(which < probs.size());
         
@@ -846,7 +863,9 @@ namespace proj {
             
         // Pull next available node
         Node * anc_node = gf.pullNode();
-        anc_node->_partial = pullPartial(locus);
+        if (!G::_simulating) {
+            anc_node->_partial = pullPartial(locus);
+        }
                 
         // Create variables in which to store indexes (relative
         // to spp) of nodes joined
@@ -870,7 +889,7 @@ namespace proj {
             i = chosen_pair.first;
             j = chosen_pair.second;
             
-            // Return the chosen pair in the supplied reference variables
+            // Return the chosen pair in the supplied pointer variables
             first_index = i;
             second_index = j;
             
@@ -882,6 +901,11 @@ namespace proj {
 
         anc_node->setSpecies(spp);
         
+        // Set anc_node split to union of the two child splits
+        anc_node->_split.resize(G::_ntaxa);
+        anc_node->_split += first_node->_split;
+        anc_node->_split += second_node->_split;
+        
         assert(first_node->getSpecies() == spp);
         assert(second_node->getSpecies() == spp);
 
@@ -889,33 +913,45 @@ namespace proj {
         gf.removeTwoAddOne(gf._lineages, first_node, second_node, anc_node);
         gf.refreshAllPreorders();
 
-        // Compute partial likelihood array of ancestral node
-        assert(_data);
-        assert(anc_node->_left_child);
-        assert(anc_node->_left_child->_right_sib);
-        assert(anc_node->_partial);
-        
-        log_weight = gf.calcPartialArray(anc_node);
-        assert(!isnan(log_weight));
-        assert(!isinf(log_weight));
+        if (!G::_simulating) {
+            // Compute partial likelihood array of ancestral node
+            assert(_data);
+            assert(anc_node->_left_child);
+            assert(anc_node->_left_child->_right_sib);
+            assert(anc_node->_partial);
+            
+            log_weight = gf.calcPartialArray(anc_node);
+            assert(!isnan(log_weight));
+            assert(!isinf(log_weight));
 
 #if defined(UPGMA_WEIGHTS)
-#   if defined(UPGMA_CONSTRAINED)
-        double logL = gf.calcLogLikelihood(_species_forest);
-#   else
-        double logL = gf.calcLogLikelihood();
-#   endif
-        double prevLogL = gf.getPrevLogLikelihood();
-        log_weight = logL - prevLogL;
+            // Update _dmatrix and _dmatrix_rows
+            Split s1 = first_node->getSplit();
+            Split s2 = second_node->getSplit();
+            
+            //output(format("s1 = %s\n") % s1.createPatternRepresentation(), 0);
+            //output(format("s2 = %s\n") % s2.createPatternRepresentation(), 0);
+            //output("_dmatrix_rows:\n", 0);
+            //unsigned z = 0;
+            //for (auto s : _dmatrix_rows) {
+            //    output(format("%6d = %s\n") % z++ % s.createPatternRepresentation(), 0);
+            //}
+            
+            G::mergeDMatrixPair(gf._dmatrix_rows, gf._dmatrix, s1, s2);
 
-        //output(format("\nLocus %d gene forest (logL = %g, prevLogL = %g, logw = %g):\n") % locus % logL % prevLogL % log_weight, 0);
-        //output(format("%s\n") % gf.makeNewick(9, true, false), 0);
+            double logL = gf.calcLogLikelihood(_species_forest);
+            double prevLogL = gf.getPrevLogLikelihood();
+            log_weight = logL - prevLogL;
+
+            //output(format("\nLocus %d gene forest (logL = %g, prevLogL = %g, logw = %g):\n") % locus % logL % prevLogL % log_weight, 0);
+            //output(format("%s\n") % gf.makeNewick(9, true, false), 0);
 #else
-        double logL = gf.calcLogLikelihood();
-        double prevLogL = gf.getPrevLogLikelihood();
-        double check_log_weight = logL - prevLogL;
-        assert(fabs(check_log_weight - log_weight) < G::_small_enough);
+            double logL = gf.calcLogLikelihood();
+            double prevLogL = gf.getPrevLogLikelihood();
+            double check_log_weight = logL - prevLogL;
+            assert(fabs(check_log_weight - log_weight) < G::_small_enough);
 #endif
+        }
                 
         return log_weight;
     }
@@ -1038,6 +1074,11 @@ namespace proj {
             _gene_forests[i].setParticle(this);
         }
         
+//#if defined(UPGMA_WEIGHTS)
+//        _dmatrix = other._dmatrix;
+//        _dmatrix_rows = other._dmatrix_rows;
+//#endif
+        
         // Copy species forest
         _species_forest     = other._species_forest;
         
@@ -1073,4 +1114,10 @@ namespace proj {
         return maxh;
     }
     
+//#if defined(UPGMA_WEIGHTS)
+//    inline void Particle::resetDistanceMatrix() {
+//        _dmatrix = G::_dmatrix;
+//        _dmatrix_rows = G::_dmatrix_rows;
+//    }
+//#endif
 }
