@@ -223,6 +223,8 @@ namespace proj {
     }
     
     inline void SMC::summarize() {
+        assert(_particles.size() > 0);
+        
         string prefix = "1st";
         if (isConditionalMode())
             prefix = "2nd";

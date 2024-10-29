@@ -101,7 +101,7 @@ namespace proj {
             Particle * _particle;
             Data::SharedPtr _data;
             double _relrate;
-            int _gene_index;
+            int _gene_index;    // -1, 0, 1, ..., G::_nloci - 1
             bool _prior_post;
 
 #if defined(UPGMA_WEIGHTS)
@@ -155,7 +155,7 @@ namespace proj {
                 }
                 else {
                     // nd is a leaf node
-                    unsigned spp_index = G::_taxon_to_species[nd->_name];
+                    unsigned spp_index = G::_taxon_to_species.at(nd->_name);
                     nd->_species = (G::species_t)1 << spp_index;
                 }
             }
@@ -288,7 +288,7 @@ namespace proj {
         // Every node previously assigned to left_species
         // or right_species should be reassigned to anc_species
         // above the specified height. Assumes nd->_height is correct.
-
+        
         // Create a functor that assigns anc_species to the
         // supplied nd if it is currently in either left_species
         // or right_species
@@ -296,13 +296,12 @@ namespace proj {
             double h = nd->_height;
             double l = nd->_edge_length;
             G::species_t ndspp = nd->getSpecies();
-            if (h + l > height && (ndspp == left_species || ndspp == right_species)) {
+            if (h + l + G::_small_enough > height && (ndspp == left_species || ndspp == right_species)) {
                 nd->setSpecies(anc_species);
             }
         };
         
         // Apply functor reassign to each node in _lineages
-        //for_each(_lineages.begin(), _lineages.end(), reassign);
         for (auto preorder : _preorders) {
             for_each(preorder.begin(), preorder.end(), reassign);
         }

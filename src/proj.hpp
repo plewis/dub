@@ -37,6 +37,7 @@ namespace proj {
             void                         outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric, const vector<string> & newick_gene_trees_numeric);
             void                            outputTrees(SpeciesForest & sf, vector<GeneForest> & gfvect);
             void                            simulateTrees(Particle & particle);
+            void                            reportDeepCoalescences(Particle & particle);
             void                            run();
             
 #if defined(UPGMA_WEIGHTS)
@@ -61,7 +62,7 @@ namespace proj {
             bool                            _use_gpu;
             bool                            _ambig_missing;
             unsigned                        _rnseed;
-                                       
+            
             static string                   _program_name;
             static unsigned                 _major_version;
             static unsigned                 _minor_version;
@@ -115,11 +116,11 @@ namespace proj {
         ("nspeciesparticles",  value(&G::_nparticles2)->default_value(0), "number of particles in a population for (2nd level) species tree only estimation")
         ("nspecieskept",  value(&G::_nkept2)->default_value(0), "number of particles from conditional smc kept")
         ("treefilecompression", value(&do_compress)->default_value(0), "no=no compression, yes=maximum compression")
-        ("lambda",  value(&G::_lambda)->default_value(10.9), "per lineage speciation rate assumed for the species tree")
-        ("theta",  value(&G::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
+        ("lambda",  value(&G::_lambda)->default_value(10.0), "per lineage speciation rate assumed for the species tree")
+        //("theta",  value(&G::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
         ("rnseed",  value(&_rnseed)->default_value(13579), "pseudorandom number seed")
         ("freezethetamean",  value(&dummy_bool)->default_value(true), "this option is not used in this version of the program")
-        ("fixedthetamean",  value(&G::_theta)->default_value(0.05), "synonym of theta in this version of the program")
+        ("fixedthetamean",  value(&G::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
         ("nthreads",  value(&dummy_int)->default_value(3), "this option is not used in this version of the program")
         ;
         
@@ -389,7 +390,7 @@ namespace proj {
             }
         }
         else {
-            output("\nRelative rates not specified (assuming no rate heterogeneity across genes)",2);
+            output("\nRelative rates not specified (assuming no rate heterogeneity across genes)\n",2);
             for (unsigned g = 0; g < G::_nloci; g++) {
                 G::_relrate_for_gene[g] = 1.0;
             }
@@ -529,14 +530,102 @@ namespace proj {
                 }
 #endif
                 sort(locus_ordering.begin(), locus_ordering.end());
-                particle.proposeCoalescence(step, locus_ordering[step_modulus].second);
             }
-            else {
-                particle.proposeCoalescence(step, locus_ordering[step_modulus].second);
-            }
+            unsigned locus = locus_ordering[step_modulus].second;
+            particle.proposeCoalescence(step, locus);
         }
         
         particle.refreshHeightsInternalsPreorders();
+    }
+    
+    inline void Proj::reportDeepCoalescences(Particle & particle) {
+        vector<Forest::coalinfo_t> coalinfo_vect;
+        particle.rebuildCoalInfo();
+        particle.recordAllForests(coalinfo_vect);
+        
+#if defined(OUTPUT_FOR_DEBUGGING)
+        output("\nContents of coalinfo_vect:\n", 0);
+        output(format("%12s %6s %s\n") % "height" % "locus" % "species", 0);
+        for (auto & cinfo : coalinfo_vect) {
+            double      height = get<0>(cinfo);
+            unsigned     locus = get<1>(cinfo);
+            auto & sppvect = get<2>(cinfo);
+            vector<string> s;
+            for (auto x : sppvect) {
+                s.push_back(to_string(x));
+            }
+            output(format("%12.9f %6d %s\n") % height % locus % boost::algorithm::join(s, ","), 0);
+        }
+#endif
+
+        // Count starting number of lineages in each species
+        map<G::species_t, unsigned> lineages_per_species;
+        for (auto t : G::_taxon_names) {
+            unsigned i = G::_taxon_to_species[t];
+            G::species_t s = (G::species_t)1 << i;
+            lineages_per_species[s] += G::_nloci;
+        }
+        
+        // Make a copy that will not be affected by coalescences
+        // that is used to count the maximum number of possible deep
+        // coalescences
+        map<G::species_t, unsigned> lineages_per_species0 = lineages_per_species;
+        
+        //output("lineages_per_species map:\n", 0);
+        //for (auto & p : lineages_per_species) {
+        //    output(format("%12d lineages in species %d\n") % p.second % p.first, 0);
+        //}
+
+        // Count deep coalscences at each locus
+        unsigned ndeep = 0;
+        unsigned maxdeep = 0;
+        for (auto & cinfo : coalinfo_vect) {
+            unsigned     locus = get<1>(cinfo);
+            auto & sppvect = get<2>(cinfo);
+            if (locus > 0) {
+                // Coalescence
+                assert(sppvect.size() == 2);
+                assert(sppvect[0] == sppvect[1]);
+                G::species_t s = sppvect[0];
+                lineages_per_species[s]--;
+                
+                //output(format("~~> Coalescence in species %d at locus %d\n") % s % locus, 0);
+            }
+            else {
+                // Speciation
+                assert(sppvect.size() == 2);
+                
+                // Count actual number of deep coalescences
+                unsigned nleft = lineages_per_species.at(sppvect[0]);
+                unsigned nright = lineages_per_species.at(sppvect[1]);
+                unsigned deep = nleft + nright - 2;
+                ndeep += deep;
+                
+                // Count maximum number of deep coalescences
+                unsigned nleft0 = lineages_per_species0.at(sppvect[0]);
+                unsigned nright0 = lineages_per_species0.at(sppvect[1]);
+                unsigned deep0 = nleft0 + nright0 - 2;
+                maxdeep += deep0;
+                
+                // Merge lineages from left and right species
+                G::species_t ancspp = sppvect[0] | sppvect[1];
+
+                lineages_per_species[sppvect[0]] = 0;
+                lineages_per_species[sppvect[1]] = 0;
+                lineages_per_species[ancspp] = nleft + nright;
+
+                lineages_per_species0[sppvect[0]] = 0;
+                lineages_per_species0[sppvect[1]] = 0;
+                lineages_per_species0[ancspp] = nleft0 + nright0;
+                
+                //output(format("~~> Speciation event combines species %d and %d\n") % sppvect[0] % sppvect[1], 0);
+                //output(format("~~> No. deep coalescences here is %d (total is %d)\n") % deep % ndeep, 0);
+                //output(format("~~> Max. deep coalescences here is %d (total is %d)\n") % deep0 % maxdeep, 0);
+            }
+        }
+        
+        output(format("  Number of deep coalescences = %d\n") % ndeep, 1);
+        output(format("  Maximum number of deep coalescences = %d\n") % maxdeep, 1);
     }
     
     inline void Proj::simulateData() {
@@ -599,6 +688,7 @@ namespace proj {
         for (unsigned i = 0; i < G::_nspecies; ++i) {
             string species_name = G::inventName(i, false);
             G::_species_names[i] = species_name;
+            G::_taxon_to_species[species_name] = i;
             for (unsigned j = 0; j < _nsimtaxaperspecies[i]; ++j) {
                 taxpartition.push_back(G::_species_names[i]);
                 string taxon_name = str(format("%s^%s") % G::inventName(k, true) % G::_species_names[i]);
@@ -609,10 +699,20 @@ namespace proj {
         }
 
         // Report species names created
+#if defined(OUTPUT_FOR_DEBUGGING)
+        output("  Species info (index is into G::_species_names):\n", 2);
+        output(format("    %12s %12s %s\n") % "index" % "species" % "name", 2);
+        for (unsigned i = 0; i < G::_nspecies; ++i) {
+            G::species_t spp = (G::species_t)1 << i;
+            output(format("    %12d %12d %s\n") % i % spp % G::_species_names[i], 2);
+        }
+#else
         output("  Species names:\n", 2);
         for (unsigned i = 0; i < G::_nspecies; ++i) {
+            G::species_t spp = (G::species_t)1 << i;
             output(format("    %s\n") % G::_species_names[i], 2);
         }
+#endif
 
         // Report taxon names created
         output("  Taxon names:\n", 2);
@@ -632,6 +732,15 @@ namespace proj {
         particle.setData(_data);
         //particle.setSeed(rng->randint(1,9999));
         simulateTrees(particle);
+        
+#if defined(OUTPUT_FOR_DEBUGGING)
+        output(format("Simulated species tree:\n  %s\n") % particle.getSpeciesForestConst().makeNewick(9, true, false), 0);
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            output(format("Simulated gene tree for locus %d:\n  %s\n") % (g+1) % particle.getGeneForestConst(g).makeNewick(9, true, false), 0);
+        }
+#endif
+        
+        reportDeepCoalescences(particle);
         
         SpeciesForest      & species_forest = particle.getSpeciesForest();
         vector<GeneForest> & gene_forests   = particle.getGeneForests();
@@ -674,6 +783,8 @@ namespace proj {
      
     inline void Proj::run() {
     
+        ::rng->setSeed(_rnseed);
+        
         if (_start_mode == "sim") {
             simulateData();
         }
@@ -686,99 +797,92 @@ namespace proj {
 
             output(format("Current working directory: %s\n") % current_path(), 2);
         
-            try {
-                ::rng->setSeed(_rnseed);
-                
-                readData();
-                
-                G::_nloci = _data->getNumSubsets();
-                assert(G::_nloci > 0);
+            readData();
+            
+            G::_nloci = _data->getNumSubsets();
+            assert(G::_nloci > 0);
 
-                // Copy taxon names to global variable _taxon_names
-                G::_ntaxa = _data->getNumTaxa();
-                _data->copyTaxonNames(G::_taxon_names);
-                
-                // Save species names to global variable _species_names
-                // and create global _taxon_to_species map that provides
-                // the species index for each taxon name
-                G::_nspecies = buildSpeciesMap(/*taxa_from_data*/true);
-                
+            // Copy taxon names to global variable _taxon_names
+            G::_ntaxa = _data->getNumTaxa();
+            _data->copyTaxonNames(G::_taxon_names);
+            
+            // Save species names to global variable _species_names
+            // and create global _taxon_to_species map that provides
+            // the species index for each taxon name
+            G::_nspecies = buildSpeciesMap(/*taxa_from_data*/true);
+            
 #if defined(UPGMA_WEIGHTS)
-                calcPairwiseDistanceMatrix();
+            calcPairwiseDistanceMatrix();
 #endif
 
-                // Create global _species_mask that has "on" bits only for
-                // the least significant _nspecies bits
-                Node::setSpeciesMask(G::_species_mask, G::_nspecies);
-                
-                // Precompute leaf partials (never have to be computed again)
-                for (unsigned g = 0; g < G::_nloci; g++) {
-                    GeneForest::computeLeafPartials(g, _data);
-                }
-                
-                // First-level particle filtering
-                SMC smc;
-                smc.setNParticles(G::_nparticles);
-                smc.setData(_data);
-                smc.init();
-                smc.run();
-                smc.summarize();
-                
-                if (G::_nparticles2 > 0) {
-                    output(format("Performing 2nd-level SMC on %d 1st-level particles...\n") % G::_nkept, 2);
-                    
-                    vector<Particle> & first_level_particles = smc.getParticles();
-                    assert(first_level_particles.size() == G::_nparticles);
-
-                    // Choose (discrete-uniform-randomly) G::_nkept 1st-level particles for use in 2nd level
-                    // Save indices in kept vector
-                    vector<unsigned> kept;
-                    kept.reserve(first_level_particles.size());
-                    for (unsigned k = 0; k < G::_nkept; k++) {
-                        unsigned i = rng->randint(0, G::_nparticles-1);
-                        kept.push_back(i);
-                    }
-
-                    // Second-level particle filtering
-                    SMC ensemble;
-                    ensemble.setMode(SMC::SPECIES_GIVEN_GENE);
-                    for (auto k : kept) {
-                        Particle & p = first_level_particles[k];
-
-                        // Rebuild coal info vectors, stripping effect of previous species tree
-                        vector<GeneForest> & gtvect = p.getGeneForests();
-                        for (auto & gt : gtvect) {
-                            // Each gene forest's _coalinfo vector stores a tuple for each internal node:
-                            // <1> height
-                            // <2> gene_index + 1
-                            // <3> left child species
-                            // <4> right child species
-                            gt.buildCoalInfoVect();
-                        }
-                                                
-                        SMC smc2;
-                        smc2.setNParticles(G::_nparticles2);
-                        smc2.setMode(SMC::SPECIES_GIVEN_GENE);
-                        smc2.initFromParticle(p);
-                        smc2.run();
-                        
-                        // Choose (discrete-uniform-randomly) G::_nkept2 2nd-level particles
-                        vector<unsigned> kept2;
-                        vector<Particle> & second_level_particles = smc2.getParticles();
-                        assert(second_level_particles.size() == G::_nparticles2);
-                        kept2.reserve(second_level_particles.size());
-                        for (unsigned k = 0; k < G::_nkept2; k++) {
-                            unsigned i = rng->randint(0, G::_nparticles2-1);
-                            kept2.push_back(i);
-                        }
-                        
-                        smc2.dumpParticles(ensemble, kept2);
-                    }
-                    ensemble.summarize();
-                }
+            // Create global _species_mask that has "on" bits only for
+            // the least significant _nspecies bits
+            Node::setSpeciesMask(G::_species_mask, G::_nspecies);
+            
+            // Precompute leaf partials (never have to be computed again)
+            for (unsigned g = 0; g < G::_nloci; g++) {
+                GeneForest::computeLeafPartials(g, _data);
             }
-            catch (XProj & x) {
-                output(format("Proj encountered a problem:\n  %s\n") % x.what(), 2);
+            
+            // First-level particle filtering
+            SMC smc;
+            smc.setNParticles(G::_nparticles);
+            smc.setData(_data);
+            smc.init();
+            smc.run();
+            smc.summarize();
+            
+            if (G::_nparticles2 > 0) {
+                output(format("Performing 2nd-level SMC on %d 1st-level particles...\n") % G::_nkept, 2);
+                
+                vector<Particle> & first_level_particles = smc.getParticles();
+                assert(first_level_particles.size() == G::_nparticles);
+
+                // Choose (discrete-uniform-randomly) G::_nkept 1st-level particles for use in 2nd level
+                // Save indices in kept vector
+                vector<unsigned> kept;
+                kept.reserve(first_level_particles.size());
+                for (unsigned k = 0; k < G::_nkept; k++) {
+                    unsigned i = rng->randint(0, G::_nparticles-1);
+                    kept.push_back(i);
+                }
+
+                // Second-level particle filtering
+                SMC ensemble;
+                ensemble.setMode(SMC::SPECIES_GIVEN_GENE);
+                for (auto k : kept) {
+                    Particle & p = first_level_particles[k];
+
+                    // Rebuild coal info vectors, stripping effect of previous species tree
+                    vector<GeneForest> & gtvect = p.getGeneForests();
+                    for (auto & gt : gtvect) {
+                        // Each gene forest's _coalinfo vector stores a tuple for each internal node:
+                        // <1> height
+                        // <2> gene_index + 1
+                        // <3> left child species
+                        // <4> right child species
+                        gt.buildCoalInfoVect();
+                    }
+                                            
+                    SMC smc2;
+                    smc2.setNParticles(G::_nparticles2);
+                    smc2.setMode(SMC::SPECIES_GIVEN_GENE);
+                    smc2.initFromParticle(p);
+                    smc2.run();
+                    
+                    // Choose (discrete-uniform-randomly) G::_nkept2 2nd-level particles
+                    vector<unsigned> kept2;
+                    vector<Particle> & second_level_particles = smc2.getParticles();
+                    assert(second_level_particles.size() == G::_nparticles2);
+                    kept2.reserve(second_level_particles.size());
+                    for (unsigned k = 0; k < G::_nkept2; k++) {
+                        unsigned i = rng->randint(0, G::_nparticles2-1);
+                        kept2.push_back(i);
+                    }
+                    
+                    smc2.dumpParticles(ensemble, kept2);
+                }
+                ensemble.summarize();
             }
         }
         else {

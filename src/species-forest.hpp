@@ -80,7 +80,8 @@ namespace proj {
         double cum_prob_upper_bound = 1.0;
         if (n > 1) {
             rate = G::_lambda*n;
-            double cum_prob_upper_bound = 1.0 - exp(-rate*truncate_at);
+            cum_prob_upper_bound = 1.0 - exp(-rate*truncate_at);
+            
             incr = -log(1.0 - cum_prob_upper_bound*lot->uniform())/rate;
         }
         return make_tuple(incr, rate, cum_prob_upper_bound);
@@ -379,7 +380,7 @@ namespace proj {
                 }
                 else {
                     // nd is a leaf node
-                    unsigned spp_index = G::_taxon_to_species[nd->_name];
+                    unsigned spp_index = G::_taxon_to_species.at(nd->_name);
                     nd->_species = (G::species_t)1 << spp_index;
                 }
             }

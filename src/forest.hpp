@@ -1076,6 +1076,14 @@ namespace proj {
         if (n > 1) {
             for (auto nd : _lineages) {
                 double elen = nd->getEdgeLength() + dt;
+#if 0 //temporary!
+                if (elen >= 0.0 || fabs(elen) < Node::_smallest_edge_length) {
+                    // do nothing
+                }
+                else {
+                    cerr << "elen = "<< elen << endl;
+                }
+#endif
                 assert(elen >= 0.0 || fabs(elen) < Node::_smallest_edge_length);
                 nd->setEdgeLength(elen);
                 ++n;

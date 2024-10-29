@@ -27,6 +27,7 @@ namespace proj {
             void threadComputePartials(unsigned first, unsigned last);
             void computeAllPartials();
             
+            void rebuildCoalInfo();
             void recordAllForests(vector<Forest::coalinfo_t> & coalinfo_vect) const;
             
             double calcLogLikelihood();
@@ -66,7 +67,7 @@ namespace proj {
             const vector<GeneForest> & getGeneForestsConst() const;
             
             GeneForest       & getGeneForest(unsigned gene);
-            const GeneForest & getGeneForest(unsigned gene) const;
+            const GeneForest & getGeneForestConst(unsigned gene) const;
             
             void setGeneTrees(vector<GeneForest> & gtvect);
             pair<double,double> chooseTruncatedSpeciesForestIncrement(double truncate_at);
@@ -220,6 +221,19 @@ namespace proj {
         }
     };
     
+    inline void Particle::rebuildCoalInfo() {
+        // Rebuild coal info vectors, stripping effect of previous species tree
+        for (auto & gf : _gene_forests) {
+            // Each gene forest's _coalinfo vector stores a tuple for each internal node:
+            // <1> height
+            // <2> gene_index + 1
+            // <3> left child species
+            // <4> right child species
+            gf.buildCoalInfoVect();
+        }
+        _species_forest.buildCoalInfoVect();
+    }
+    
     inline void Particle::recordAllForests(vector<Forest::coalinfo_t> & coalinfo_vect) const {
         // Record gene trees
         for (unsigned g = 0; g < G::_nloci; g++) {
@@ -311,7 +325,7 @@ namespace proj {
         // Initialize n_jb for locus 0
         for (auto & nm : G::_taxon_names) {
             // Find index of species corresponding to taxon name nm
-            unsigned i = G::_taxon_to_species[nm];
+            unsigned i = G::_taxon_to_species.at(nm);
             
             // Get species from index
             G::species_t b = (G::species_t)1 << i;
@@ -985,6 +999,8 @@ namespace proj {
         
         bool done = false;
         if (delta > speciation_delta) {
+            // Speciation event comes before coalescence event
+            
             // Forests save delta to allow reversion
             _gene_forests[locus].advanceAllLineagesBy(speciation_delta);
                                                 
@@ -994,6 +1010,7 @@ namespace proj {
             _gene_forests[locus].mergeSpecies(speciation_height, left_spp, right_spp, anc_spp);
         }
         else {
+            // Coalescence event comes before speciation event
             done = true;
 
             // Forests save delta to allow reversion
@@ -1033,7 +1050,7 @@ namespace proj {
         return _gene_forests;
     }
     
-    inline const GeneForest & Particle::getGeneForest(unsigned gene) const {
+    inline const GeneForest & Particle::getGeneForestConst(unsigned gene) const {
         assert(gene < G::_nloci);
         return _gene_forests[gene];
     }
@@ -1099,12 +1116,14 @@ namespace proj {
         double incr = get<0>(incr_rate_cum);
         double rate = get<1>(incr_rate_cum);
         assert(rate > 0.0);
-#if defined(ADHOC_REMOVE_BEFORE_RELEASE)
-        //temporary!
-        incr = 0.15;
-#endif
+//#if defined(ADHOC_REMOVE_BEFORE_RELEASE)
+//        //temporary!
+//        incr = 0.15;
+//#endif
         _species_forest.advanceAllLineagesBy(incr);
-        double log_factor = get<2>(incr_rate_cum);
+        double cum = get<2>(incr_rate_cum);
+        assert(cum > 0.0);
+        double log_factor = log(cum);
         return make_pair(log_factor,incr);
     }
     
