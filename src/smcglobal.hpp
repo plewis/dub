@@ -44,6 +44,12 @@ namespace proj {
         static double                   _phi;
         static double                   _theta;
         static double                   _lambda;
+        
+        // These only used for simulating data
+        static double                   _edge_rate_variance;
+        static double                   _asrv_shape;
+        static double                   _occupancy;
+        static double                   _comphet;
                         
         static double                   _small_enough;
         static double                   _infinity;

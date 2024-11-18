@@ -116,6 +116,11 @@ double                              G::_phi                         = 1.0;
 double                              G::_theta                       = 0.05;
 double                              G::_lambda                      = 1.0;
 
+double                              G::_edge_rate_variance          = 0.0;
+double                              G::_occupancy                   = 1.0;
+double                              G::_comphet                     = numeric_limits<double>::infinity();
+double                              G::_asrv_shape                  = numeric_limits<double>::infinity();
+
 double                              G::_small_enough                = 0.00001;
 
 unsigned                            G::_nparticles                  = 500;

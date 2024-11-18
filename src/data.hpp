@@ -474,48 +474,61 @@ namespace proj {
         
         for (unsigned t = 0; t < _taxon_names.size(); t++) {
             nexf << str(format(name_format) % _taxon_names[t]);
+            
             unsigned pattern = 0;
             for (unsigned g = 0; g < _partition->getNumSubsets(); g++) {
+                // Determine whether this taxon will have all missing data
+                // for this subset
+                bool taxon_all_missing = false;
+                if (G::_occupancy < 1.0) {
+                    double u = rng->uniform();
+                    if (u > G::_occupancy)
+                        taxon_all_missing = true;
+                }
+            
                 unsigned npatterns = getNumPatternsInSubset(g);
                 for (unsigned j = 0; j < npatterns; j++) {
-                    state_t s = _data_matrix[t][pattern];
-                    bool is_A = ((state_t)1 << 0 == s);
-                    bool is_C = ((state_t)1 << 1 == s);
-                    bool is_G = ((state_t)1 << 2 == s);
-                    bool is_T = ((state_t)1 << 3 == s);
-                    
                     char dna_letter = '?';
-                    if (is_A && is_C && is_G && is_T)
-                        dna_letter = 'N';
-                    else if (is_A && is_C && is_T)
-                        dna_letter = 'H';
-                    else if (is_C && is_G && is_T)
-                        dna_letter = 'B';
-                    else if (is_A && is_C && is_G)
-                        dna_letter = 'V';
-                    else if (is_A && is_G && is_T)
-                        dna_letter = 'D';
-                    else if (is_A && is_G)
-                        dna_letter = 'R';
-                    else if (is_C && is_T)
-                        dna_letter = 'Y';
-                    else if (is_A && is_C)
-                        dna_letter = 'M';
-                    else if (is_G && is_T)
-                        dna_letter = 'K';
-                    else if (is_C && is_G)
-                        dna_letter = 'S';
-                    else if (is_A && is_T)
-                        dna_letter = 'W';
-                    else if (is_A)
-                        dna_letter = 'A';
-                    else if (is_C)
-                        dna_letter = 'C';
-                    else if (is_G)
-                        dna_letter = 'G';
-                    else if (is_T)
-                        dna_letter = 'T';
-                    assert(dna_letter != '?');
+
+                    if (!taxon_all_missing) {
+                        state_t s = _data_matrix[t][pattern];
+                        bool is_A = ((state_t)1 << 0 == s);
+                        bool is_C = ((state_t)1 << 1 == s);
+                        bool is_G = ((state_t)1 << 2 == s);
+                        bool is_T = ((state_t)1 << 3 == s);
+                        
+                        if (is_A && is_C && is_G && is_T)
+                            dna_letter = 'N';
+                        else if (is_A && is_C && is_T)
+                            dna_letter = 'H';
+                        else if (is_C && is_G && is_T)
+                            dna_letter = 'B';
+                        else if (is_A && is_C && is_G)
+                            dna_letter = 'V';
+                        else if (is_A && is_G && is_T)
+                            dna_letter = 'D';
+                        else if (is_A && is_G)
+                            dna_letter = 'R';
+                        else if (is_C && is_T)
+                            dna_letter = 'Y';
+                        else if (is_A && is_C)
+                            dna_letter = 'M';
+                        else if (is_G && is_T)
+                            dna_letter = 'K';
+                        else if (is_C && is_G)
+                            dna_letter = 'S';
+                        else if (is_A && is_T)
+                            dna_letter = 'W';
+                        else if (is_A)
+                            dna_letter = 'A';
+                        else if (is_C)
+                            dna_letter = 'C';
+                        else if (is_G)
+                            dna_letter = 'G';
+                        else if (is_T)
+                            dna_letter = 'T';
+                        assert(dna_letter != '?');
+                    }
                     
                     unsigned pattern_count = _pattern_counts[pattern];
                     for (unsigned k = 0; k < pattern_count; k++) {

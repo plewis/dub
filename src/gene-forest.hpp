@@ -84,6 +84,7 @@ namespace proj {
         protected:
                   
             double calcTransitionProbability(unsigned from, unsigned to, double edge_length);
+            double calcSimTransitionProbability(unsigned from, unsigned to, const vector<double> & pi, double edge_length);
             void debugComputeLeafPartials(unsigned gene, int number, PartialStore::partial_t partial);
             PartialStore::partial_t pullPartial();
             void stowPartial(Node * nd);
@@ -331,12 +332,28 @@ namespace proj {
         //    R      0101        5
         //    Y      1010       10
         
+        // Draw equilibrium base frequencies from Dirichlet
+        // having parameter G::_comphet
+        vector<double> basefreq = {0.25, 0.25, 0.25, 0.25};
+        if (G::_comphet != G::_infinity) {
+            // Draw 4 Gamma(G::_comphet, 1) variates
+            double A = lot->gamma(G::_comphet, 1.0);
+            double C = lot->gamma(G::_comphet, 1.0);
+            double G = lot->gamma(G::_comphet, 1.0);
+            double T = lot->gamma(G::_comphet, 1.0);
+            double total = A + C + G + T;
+            basefreq[0] = A/total;
+            basefreq[1] = C/total;
+            basefreq[2] = G/total;
+            basefreq[3] = T/total;
+        }
+        
         // Simulate starting sequence at the root node
         Node * nd = *(_lineages.begin());
         unsigned ndnum = nd->_number;
         assert(ndnum < nnodes);
         for (unsigned i = 0; i < nsites; i++) {
-            sequences[ndnum][i] = lot->randint(0,3);
+            sequences[ndnum][i] = G::multinomialDraw(lot, basefreq);
         }
         
         nd = findNextPreorder(nd);
@@ -349,13 +366,33 @@ namespace proj {
             unsigned parnum = nd->_parent->_number;
             assert(parnum < nnodes);
             
+            // Choose relative rate for this node's edge
+            // Lognormal m=mean v=variance
+            //   sigma^2 = log(v/m^2 + 1)
+            //   mu = log m - sigma^2/2
+            // Mean m=1 because these are relative rates, so
+            //   sigma^2 = log(v + 1)
+            //   mu = -sigma^2/2
+            double edge_relrate = 1.0;
+            if (G::_edge_rate_variance > 0.0) {
+                double sigma2 = log(1.0 + G::_edge_rate_variance);
+                double sigma = sqrt(sigma2);
+                double mu = -0.5*sigma2;
+                double normal_variate = sigma*lot->normal() + mu;
+                edge_relrate = exp(normal_variate);
+            }
+            
             // Evolve nd's sequence given parent's sequence and edge length
             for (unsigned i = 0; i < nsites; i++) {
+                // Choose relative rate for this site
+                double site_relrate = 1.0;
+                if (G::_asrv_shape != G::_infinity)
+                    site_relrate = lot->gamma(G::_asrv_shape, 1.0/G::_asrv_shape);
                 unsigned from_state = sequences[parnum][i];
                 double cum_prob = 0.0;
                 double u = lot->uniform();
                 for (unsigned to_state = 0; to_state < 4; to_state++) {
-                    cum_prob += calcTransitionProbability(from_state, to_state, nd->_edge_length);
+                    cum_prob += calcSimTransitionProbability(from_state, to_state, basefreq, site_relrate*edge_relrate*nd->_edge_length);
                     if (u < cum_prob) {
                         sequences[ndnum][i] = to_state;
                         break;
@@ -473,6 +510,43 @@ namespace proj {
         }
     }
     
+    inline double GeneForest::calcSimTransitionProbability(unsigned from, unsigned to, const vector<double> & pi, double edge_length) {
+        assert(pi.size() == 4);
+        assert(fabs(accumulate(pi.begin(), pi.end(), 0.0) - 1.0) < G::_small_enough);
+        assert(_relrate > 0.0);
+        double transition_prob = 0.0;
+        
+        // F81 transition probabilities
+        double Pi[] = {pi[0] + pi[2], pi[1] + pi[3], pi[0] + pi[2], pi[1] + pi[3]};
+        bool is_transition = (from == 0 && to == 2) || (from == 1 && to == 3) || (from == 2 && to == 0) || (from == 3 && to == 1);
+        bool is_same = (from == 0 && to == 0) || (from == 1 && to == 1) | (from == 2 && to == 2) | (from == 3 && to == 3);
+        bool is_transversion = !(is_same || is_transition);
+
+        // HKY expected number of substitutions per site
+        //  v = betat*(AC + AT + CA + CG + GC + GT + TA + TG) + kappa*betat*(AG + CT + GA + TC)
+        //    = 2*betat*(AC + AT + CG + GT + kappa(AG + CT))
+        //    = 2*betat*((A + G)*(C + T) + kappa(AG + CT))
+        //  betat = v/[2*( (A + G)(C + T) + kappa*(AG + CT) )]
+        double kappa = 1.0;
+        double betat = 0.5*_relrate*edge_length/((pi[0] + pi[2])*(pi[1] + pi[3]) + kappa*(pi[0]*pi[2] + pi[1]*pi[3]));
+        
+        if (is_transition) {
+            double pi_j = pi[to];
+            double Pi_j = Pi[to];
+            transition_prob = pi_j*(1.0 + (1.0 - Pi_j)*exp(-betat)/Pi_j - exp(-betat*(kappa*Pi_j + 1.0 - Pi_j))/Pi_j);
+        }
+        else if (is_transversion) {
+            double pi_j = pi[to];
+            transition_prob = pi_j*(1.0 - exp(-betat));
+        }
+        else {
+            double pi_j = pi[to];
+            double Pi_j = Pi[to];
+            transition_prob = pi_j*(1.0 + (1.0 - Pi_j)*exp(-betat)/Pi_j) + (Pi_j - pi_j)*exp(-betat*(kappa*Pi_j + 1.0 - Pi_j))/Pi_j;
+        }
+        return transition_prob;
+    }
+    
     inline double GeneForest::calcTransitionProbability(unsigned from, unsigned to, double edge_length) {
         assert(_relrate > 0.0);
         double transition_prob = 0.0;
@@ -484,7 +558,8 @@ namespace proj {
         else {
             transition_prob = 0.25 - 0.25*exp(-4.0*_relrate*edge_length/3.0);
         }
-#else   // HKY with hard-coded empirical frequencies specific to *beast tutorial example!
+#else
+        // HKY with hard-coded empirical frequencies specific to *beast tutorial example!
         double pi[] = {0.25, 0.25, 0.25, 0.25};
 #       error need to create _index if this code is used
         assert(_index >= 0 && _index <= 3);
