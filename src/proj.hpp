@@ -40,6 +40,11 @@ namespace proj {
             void                            reportDeepCoalescences(Particle & particle);
             void                            run();
             
+#if defined(FOSSILS)
+            Fossil                          parseFossilDefinition(string & fossil_def);
+            TaxSet                          parseTaxsetDefinition(string & taxset_def);
+#endif
+    
 #if defined(UPGMA_WEIGHTS)
             bool                            isUnambiguous(Data::state_t s0) const;
             void                            calcPairwiseDistanceMatrix();
@@ -93,6 +98,10 @@ namespace proj {
     inline void Proj::processCommandLineOptions(int argc, const char * argv[]) {
         vector<string> partition_subsets;
         vector<string> partition_relrates;
+#if defined(FOSSILS)
+        vector<string> taxsets;
+        vector<string> fossils;
+#endif
         bool do_compress;
         bool dummy_bool;
         int dummy_int;
@@ -106,6 +115,10 @@ namespace proj {
         ("genetreeref",  value(&G::_gene_trees_ref_file_name), "name of a tree file containing a reference gene tree for each locus")
         ("startmode", value(&_start_mode), "if 'sim', simulate gene trees, species tree, and data; if 'smc', estimate from supplied datafile; if 'chib', computes prior probability of species species and gene tree topologies; if 'spec', computes coalescent likelihood for specified speciestreeref and genetreeref; if '2ndlevel', tests second-level SMC from gene trees supplied by genetreeref")
         ("subset",  value(&partition_subsets), "a string defining a partition subset, e.g. 'first:1-1234\3' or 'default[codon:standard]:1-3702'")
+#if defined(FOSSILS)
+        ("fossil",  value(&fossils), "a string defining a fossil, e.g. 'Ursus_abstrusus         1.8–5.3 4.3' (4.3 is time, 1.8-5.3 is prior range)")
+        ("taxset",  value(&taxsets), "a string defining a taxon set, e.g. 'Ursinae: Helarctos_malayanus Melursus_ursinus Ursus_abstrusus Ursus_americanus Ursus_arctos Ursus_maritimus Ursus_spelaeus Ursus_thibetanus'")
+#endif
         ("relrate",  value(&partition_relrates), "a relative rate for a previously-defined subset; format first:3.1")
         ("ambigmissing",  value(&_ambig_missing)->default_value(true), "treat all ambiguities as missing data")
         ("verbosity",  value(&G::_verbosity)->default_value(0), "0, 1, or 2: higher number means more output")
@@ -171,6 +184,26 @@ namespace proj {
             }
         }
         
+#if defined(FOSSILS)
+        // If user specified --fossil on command line, break specified
+        // fossil definition into species name, taxset name, and age
+        if (vm.count("fossil") > 0) {
+            G::_fossils.clear();
+            for (auto fdef : fossils) {
+                G::_fossils.push_back(parseFossilDefinition(fdef));
+            }
+        }
+        
+        // If user specified --taxset on command line, break specified
+        // taxset definition into name and species included
+        if (vm.count("taxset") > 0) {
+            G::_taxsets.clear();
+            for (auto tdef : taxsets) {
+                G::_taxsets.push_back(parseTaxsetDefinition(tdef));
+            }
+        }
+#endif
+        
         // If user specified --nkept on command line, check to ensure
         // that nkept <= nparticles.
         if (vm.count("nkept") > 0) {
@@ -187,7 +220,160 @@ namespace proj {
             }
         }
     }
+
+#if defined(FOSSILS)
+    // Note: This code is unduly complex because of the fact that there are
+    // many different kinds of dashes that can be used in a utf8-encoded text file.
+    // One solution is to eliminate the dash separating the lower and upper
+    // bounds for the age range, but I felt that using a dash makes it clear that
+    // it is an age range and I didn't want to put the onus on the user to use one
+    // particular kind of dash (especially since I could not figure out how to
+    // use the right kind of dash myself in a text file created using BBEdit).
     
+    // The ws_to_utf8 and utf8_to_ws functions below are
+    // slightly modified from Galik's answer at
+    // stackoverflow.com/questions/43302279
+    //   /any-good-solutions-for-c-string-code-point-and-code-unit
+    //   /43302460#43302460
+    string ws_to_utf8(wstring const & s) {
+        wstring_convert<codecvt_utf8<wchar_t>, wchar_t> cnv;
+        string utf8 = cnv.to_bytes(s);
+        if(cnv.converted() < s.size())
+            throw XProj("incomplete conversion to utf8");
+        return utf8;
+    }
+
+    wstring utf8_to_ws(string const & utf8) {
+        wstring_convert<codecvt_utf8<wchar_t>, wchar_t> cnv;
+        wstring s = cnv.from_bytes(utf8);
+        if(cnv.converted() < utf8.size())
+            throw XProj("incomplete conversion to wstring");
+        return s;
+    }
+
+    inline Fossil Proj::parseFossilDefinition(string & fossil_def) {
+        // Examples showing range of possible inputs:
+        //   fossil_def = "Ursus_abstrusus 1.8–5.3 4.3"
+        //   fossil_def = "Parictis_montanus      33.90  – 37.20  36.6"
+
+        // Vector to hold strings obtained by parsing fossil_def
+        vector<string> v;
+        
+        // Separate fossil_def into 4 strings:
+        //  v[0] = fossil species name
+        //  v[1] = fossil age lower bound
+        //  v[2] = fossil age upper bound
+        //  v[3] = fossil age
+
+        // regex_pattern specifies string of characters that do not
+        // represent a tab (\u0009), space (\u0020), or dash of any kind:
+        //  \u002D Hyphen-minus
+        //  \u058A Armenian Hyphen
+        //  \u05BE Hebrew Punctuation Maqaf
+        //  \u2010 Hyphen
+        //  \u2011 Non-Breaking Hyphen
+        //  \u2012 Figure Dash
+        //  \u2013 En dash
+        //  \u2014 Em dash
+        //  \u2015 Horizontal bar
+        //  \u2E3A Two-Em Dash
+        //  \u2E3B Three-Em Dash
+        //  \uFE58 Small Em Dash
+        //  \uFE63 Small Hyphen-Minus
+        //  \uFF0D Fullwidth Hyphen-Minus
+        wregex regex_pattern(utf8_to_ws("[^\\u0020\\u0009\\u002D\\u058A\\u05BE\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2E3A\\u2E3B\\uFE58\\uFE63\\uFF0D]+"));
+
+        // 0 means keep whole match:
+        //     1 would mean keep first match only
+        //     2 would mean keep second match only
+        //     {1,2} would mean keep first and secod matches only
+        //    -1 means use regex_pattern as delimiter
+        wstring ws_fossil_def = utf8_to_ws(fossil_def);
+        wsregex_token_iterator regex_iter(ws_fossil_def.begin(), ws_fossil_def.end(), regex_pattern, 0);
+
+        // regex_end is, by default, signifies the end of the input
+        wsregex_token_iterator regex_end;
+
+        // iterate to get matches
+        for ( ; regex_iter != regex_end; ++regex_iter) {
+            wstring s = *regex_iter;
+            v.push_back(ws_to_utf8(s));
+        }
+
+        string fossil_species_name = v[0];
+        string fossil_age_lower_str  = v[1];
+        string fossil_age_upper_str  = v[2];
+        string fossil_age_str   = v[3];
+        
+        double fossil_age_lower;
+        try {
+            fossil_age_lower = stof(fossil_age_lower_str);
+        }
+        catch (const std::invalid_argument& ia) {
+            throw XProj(format("Could not convert fossil age lower bound \"%s\" to a floating point value") % fossil_age_lower_str);
+        }
+
+        double fossil_age_upper;
+        try {
+            fossil_age_upper = stof(fossil_age_upper_str);
+        }
+        catch (const std::invalid_argument& ia) {
+            throw XProj(format("Could not convert fossil age upper bound \"%s\" to a floating point value") % fossil_age_upper_str);
+        }
+        
+        double fossil_age;
+        try {
+            fossil_age = stof(fossil_age_str);
+        }
+        catch (const std::invalid_argument& ia) {
+            throw XProj(format("Could not convert fossil age \"%s\" to a floating point value") % fossil_age_str);
+        }
+        
+        return Fossil(fossil_species_name, fossil_age_lower, fossil_age_upper, fossil_age);
+    }
+    
+    inline TaxSet Proj::parseTaxsetDefinition(string & taxset_def) {
+        // Example:
+        //   taxset_def = "Ursinae = Helarctos_malayanus Melursus_ursinus Ursus_abstrusus Ursus_americanus Ursus_arctos Ursus_maritimus Ursus_spelaeus Ursus_thibetanus;"
+        vector<string> v;
+        
+        // Separate taxset_def into 2 strings at equal sign:
+        //  v[0] = taxset name
+        //  v[1] = list of species in taxset
+        split(v, taxset_def, boost::is_any_of(":"));
+        if (v.size() != 2)
+            throw XProj(format("Expecting exactly 2 items separated by colon (:) in taxset definition but instead found %d") % v.size());
+        string taxset_name = v[0];
+        string taxset_species_list  = v[1];
+        
+        // Trim whitespace from both ends
+        trim(taxset_name);
+        trim(taxset_species_list);
+        
+        // Separate taxset_species_list into strings separated by spaces
+        
+        // regex_pattern specifies string of characters not a hyphen or whitespace
+        regex regex_pattern("[^\\s]+");
+        
+        // 0 means keep whole match:
+        //     1 would mean keep first match only
+        //     2 would mean keep second match only
+        //     {1,2} would mean keep first and secod matches only
+        //    -1 means use regex_pattern as delimiter
+        sregex_token_iterator regex_iter(taxset_species_list.begin(), taxset_species_list.end(), regex_pattern, 0);
+        
+        // regex_end is, by default, signifies the end of the input
+        sregex_token_iterator regex_end;
+        
+        v.clear();
+        for ( ; regex_iter != regex_end; ++regex_iter) {
+            v.push_back(*regex_iter);
+        }
+        return TaxSet(taxset_name, v);
+    }
+    
+#endif
+
     inline void Proj::parseRelRateDefinition(string & s) {
         vector<string> v;
         
@@ -312,7 +498,7 @@ namespace proj {
             G::_dmatrix[subset].resize(n_choose_2);
             for (unsigned k = 0; k < n_choose_2; k++) {
                 unsigned nsites = sames[k] + diffs[k];
-                
+                assert(nsites > 0);
                 double pdist = 1.0*diffs[k]/nsites;
                 if (pdist >= 0.75)
                     pdist = 0.74986667; // value used by PAUP*
@@ -712,7 +898,6 @@ namespace proj {
 #else
         output("  Species names:\n", 2);
         for (unsigned i = 0; i < G::_nspecies; ++i) {
-            G::species_t spp = (G::species_t)1 << i;
             output(format("    %s\n") % G::_species_names[i], 2);
         }
 #endif

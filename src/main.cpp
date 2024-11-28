@@ -45,6 +45,11 @@ using namespace std;
 using boost::format;
 
 #include "conditionals.hpp"
+#if defined(FOSSILS)
+#   include <codecvt>
+#   include "fossil.hpp"
+#   include "taxset.hpp"
+#endif
 #include "xproj.hpp"
 #include "lot.hpp"
 #include "split.hpp"
@@ -61,7 +66,6 @@ using boost::format;
 #include "gene-forest.hpp"
 #include "particle.hpp"
 #include "smc.hpp"
-
 #include "proj.hpp"
 
 using namespace proj;
@@ -128,6 +132,11 @@ unsigned                            G::_nparticles2                 = 0;
 unsigned                            G::_nkept                       = 0;
 unsigned                            G::_nkept2                      = 0;
 
+#if defined(FOSSILS)
+vector<Fossil>                      G::_fossils;
+vector<TaxSet>                      G::_taxsets;
+#endif
+
 #if defined(UPGMA_WEIGHTS)
 vector<vector<double> >             G::_dmatrix;
 vector<Split>                       G::_dmatrix_rows;
@@ -173,6 +182,32 @@ int main(int argc, const char * argv[]) {
     bool normal_termination = true;
     try {
         proj.processCommandLineOptions(argc, argv);
+        
+#if defined(FOSSILS)
+        //temporary!
+        output("\n", 1);
+        if (G::_fossils.size() > 0) {
+            output("\nFossils defined:\n", 1);
+            for (auto f : G::_fossils) {
+                output(format("  \"%s\" | %.5f <-- %.5f --> %.5f\n") % f._name % f._lower % f._age % f._upper, 1);
+            }
+        } else {
+            output("\nNo fossils were defined\n", 1);
+        }
+        
+        if (G::_taxsets.size() > 0) {
+            output("\nTaxon sets defined:\n", 1);
+            for (auto t : G::_taxsets) {
+                output(format("\n  \"%s\":\n") % t._name, 1);
+                for (auto s : t._species_included) {
+                    output(format("    \"%s\"\n") % s, 1);
+                }
+            }
+        } else {
+            output("\nNo taxon sets were defined\n", 1);
+        }
+        output("\n", 1);
+#endif
         
         StopWatch sw;
         sw.start();

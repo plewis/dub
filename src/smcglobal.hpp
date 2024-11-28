@@ -13,6 +13,11 @@ namespace proj {
         static int                      _hack_atp_index;
 #endif
                 
+#if defined(FOSSILS)
+        static vector<Fossil>           _fossils;
+        static vector<TaxSet>           _taxsets;
+#endif
+                
         static string                   _species_tree_ref_file_name;
         static string                   _gene_trees_ref_file_name;
         

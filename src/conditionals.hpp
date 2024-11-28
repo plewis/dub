@@ -17,3 +17,6 @@
 //#define HACK_FOR_SNAKE_ATP
 
 //#define RANDOM_LOCUS_ORDERING
+
+#define FOSSILS
+
