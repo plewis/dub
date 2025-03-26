@@ -4,6 +4,11 @@ namespace proj {
 
     class Lot {
         public:
+            typedef boost::variate_generator<boost::mt19937 &, boost::random::uniform_01<> >                uniform_variate_generator_t;
+            typedef boost::variate_generator<boost::mt19937 &, boost::random::normal_distribution<> >       normal_variate_generator_t;
+            typedef boost::variate_generator<boost::mt19937 &, boost::random::gamma_distribution<> >        gamma_variate_generator_t;
+            typedef boost::variate_generator<boost::mt19937 &, boost::random::uniform_int_distribution<> >  uniform_int_generator_t;
+
                                             Lot();
                                             ~Lot();
             
@@ -14,16 +19,12 @@ namespace proj {
             double                          normal();
             double                          gamma(double shape, double scale);
             double                          logUniform();
+            uniform_variate_generator_t &   getUniformGenerator();
             
             typedef shared_ptr<Lot>    SharedPtr;
 
         private:
         
-            typedef boost::variate_generator<boost::mt19937 &, boost::random::uniform_01<> >                uniform_variate_generator_t;
-            typedef boost::variate_generator<boost::mt19937 &, boost::random::normal_distribution<> >       normal_variate_generator_t;
-            typedef boost::variate_generator<boost::mt19937 &, boost::random::gamma_distribution<> >        gamma_variate_generator_t;
-            typedef boost::variate_generator<boost::mt19937 &, boost::random::uniform_int_distribution<> >  uniform_int_generator_t;
-
             unsigned                                   _seed;
             boost::mt19937                             _generator;
             shared_ptr<uniform_variate_generator_t>    _uniform_variate_generator;
@@ -109,6 +110,10 @@ namespace proj {
         }
         
         return make_pair(i, j);
+    }
+    
+    inline Lot::uniform_variate_generator_t & Lot::getUniformGenerator() {
+        return *_uniform_variate_generator;
     }
         
 }

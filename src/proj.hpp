@@ -13,8 +13,6 @@ using boost::program_options::parse_config_file;
 using boost::program_options::reading_file;
 using boost::program_options::notify;
 
-extern void output(string msg, unsigned level);
-extern void output(format & fmt, unsigned level);
 extern proj::PartialStore ps;
 extern proj::StopWatch stopwatch;
 extern proj::Lot::SharedPtr rng;
@@ -28,17 +26,17 @@ namespace proj {
    
             void                            clear();
             void                            processCommandLineOptions(int argc, const char * argv[]);
+            void                            run();
             void                            readData();
             void                            setRelativeRates();
             void                            parseRelRateDefinition(string & s);
             void                            simulateData();
             void                            outputGeneTreesToFile(string fn, const vector<string> & newicks) const;
             void                            outputNexusTreefile(string fn, const vector<string> & newicks) const;
-            void                         outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric, const vector<string> & newick_gene_trees_numeric);
+            void                            outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric, const vector<string> & newick_gene_trees_numeric);
             void                            outputTrees(SpeciesForest & sf, vector<GeneForest> & gfvect);
             void                            simulateTrees(Particle & particle);
             void                            reportDeepCoalescences(Particle & particle);
-            void                            run();
             
 #if defined(FOSSILS)
             Fossil                          parseFossilDefinition(string & fossil_def);
@@ -52,7 +50,7 @@ namespace proj {
 
             void                            selectParticlesToKeep(list<Particle> & first_level_particles, vector<unsigned> & kept);
                
-            string                          _data_file_name;
+            string                          _data_file_prefix;
             string                          _start_mode;
             Partition::SharedPtr            _partition;
             Data::SharedPtr                 _data;
@@ -66,7 +64,6 @@ namespace proj {
 
             bool                            _use_gpu;
             bool                            _ambig_missing;
-            unsigned                        _rnseed;
             
             static string                   _program_name;
             static unsigned                 _major_version;
@@ -88,7 +85,7 @@ namespace proj {
         _use_gpu                    = true;
         _ambig_missing              = true;
         _data                       = nullptr;
-        _data_file_name             = "";
+        _data_file_prefix           = "";
         _species_tree_ref           = nullptr;
         _start_mode                 = "smc";
         _gene_tree_refs.clear();
@@ -96,6 +93,7 @@ namespace proj {
     }
 
     inline void Proj::processCommandLineOptions(int argc, const char * argv[]) {
+        vector<string> log_include;
         vector<string> partition_subsets;
         vector<string> partition_relrates;
 #if defined(FOSSILS)
@@ -110,7 +108,8 @@ namespace proj {
         desc.add_options()
         ("help,h", "produce help message")
         ("version,v", "show program version")
-        ("datafile",  value(&_data_file_name), "name of a data file in NEXUS format")
+        ("log", value(&log_include), "categories of output to include: INFO = include normal output; VERBOSE = include debugging output; SECONDLEVEL = show progress in second level SMC analyses; DEBUGGING = show debugging output")
+        ("datafile",  value(&_data_file_prefix), "prefix to be used in creating data file names (extension, e.g. '.nex', will be appended)")
         ("speciestreeref",  value(&G::_species_tree_ref_file_name), "name of a tree file containing a single reference species tree")
         ("genetreeref",  value(&G::_gene_trees_ref_file_name), "name of a tree file containing a reference gene tree for each locus")
         ("startmode", value(&_start_mode), "if 'sim', simulate gene trees, species tree, and data; if 'smc', estimate from supplied datafile; if 'chib', computes prior probability of species species and gene tree topologies; if 'spec', computes coalescent likelihood for specified speciestreeref and genetreeref; if '2ndlevel', tests second-level SMC from gene trees supplied by genetreeref")
@@ -121,8 +120,8 @@ namespace proj {
 #endif
         ("relrate",  value(&partition_relrates), "a relative rate for a previously-defined subset; format first:3.1")
         ("ambigmissing",  value(&_ambig_missing)->default_value(true), "treat all ambiguities as missing data")
-        ("verbosity",  value(&G::_verbosity)->default_value(0), "0, 1, or 2: higher number means more output")
         ("nparticles",  value(&G::_nparticles)->default_value(500), "number of particles in a population for joint estimation (1st level SMC)")
+        ("nsubpops",  value(&G::_nsubpops)->default_value(1), "number of subpopulations in 1st level SMC (must divide evenly into nparticles)")
         ("nkept",  value(&G::_nkept)->default_value(0), "number of particles from joint smc kept for conditional (2nd level) smc")
         ("nspeciesparticles",  value(&G::_nparticles2)->default_value(0), "number of particles in a population for (2nd level) species tree only estimation")
         ("nspecieskept",  value(&G::_nkept2)->default_value(0), "number of particles from conditional smc kept")
@@ -134,9 +133,8 @@ namespace proj {
         ("simasrvshape",  value(&G::_asrv_shape)->default_value(G::_infinity), "Shape of gamma among-site rate heterogeneity within a locus (used only if startmode is 'sim')")
         ("simoccupancy",  value(&G::_occupancy)->default_value(1.0), "probability that any given taxon will have data for any given locus; 1-_occupancy is prob. all missing data for a taxon (used only if startmode is 'sim')")
         ("simcomphet",  value(&G::_comphet)->default_value(G::_infinity), "Dirichlet parameter governing compositional heterogeneity (default value results in compositional homogeneity (used only if startmode is 'sim')")
-        ("rnseed",  value(&_rnseed)->default_value(13579), "pseudorandom number seed")
-        ("freezethetamean",  value(&dummy_bool)->default_value(true), "this option is not used in this version of the program")
-        ("fixedthetamean",  value(&G::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
+        ("rnseed",  value(&G::_rnseed)->default_value(13579), "pseudorandom number seed")
+        ("theta",  value(&G::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
         ("nthreads",  value(&dummy_int)->default_value(3), "this option is not used in this version of the program")
         ;
         
@@ -152,13 +150,13 @@ namespace proj {
 
         // If user specified --help on command line, output usage summary and quit
         if (vm.count("help") > 0) {
-            output(format("%s\n") % desc, 2);
+            output(format("%s\n") % desc);
             exit(1);
         }
 
         // If user specified --version on command line, output version and quit
         if (vm.count("version") > 0) {
-            output(format("This is %s version %d.%d\n") % _program_name % _major_version % _minor_version, 1);
+            output(format("This is %s version %d.%d\n") % _program_name % _major_version % _minor_version);
             exit(1);
         }
         
@@ -173,6 +171,31 @@ namespace proj {
         // If user specified --treefilecompression on command line, set G::_treefile_compression to 2
         if (vm.count("treefilecompression") > 0) {
             G::_treefile_compression = (do_compress ? 2 : 0);
+        }
+        
+        // If user specified --nsubpops on command line, check to
+        // ensure that nparticles is a multiple of nsubpops
+        if (vm.count("nsubpops") > 0) {
+            if (G::_nparticles % G::_nsubpops != 0)
+                throw XProj(str(format("nsubpops (%d) must divide evenly into nparticles (%d)") % G::_nsubpops % G::_nparticles));
+        }
+        
+        // If user specified --log on command line, set G::_log_includes
+        // according to the values specified
+        if (vm.count("log") > 0) {
+            G::_log_include = G::LogCateg::NONE;
+            for (auto s : log_include) {
+                if (s == "INFO" || s == "info" || s == "Info")
+                    G::_log_include |= G::LogCateg::INFO;
+                else if (s == "VERBOSE" || s == "verbose" || s == "Verbose")
+                    G::_log_include |= G::LogCateg::VERBOSE;
+                else if (s == "SECONDLEVEL" || s == "secondlevel" || s == "SecondLevel")
+                    G::_log_include |= G::LogCateg::SECONDLEVEL;
+                else if (s == "DEBUGGING" || s == "debugging" || s == "Debugging")
+                    G::_log_include |= G::LogCateg::DEBUGGING;
+                else
+                    throw XProj(str(format("unrecognized log category \"%s\"") % s));
+            }
         }
         
         // If user specified --subset on command line, break specified partition subset
@@ -511,8 +534,7 @@ namespace proj {
                 G::_dmatrix[subset][k] = jcdist;
             }
             
-            output(format("\nJC distance matrix for locus %d") % subset,2);
-            G::debugShowDistanceMatrix(G::_dmatrix_rows, G::_dmatrix[subset]);
+            //G::debugShowDistanceMatrix(G::_dmatrix_rows, G::_dmatrix[subset], subset);
             
         }   // subset loop
         
@@ -520,17 +542,17 @@ namespace proj {
 #endif
 
     inline void Proj::readData() {
-        output(format("\nReading and storing the data in the file %s\n") % _data_file_name, 2);
+        output(format("\nReading and storing the data in the file %s\n") % (_data_file_prefix + ".nex"));
         _data = Data::SharedPtr(new Data());
         _data->setPartition(_partition);
-        _data->getDataFromFile(_data_file_name);
+        _data->getDataFromFile(_data_file_prefix + ".nex");
         
         G::_gene_names.clear();
 
         // Report information about data partition subsets
         unsigned nsubsets = _data->getNumSubsets();
-        output(format("\nNumber of taxa: %d\n") % _data->getNumTaxa(), 2);
-        output(format("Number of partition subsets: %d") % nsubsets, 2);
+        output(format("\nNumber of taxa: %d\n") % _data->getNumTaxa());
+        output(format("Number of partition subsets: %d") % nsubsets);
         
         // Inform PartialStore of number of genes so that it can allocate
         // its _nelements and _storage vectors
@@ -542,19 +564,19 @@ namespace proj {
             
             DataType dt = _partition->getDataTypeForSubset(subset);
             G::_gene_names.push_back(_data->getSubsetName(subset));
-            output(format("  Subset %d (%s)\n") % (subset+1) % _data->getSubsetName(subset), 2);
-            output(format("    data type: %s\n") % dt.getDataTypeAsString(), 2);
-            output(format("    sites:     %d\n") % _data->calcSeqLenInSubset(subset), 2);
-            output(format("    patterns:  %d\n") % _data->getNumPatternsInSubset(subset), 2);
+            output(format("  Subset %d (%s)\n") % (subset+1) % _data->getSubsetName(subset));
+            output(format("    data type: %s\n") % dt.getDataTypeAsString());
+            output(format("    sites:     %d\n") % _data->calcSeqLenInSubset(subset));
+            output(format("    patterns:  %d\n") % _data->getNumPatternsInSubset(subset));
         }
     }
              
     inline void Proj::setRelativeRates() {
         bool relrates_specified = !_relrate_map.empty();
         if (relrates_specified) {
-            output("\nRelative rates specified for each gene:\n",2);
-            output(format("%12s %12s\n") % "gene" % "rate",2);
-            output(format("%12s %12s\n") % "-----------" % "-----------",2);
+            output("\n  Relative rates specified for each locus:\n");
+            output(format("  %12s %12s\n") % "locus" % "rate");
+            output(format("  %12s %12s\n") % "-----------" % "-----------");
             
             G::_relrate_for_gene.clear();
             unsigned total_nsites = _partition->getNumSites();
@@ -569,17 +591,17 @@ namespace proj {
                     r = _relrate_map.at(gname);
                 }
                 G::_relrate_for_gene[g] = r;
-                output(format("%12s %12.5f\n") % gname % r,2);
+                output(format("  %12s %12.5f\n") % gname % r);
                 mean_rate += r*gnsites/total_nsites;
             }
-            output(format("%12s %12s\n") % "-----------" % "-----------",2);
-            output(format("%12s %12.5f\n") % "mean" % mean_rate,2);
+            output(format("  %12s %12s\n") % "-----------" % "-----------");
+            output(format("  %12s %12.5f\n") % "mean" % mean_rate);
             if (fabs(mean_rate - 1.0) > 0.001) {
                 XProj("The mean rate is more than 0.001 away from 1.0");
             }
         }
         else {
-            output("\nRelative rates not specified (assuming no rate heterogeneity across genes)\n",2);
+            output("\n  Relative rates not specified:\n    assuming rate homogeneity across loci\n");
             for (unsigned g = 0; g < G::_nloci; g++) {
                 G::_relrate_for_gene[g] = 1.0;
             }
@@ -620,27 +642,27 @@ namespace proj {
         string newick_species_tree_numeric = sf.makeNewick(/*precision*/9, /*use names*/false, edgelens_in_coalescent_units);
         if (G::_nspecies > 1) {
             outputNexusTreefile("true-species-tree.tre", {newick_species_tree_alpha});
-            output(format("  True species tree height = %.9f\n") % sf.getHeight(),2);
-            output("  True species tree saved in file \"true-species-tree.tre\"\n", 1);
+            output(format("  True species tree height = %.9f\n") % sf.getHeight());
+            output("  True species tree saved in file \"true-species-tree.tre\"\n");
         }
         else {
-            output("  True species tree not saved because it is just a single node!\n", 1);
+            output("  True species tree not saved because it is just a single node!\n");
         }
 
         // Output tree file containing true gene trees
         vector<string> newick_gene_trees_alpha;
         vector<string> newick_gene_trees_numeric;
-        //output("  True gene tree height (height/theta):\n",2);
+        //output("  True gene tree height (height/theta):\n");
         for (auto & gf : gfvect) {
             string newick_alpha = gf.makeNewick(/*precision*/9, /*use names*/true, edgelens_in_coalescent_units);
             newick_gene_trees_alpha.push_back(newick_alpha);
             
             string newick_numeric = gf.makeNewick(/*precision*/9, /*use names*/false, edgelens_in_coalescent_units);
             newick_gene_trees_numeric.push_back(newick_numeric);
-            //output(format("  %12.9f (%.9f)\n") % gf.getHeight() % (gf.getHeight()/G::_theta), 2);
+            //output(format("  %12.9f (%.9f)\n") % gf.getHeight() % (gf.getHeight()/G::_theta));
         }
         outputGeneTreesToFile("true-gene-trees.tre", newick_gene_trees_alpha);
-        output("  True gene trees saved in file \"true-gene-trees.tre\"\n", 1);
+        output("  True gene trees saved in file \"true-gene-trees.tre\"\n");
 
         // Output gene trees and species trees for javascript viewer
         outputJavascriptTreefile("newicks.js", newick_species_tree_numeric, newick_gene_trees_numeric);
@@ -733,8 +755,8 @@ namespace proj {
         particle.recordAllForests(coalinfo_vect);
         
 #if defined(OUTPUT_FOR_DEBUGGING)
-        output("\nContents of coalinfo_vect:\n", 0);
-        output(format("%12s %6s %s\n") % "height" % "locus" % "species", 0);
+        output("\nContents of coalinfo_vect:\n");
+        output(format("%12s %6s %s\n") % "height" % "locus" % "species");
         for (auto & cinfo : coalinfo_vect) {
             double      height = get<0>(cinfo);
             unsigned     locus = get<1>(cinfo);
@@ -743,7 +765,7 @@ namespace proj {
             for (auto x : sppvect) {
                 s.push_back(to_string(x));
             }
-            output(format("%12.9f %6d %s\n") % height % locus % boost::algorithm::join(s, ","), 0);
+            output(format("%12.9f %6d %s\n") % height % locus % boost::algorithm::join(s, ","));
         }
 #endif
 
@@ -760,9 +782,9 @@ namespace proj {
         // coalescences
         map<G::species_t, unsigned> lineages_per_species0 = lineages_per_species;
         
-        //output("lineages_per_species map:\n", 0);
+        //output("lineages_per_species map:\n");
         //for (auto & p : lineages_per_species) {
-        //    output(format("%12d lineages in species %d\n") % p.second % p.first, 0);
+        //    output(format("%12d lineages in species %d\n") % p.second % p.first);
         //}
 
         // Count deep coalscences at each locus
@@ -778,7 +800,7 @@ namespace proj {
                 G::species_t s = sppvect[0];
                 lineages_per_species[s]--;
                 
-                //output(format("~~> Coalescence in species %d at locus %d\n") % s % locus, 0);
+                //output(format("~~> Coalescence in species %d at locus %d\n") % s % locus);
             }
             else {
                 // Speciation
@@ -807,16 +829,16 @@ namespace proj {
                 lineages_per_species0[sppvect[1]] = 0;
                 lineages_per_species0[ancspp] = nleft0 + nright0;
                 
-                //output(format("~~> Speciation event combines species %d and %d\n") % sppvect[0] % sppvect[1], 0);
-                //output(format("~~> No. deep coalescences here is %d (total is %d)\n") % deep % ndeep, 0);
-                //output(format("~~> Max. deep coalescences here is %d (total is %d)\n") % deep0 % maxdeep, 0);
+                //output(format("~~> Speciation event combines species %d and %d\n") % sppvect[0] % sppvect[1]);
+                //output(format("~~> No. deep coalescences here is %d (total is %d)\n") % deep % ndeep);
+                //output(format("~~> Max. deep coalescences here is %d (total is %d)\n") % deep0 % maxdeep);
             }
         }
         
-        output(format("  Number of deep coalescences = %d\n") % ndeep, 1);
-        output(format("  Maximum number of deep coalescences = %d\n") % maxdeep, 1);
+        output(format("\n  Number of deep coalescences = %d\n") % ndeep);
+        output(format("  Maximum number of deep coalescences = %d\n") % maxdeep);
     }
-    
+            
     inline void Proj::simulateData() {
         if (_nsimtaxaperspecies.size() == 0) {
             throw XProj("You must define nspecies and ntaxaperspecies in order to simulate data");
@@ -825,10 +847,11 @@ namespace proj {
         G::_nspecies = _nsimspecies;
         G::_ntaxa = (unsigned)accumulate(_nsimtaxaperspecies.begin(), _nsimtaxaperspecies.end(), 0);
 
-        output("Simulating sequence data under multispecies coalescent model:\n", 2);
-        output(format("  theta  = %.5f\n") % G::_theta, 2);
-        output(format("  lambda = %.5f\n") % G::_lambda, 2);
-        output(format("  Number of species = %d\n") % _nsimspecies, 2);
+        output("Simulating sequence data under multispecies coalescent model:\n");
+        output(format("  random number seed = %.5f\n") % G::_rnseed);
+        output(format("  theta  = %.5f\n") % G::_theta);
+        output(format("  lambda = %.5f\n") % G::_lambda);
+        output(format("  Number of species = %d\n") % _nsimspecies);
         
         // Expected height of species tree is (1/2 + 1/3 + ... + 1/nspecies)/lambda
         // Approximation to (1/2 + 1/3 + ... + 1/nspecies) is
@@ -841,7 +864,7 @@ namespace proj {
             expected_species_tree_height += 1.0/i;
         }
         expected_species_tree_height /= G::_lambda;
-        output(format("  Expected species tree height = %.5f\n") % expected_species_tree_height, 2);
+        output(format("  Expected species tree height = %.5f\n") % expected_species_tree_height);
         
         // Expected gene tree height without species tree constraints
         // is theta/n(n-1) + theta/(n-1)(n-2) + ... + theta/(2)(1)
@@ -850,7 +873,7 @@ namespace proj {
             expected_gene_tree_height += 1.0/(i*(i-1));
         }
         expected_gene_tree_height *= G::_theta;
-        output(format("  Expected gene tree height (unconstrained) = %.5f\n") % expected_gene_tree_height, 2);
+        output(format("  Expected gene tree height (unconstrained) = %.5f\n") % expected_gene_tree_height);
         
         // Interrogate _partition to determine number of genes, gene names, and
         // number of sites in each gene
@@ -889,24 +912,24 @@ namespace proj {
 
         // Report species names created
 #if defined(OUTPUT_FOR_DEBUGGING)
-        output("  Species info (index is into G::_species_names):\n", 2);
-        output(format("    %12s %12s %s\n") % "index" % "species" % "name", 2);
+        output("  Species info (index is into G::_species_names):\n");
+        output(format("    %12s %12s %s\n") % "index" % "species" % "name");
         for (unsigned i = 0; i < G::_nspecies; ++i) {
             G::species_t spp = (G::species_t)1 << i;
-            output(format("    %12d %12d %s\n") % i % spp % G::_species_names[i], 2);
+            output(format("    %12d %12d %s\n") % i % spp % G::_species_names[i]);
         }
 #else
-        output("  Species names:\n", 2);
+        output("\n  Species names:\n");
         for (unsigned i = 0; i < G::_nspecies; ++i) {
-            output(format("    %s\n") % G::_species_names[i], 2);
+            output(format("    %s\n") % G::_species_names[i]);
         }
 #endif
 
         // Report taxon names created
-        output("  Taxon names:\n", 2);
+        output("\n  Taxon names:\n");
         for (unsigned i = 0; i < G::_ntaxa; ++i) {
             string taxon_name = G::_taxon_names[i];
-            output(format("    %s\n") % taxon_name, 2);
+            output(format("    %s\n") % taxon_name);
         }
         
         // Create data object
@@ -922,9 +945,9 @@ namespace proj {
         simulateTrees(particle);
         
 #if defined(OUTPUT_FOR_DEBUGGING)
-        output(format("Simulated species tree:\n  %s\n") % particle.getSpeciesForestConst().makeNewick(9, true, false), 0);
+        output(format("Simulated species tree:\n  %s\n") % particle.getSpeciesForestConst().makeNewick(9, true, false));
         for (unsigned g = 0; g < G::_nloci; g++) {
-            output(format("Simulated gene tree for locus %d:\n  %s\n") % (g+1) % particle.getGeneForestConst(g).makeNewick(9, true, false), 0);
+            output(format("Simulated gene tree for locus %d:\n  %s\n") % (g+1) % particle.getGeneForestConst(g).makeNewick(9, true, false));
         }
 #endif
         
@@ -946,14 +969,20 @@ namespace proj {
             starting_site += G::_nsites_per_gene[g];
         }
                        
+        // Output data for each locus to a separate file
+        
+        
         // Output data to file
         _data->compressPatterns();
-        _data->writeDataToFile(_data_file_name);
-        output(format("  Sequence data saved in file \"%s\"\n") % _data_file_name, 1);
+        _data->writeDataToFile(_data_file_prefix + ".nex");
+        output(format("  Sequence data saved in file \"%s.nex\"\n") % _data_file_prefix, 1);
 
+        // Output data for each locus to a separate file for use with beast
+        //_data->writeLocusSpecificDataFiles(_data_file_prefix);
+        
         // Output a PAUP* command file for estimating the species tree using
         // svd quartets and qage
-        output("  PAUP* commands saved in file \"svd-qage.nex\"\n", 1);
+        output("  PAUP* commands saved in file \"svd-qage.nex\"\n");
         ofstream paupf("svd-qage.nex");
         paupf << "#NEXUS\n\n";
         paupf << "begin paup;\n";
@@ -971,19 +1000,19 @@ namespace proj {
      
     inline void Proj::run() {
     
-        ::rng->setSeed(_rnseed);
+        ::rng->setSeed(G::_rnseed);
         
         if (_start_mode == "sim") {
             simulateData();
         }
         else if (_start_mode == "smc") {
-            output("Starting...\n", 2);
+            output("Starting...\n");
 
 #if defined(UPGMA_WEIGHTS)
-            output("Using UPGMA completion\n", 2);
+            output("Using UPGMA completion\n");
 #endif
 
-            output(format("Current working directory: %s\n") % current_path(), 2);
+            output(format("Current working directory: %s\n") % current_path());
         
             readData();
             
@@ -1012,16 +1041,18 @@ namespace proj {
                 GeneForest::computeLeafPartials(g, _data);
             }
             
+            output(format("Performing 1st-level SMC using %d particles...\n") % G::_nparticles, G::LogCateg::INFO);
+
             // First-level particle filtering
             SMC smc;
-            smc.setNParticles(G::_nparticles);
+            smc.setNParticles(G::_nparticles, G::_nsubpops);
             smc.setData(_data);
             smc.init();
             smc.run();
             smc.summarize();
             
             if (G::_nparticles2 > 0) {
-                output(format("Performing 2nd-level SMC on %d 1st-level particles...\n") % G::_nkept, 2);
+                output(format("Performing 2nd-level SMC on %d 1st-level particles...\n") % G::_nkept, G::LogCateg::INFO);
                 
                 vector<Particle> & first_level_particles = smc.getParticles();
                 assert(first_level_particles.size() == G::_nparticles);
@@ -1053,7 +1084,7 @@ namespace proj {
                     }
                                             
                     SMC smc2;
-                    smc2.setNParticles(G::_nparticles2);
+                    smc2.setNParticles(G::_nparticles2, 1); //TODO: let 2nd level have subpops?
                     smc2.setMode(SMC::SPECIES_GIVEN_GENE);
                     smc2.initFromParticle(p);
                     smc2.run();
@@ -1077,7 +1108,7 @@ namespace proj {
             throw XProj("This program currently only accepts \"sim\" and \"smc\" as start mode");
         }
         
-        output("\nFinished!\n", 2);
+        output("\nFinished!\n");
     }
     
     inline unsigned Proj::buildSpeciesMap(bool taxa_from_data) {
@@ -1103,7 +1134,7 @@ namespace proj {
         map<string, unsigned> species_name_to_index;
         G::_taxon_to_species.clear();
 
-        output("\nMapping taxon names to species index:\n", 2);
+        output("\nMapping taxon names to species index:\n");
         unsigned ntax = (unsigned)G::_taxon_names.size();
         assert(ntax > 0);
         if (taxa_from_data) {
@@ -1115,7 +1146,7 @@ namespace proj {
             ntax = (unsigned)tnames.size();
             for (auto & tname : tnames) {
                 string species_name = Node::taxonNameToSpeciesName(tname);
-                output(format("  %s --> %s\n") % tname % species_name, 2);
+                output(format("  %s --> %s\n") % tname % species_name);
                 unsigned species_index = ntax;
                 if (species_name_to_index.find(species_name) == species_name_to_index.end()) {
                     // species_name not found
@@ -1156,7 +1187,7 @@ namespace proj {
             }
         }
         
-        output("\nMapping species names to species index:\n", 2);
+        output("\nMapping species names to species index:\n");
         for (auto & sname : G::_species_names) {
             unsigned species_index = 0;
             if (species_name_to_index.count(sname) == 0)
@@ -1164,7 +1195,7 @@ namespace proj {
             else {
                 species_index = species_name_to_index.at(sname);
             }
-            output(format("  %s --> %d\n") % sname % species_index, 2);
+            output(format("  %s --> %d\n") % sname % species_index);
             
             // Note: despite appearances, this next line does not
             // overwrite anything. We need to be able to map taxon

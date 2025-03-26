@@ -1,7 +1,5 @@
 #pragma once
 
-extern void output(string msg, unsigned level);
-extern void output(format & fmt, unsigned level);
 extern proj::StopWatch stopwatch;
 extern proj::Lot::SharedPtr rng;
 
@@ -23,7 +21,7 @@ namespace proj {
             bool                     isJointMode() const        {return _mode == SPECIES_AND_GENE;}
             bool                     isConditionalMode() const  {return _mode == SPECIES_GIVEN_GENE;}
 
-            void                     setNParticles(unsigned n)  {_nparticles = n;}
+            void                     setNParticles(unsigned nparticles, unsigned nsubpops)  {_nparticles = nparticles; _nsubpops = nsubpops; }
             
             void                     setData(Data::SharedPtr d) {_data = d;}
             void                     initFromParticle(Particle & p);
@@ -31,6 +29,7 @@ namespace proj {
             void                     run();
 
             double                   filterParticles(unsigned step, int locus);
+            double                   filterParticlesWithinSubpops(unsigned step, int locus);
 
             vector<Particle> &       getParticles()  {return _particles;}
             const vector<Particle> & getParticlesConst() const {return _particles;}
@@ -56,6 +55,10 @@ namespace proj {
             vector<unsigned>         _counts;
             
             unsigned                 _nparticles;
+            unsigned                 _nsubpops;
+
+            // _subpop_id[k] is subpop in which kth particle belongs
+            vector<unsigned>         _subpop_id;
             
             unsigned                 _nsteps;
             vector<double>           _starting_log_likelihoods;
@@ -70,7 +73,9 @@ namespace proj {
         _nsteps = 0;
         _log_marg_like = 0.0;
         _nparticles = 0;
+        _nsubpops = 1;
         _counts.clear();
+        _subpop_id.clear();
     }
     
     inline void SMC::initFromParticle(Particle & p) {
@@ -78,10 +83,10 @@ namespace proj {
         
 #if defined(DEBUGGING_INITFROMPARTICLE)
         // output first level gene trees and species tree
-        output(format("\nSpecies forest:\n%s\n") % p.getSpeciesForest().makeNewick(9, true, false), 0);
+        output(format("\nSpecies forest:\n%s\n") % p.getSpeciesForest().makeNewick(9, true, false));
         auto gene_forests = p.getGeneForestsConst();
         for (auto & gf : gene_forests) {
-            output(format("\nGene forest:\n%s\n") % gf.makeNewick(9, true, false), 0);
+            output(format("\nGene forest:\n%s\n") % gf.makeNewick(9, true, false));
         }
 #endif
         _data = p.getData();
@@ -94,6 +99,17 @@ namespace proj {
         // each of the _nparticles in multinomial sampling.
         _counts.clear();
         _counts.resize(_nparticles);
+        
+        // The _subpop_id vector stores the assignments of particles to subpops
+        _subpop_id.clear();
+        _subpop_id.resize(_nparticles);
+        unsigned first = 0;
+        unsigned particles_per_subpop = _nparticles/_nsubpops;
+        for (unsigned i = 0; i < _nsubpops; i++) {
+            unsigned last = first + particles_per_subpop;
+            for (unsigned j = first; j < last; j++)
+                _subpop_id[j] = i;
+        }
     
         // Create log_weights vector that stores log weight of each particle
         _log_weights.resize(_nparticles);
@@ -120,9 +136,9 @@ namespace proj {
         assert(G::_nspecies > 1);
         _nsteps = G::_nspecies - 1;
 
-        output(format("\nSMC (level 2) will require %d steps.\n") % _nsteps, 3);
+        output(format("\nSMC (level 2) will require %d steps.\n") % _nsteps, G::LogCateg::SECONDLEVEL);
 
-        output(format("\n%12s %12s %24s %12s %12s\n") % "Step" % "ESS" % "logml" % "secs" % "wait", 3);
+        output(format("\n%12s %12s %24s %12s %12s\n") % "Step" % "ESS" % "logml" % "secs" % "wait", G::LogCateg::SECONDLEVEL);
     }
     
     inline void SMC::init() {
@@ -134,6 +150,19 @@ namespace proj {
         _counts.clear();
         _counts.resize(_nparticles);
         
+        // The _subpop_id vector stores the assignments of particles to subpops
+        _subpop_id.clear();
+        _subpop_id.resize(_nparticles);
+        unsigned first = 0;
+        unsigned particles_per_subpop = _nparticles/_nsubpops;
+        for (unsigned i = 0; i < _nsubpops; i++) {
+            unsigned last = first + particles_per_subpop;
+            for (unsigned j = first; j < last; j++) {
+                _subpop_id[j] = i;
+            }
+            first = last;
+        }
+    
         // Create log_weights vector that stores log weight of each particle
         _log_weights.resize(_nparticles);
         
@@ -164,7 +193,7 @@ namespace proj {
         G::showSettings();
         
         // Display header for progress table
-        output(format("\n%12s %12s  %24s %12s %12s\n") % "Step" % "ESS" % "logml" % "secs" % "wait", 1);
+        output(format("\n%12s %12s  %24s %12s %12s\n") % "Step" % "ESS" % "logml" % "secs" % "wait");
     }
 
     inline void SMC::run() {
@@ -203,7 +232,10 @@ namespace proj {
             // The _counts vector will be filled with the number of times each particle was chosen.
             double ess = _nparticles;
             if (isJointMode()) {
-                ess = filterParticles(step, locus);
+                if (_nsubpops == 1)
+                    ess = filterParticles(step, locus);
+                else
+                    ess = filterParticlesWithinSubpops(step, locus);
             }
             else {
                 ess = filterParticles(step, -1);
@@ -217,7 +249,7 @@ namespace proj {
             unsigned steps_to_go = _nsteps - (step + 1);
             double wait = avg_per_step*steps_to_go;
                     
-            unsigned verbosity = isConditionalMode() ? 3 : 2;
+            unsigned verbosity = isConditionalMode() ? G::LogCateg::SECONDLEVEL : G::LogCateg::INFO;
             output(format("%12d %12.3f %24.6f %12.3f %12.3f\n") % (step+1) % ess % _log_marg_like % secs % wait, verbosity);
         }
     }
@@ -229,8 +261,6 @@ namespace proj {
         if (isConditionalMode())
             prefix = "2nd";
                     
-        output(format("log(marginal likelihood) = %.6f\n") % _log_marg_like, 1);
-        
         // //temporary!
         // Particle & p = *(_particles.begin());
         // vector<Forest::coalinfo_t> coalinfo_vect;
@@ -238,17 +268,47 @@ namespace proj {
         // double log_coallike = p.calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/true, /*verbose*/false);
         // output(format("log(coalescent likelihood) = %.9f\n") % log_coallike, 2);
         
-        output("\nSpecies trees saved to file \"final-species-trees.tre\"\n", 1);
+        output("\nSpecies trees saved to file \"final-species-trees.tre\"\n", G::LogCateg::VERBOSE);
         string sfn = str(format("%s-final-species-trees") % prefix);
         saveAllSpeciesTrees(sfn, _particles, G::_treefile_compression);
         
         if (isJointMode()) {
             for (unsigned g = 0; g < G::_nloci; g++) {
-                output(format("Gene trees for locus %d saved to file \"final-gene%d-trees.tre\"\n") % (g+1) % (g+1), 1);
+                output(format("Gene trees for locus %d saved to file \"final-gene%d-trees.tre\"\n") % (g+1) % (g+1), G::LogCateg::VERBOSE);
                 
                 string fnprefix = str(format("%s-final-gene%d-trees") % prefix % (g+1));
                 saveAllGeneTrees(g, fnprefix, _particles, G::_treefile_compression);
             }
+        }
+        
+        if (!isConditionalMode()) {
+            unsigned long min_partials_needed = 0;
+            unsigned long k = G::_ntaxa - 1;
+#if defined(UPGMA_WEIGHTS)
+            // ntaxa = 4, k = 3
+            //       step 1    step 2    step 3
+            // ---------------------------------------------
+            // SMC   \/ | |    \/ / |    \/ / /
+            //                  \/  |     \/ /
+            //                             \/
+            //           1   +    1    +    1    = k
+            // ---------------------------------------------
+            // UPGMA   \/ /       \/
+            //          \/
+            //           2   +     1   +    0    = k*(k-1)/2
+            // ---------------------------------------------
+            min_partials_needed = (k + k*(k-1)/2)*G::_nparticles*G::_nloci;
+#else
+            min_partials_needed = k*G::_nparticles*G::_nloci;
+#endif
+        
+            output(str(format("%20d %s\n") % G::_nspecies % "Species"), G::LogCateg::INFO);
+            output(str(format("%20d %s\n") % G::_ntaxa % "Taxa"), G::LogCateg::INFO);
+            output(str(format("%20d %s\n") % G::_nloci % "Loci"), G::LogCateg::INFO);
+            output(str(format("%20d %s\n") % _nsteps % "Steps"), G::LogCateg::INFO);
+            output(str(format("%20d %s\n") % G::_npartials_calculated % "Number of partials calculated"), G::LogCateg::INFO);
+            output(str(format("%20d %s\n") % min_partials_needed % "Minimum partials needed"), G::LogCateg::INFO);
+            output(str(format("%20.5f %s\n") % _log_marg_like % "Log marginal likelihood"), G::LogCateg::INFO);
         }
         
         map<string, tuple<unsigned, double, double, double, double> > m;
@@ -291,7 +351,7 @@ namespace proj {
             string fn = str(format("%s-report.txt") % prefix);
             ofstream outf(fn);
             outf << str(format("%12s %12s %12s %12s %12s %12s %12s %12s %12s %12s %12s %12s %12s %12s")
-                % "Genes"
+                % "Loci"
                 % "Steps"
                 % "Distinct"
                 % "RefH"
@@ -321,6 +381,29 @@ namespace proj {
                 % (maxRF - minRF)
                 % _log_marg_like) << endl;
             outf.close();
+            
+            string longfn = str(format("%s-report-long-format.txt") % prefix);
+            ofstream longoutf(longfn);
+            longoutf << str(format("%20d %s\n") % G::_nspecies % "Species");
+            longoutf << str(format("%20d %s\n") % G::_ntaxa % "Taxa");
+            longoutf << str(format("%20d %s\n") % G::_nloci % "Loci");
+            longoutf << str(format("%20d %s\n") % _nsteps % "Steps");
+            longoutf << str(format("%20d %s\n") % m.size() % "Distinct topologies in species trees posterior");
+            longoutf << str(format("%20d %s\n") % G::_npartials_calculated % "Number of partials calculated");
+            longoutf << str(format("%20d %s\n") % ((G::_ntaxa - 1)*G::_nparticles*G::_nloci) % "Maximum partials needed");
+            longoutf << str(format("%20.5f %s\n") % ref_height % "Reference species tree height");
+            longoutf << str(format("%20.5f %s\n") % mean_height % "Posterior mean species tree height");
+            longoutf << str(format("%20.5f %s\n") % meanKF % "Posterior mean Kuhner-Felsenstein species tree distance to reference");
+            longoutf << str(format("%20.5f %s\n") % minKF % "Minimum Kuhner-Felsenstein species tree distance to reference");
+            longoutf << str(format("%20.5f %s\n") % maxKF % "Maximum Kuhner-Felsenstein species tree distance to reference");
+            longoutf << str(format("%20.5f %s\n") % (maxKF - minKF) % "Maximum - minimum Kuhner-Felsenstein species tree distance to reference");
+            longoutf << str(format("%20.5f %s\n") % meanRF % "Posterior mean Robinson-Foulds species tree distance to reference");
+            longoutf << str(format("%20.5f %s\n") % minRF % "Minimum Robinson-Foulds species tree distance to reference");
+            longoutf << str(format("%20.5f %s\n") % maxRF % "Maximum Robinson-Foulds species tree distance to reference");
+            longoutf << str(format("%20.5f %s\n") % (maxRF - minRF) % "Maximum - minimum Robinson-Foulds species tree distance to reference");
+            longoutf << str(format("%20.5f %s\n") % _log_marg_like % "Log marginal likelihood");
+            longoutf.close();
+            
         }
     }
     
@@ -402,6 +485,153 @@ namespace proj {
         }
                                     
         return ess;
+    }
+    
+    inline double SMC::filterParticlesWithinSubpops(unsigned step, int locus) {
+        // Sanity checks
+        assert(_counts.size() == _nparticles);
+        assert(_subpop_id.size() == _nparticles);
+        
+        // Zero vector of counts storing number of darts hitting each particle
+        _counts.assign(_nparticles, 0);
+
+        // Determine the size of each subpopulation subset of particles
+        unsigned nparticles_per_subpop = _nparticles/_nsubpops;
+
+        // Create a vector next_index in which next_index[s] for subpopulation s
+        // equals the next available position in the particles vector
+        vector<unsigned> next_index(_nsubpops, 0);
+        unsigned first = 0;
+        for (unsigned i = 0; i < _nsubpops; i++) {
+            next_index[i] = first;
+            first += nparticles_per_subpop;
+        }
+        
+        // Create a vector of pointers to particles. This vector stores particles
+        // within a given subpopulation together.
+        // Example: _nsubpops = 2, _nparticles = 10
+        //            +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+        // subpop_id  |   0 |   1 |   1 |   0 |   0 |   1 |   0 |   1 |   0 |   1 |
+        //            +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+        // _particles |  p0 |  p1 |  p2 |  p3 |  p4 |  p5 |  p6 |  p7 |  p8 |  p9 |
+        //            +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+        // particles  | &p0 | &p3 | &p4 | &p6 | &p8 | &p1 | &p2 | &p5 | &p7 | &p9 |
+        //            +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+        vector<Particle *> particles(_nparticles);
+        for (unsigned i = 0; i < _particles.size(); i++) {
+            unsigned s = _subpop_id[i];
+            unsigned j = next_index[s];
+            particles[j] = &_particles[i];
+            next_index[s]++;
+        }
+
+        // Normalize log_weights (within subpopulations)
+        // to create discrete probability distribution
+        vector<double> ess(_nsubpops, 0.0);
+        vector<double> log_weights(nparticles_per_subpop, 0.0);
+        vector<double> probs(nparticles_per_subpop, 0.0);
+        first = 0;
+        for (unsigned subpop = 0; subpop < _nsubpops; subpop++) {
+            unsigned last = first + nparticles_per_subpop;
+
+            // Record log-weight for each particle
+            unsigned j = 0;
+            for (unsigned i = first; i < last; i++) {
+                log_weights[j++] = particles[i]->getLogWeight();
+            }
+                        
+            double log_sum_weights = G::calcLogSum(log_weights);
+            transform(log_weights.begin(), log_weights.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
+            
+            // Compute component of the log marginal likelihood due to this step
+            //TODO: probably not correct for multiple subpopulations
+            _log_marg_like += log_sum_weights - log(nparticles_per_subpop);
+            if (locus > -1 && step < G::_nloci) {
+                _log_marg_like += _starting_log_likelihoods[locus];
+            }
+
+            // Compute effective sample size
+            //TODO: probably not correct for multiple subpopulations
+            ess[subpop] = computeEffectiveSampleSize(probs);
+            
+            // Compute cumulative probabilities
+            partial_sum(probs.begin(), probs.end(), probs.begin());
+            
+            // Throw _nparticles darts
+            for (unsigned i = 0; i < nparticles_per_subpop; ++i) {
+                double u = ::rng->uniform();
+                auto it = find_if(probs.begin(), probs.end(), [u](double cump){return cump > u;});
+                assert(it != probs.end());
+                unsigned which = _nsubpops*subpop + (unsigned)distance(probs.begin(), it);
+                _counts[which]++;
+            }
+                            
+            first = last;
+        }
+                                        
+        // Store indices of particles with non-zero counts in vector nonzeros
+        vector<unsigned> zeros;
+        vector<unsigned> nonzeros;
+        classifyCounts(zeros, nonzeros, _counts);
+        
+        // Example of following code that replaces dead
+        // particles with copies of surviving particles:
+        //             0  1  2  3  4  5  6  7  8  9
+        // _counts  = {0, 2, 0, 0, 0, 8, 0, 0, 0, 0}  size = 10
+        // zeros    = {0, 2, 3, 4, 6, 7, 8, 9}        size =  8
+        // nonzeros = {1, 5}                          size =  2
+        //
+        //  next_zero   next_nonzero   copy action taken
+        //  ----------------------------------------------------------
+        //      0             0        *particles[1] --> *particles[0]
+        //  ----------------------------------------------------------
+        //      1             1        *particles[5] --> *particles[2]
+        //      2             1        *particles[5] --> *particles[3]
+        //      3             1        *particles[5] --> *particles[4]
+        //      4             1        *particles[5] --> *particles[6]
+        //      5             1        *particles[5] --> *particles[7]
+        //      6             1        *particles[5] --> *particles[8]
+        //      7             1        *particles[5] --> *particles[9]
+        //  ----------------------------------------------------------
+        unsigned next_zero = 0;
+        unsigned next_nonzero = 0;
+        while (next_nonzero < nonzeros.size()) {
+            double index_survivor = nonzeros[next_nonzero];
+            unsigned ncopies = _counts[index_survivor] - 1;
+            for (unsigned k = 0; k < ncopies; k++) {
+                double index_nonsurvivor = zeros[next_zero++];
+                
+                // Replace non-survivor with copy of survivor
+                *particles[index_nonsurvivor] = *particles[index_survivor];
+            }
+            
+            ++next_nonzero;
+        }
+        
+        // Randomly shuffle assignment of particles to subpopulations
+        // First create tmp, a vector of tuples, with each tuple comprising
+        // a uniform random variate and the index into _subpop_id
+        vector< pair<float, unsigned> > tmp(_nparticles);
+        for (unsigned i = 0; i < _nparticles; i++) {
+            tmp[i] = make_pair(rng->uniform(), i);
+        }
+        
+        // Sort tmp, which leaves the indexes in random order
+        sort(tmp.begin(), tmp.end());
+        
+        // Make a copy of _subpop_id called tmpid
+        vector<unsigned> tmpid(_subpop_id.begin(), _subpop_id.end());
+        
+        // Finally, recreate _subpop_id by copying subpop assignment from tmpid
+        // in the order specified by tmp
+        for (unsigned i = 0; i < _nparticles; i++) {
+            unsigned index = tmp[i].second;
+            unsigned subpop_assigned = tmpid[index];
+            _subpop_id[i] = subpop_assigned;
+        }
+        
+        double avg_ess = accumulate(ess.begin(), ess.end(), 0.0)/_nsubpops;
+        return avg_ess;
     }
     
     inline unsigned SMC::countDistinctGeneTreeTopologies() {
@@ -653,7 +883,8 @@ namespace proj {
         vector<string> tree_names;
         vector<string> newicks;
         SpeciesForest::readTreefile(G::_species_tree_ref_file_name, /*skip*/0, G::_species_names, G::_nexus_taxon_map, tree_names, newicks);
-                
+
+        // Build only the first species tree in the file
         SpeciesForest ref;
         ref.buildFromNewick(newicks[0]);
         double ref_height = ref.getHeight();

@@ -1,8 +1,5 @@
 #pragma once
 
-extern void output(string msg, unsigned level);
-extern void output(format & fmt, unsigned level);
-
 namespace proj {
 
     class Data;
@@ -157,11 +154,11 @@ namespace proj {
     inline void GeneticCode::ensureGeneticCodeNameIsValid(const string & name) {
         if (!isRecognizedGeneticCodeName(name)) {
             auto valid_genetic_code_names = getRecognizedGeneticCodeNames();
-            output("Recognized genetic codes:\n", 2);
+            output("Recognized genetic codes:\n");
             for (string name : valid_genetic_code_names) {
-                output(format("  %s\n") % name, 2);
+                output(format("  %s\n") % name);
             }
-            output("\n", 2);
+            output("\n");
             throw XProj(format("%s is not a recognized genetic code") % name);
         }
     }

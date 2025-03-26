@@ -379,9 +379,9 @@ namespace proj {
     //            if (!nd->_left_child) {
     //                // leaf node
     //                if (taxon_map.count(nd->_number + 1) == 0) {
-    //                    output("\ntaxon_map:\n",1);
+    //                    output("\ntaxon_map:\n");
     //                    for (auto t : taxon_map) {
-    //                        output(format("  key: %d --> value: %d\n") % t.first % t.second,1);
+    //                        output(format("  key: %d --> value: %d\n") % t.first % t.second);
     //                    }
     //                    throw XProj(format("%d is not a key in taxon_map") % (nd->_number + 1));
     //                }
@@ -768,15 +768,15 @@ namespace proj {
         assert(_lineages.size() > 0);
         unsigned sub = 0;
         for (auto preorder : _preorders) {
-            output(format("\nSubtree %d\n") % sub, 1);
+            output(format("\nSubtree %d\n") % sub);
             for (auto nd : preorder) {
-                output(format("  node %d:\n") % nd->_number, 1);
-                output(format("    name    = \"%s\"\n") % nd->_name, 1);
-                output(format("    height  = %.5f\n") % nd->_height, 1);
-                output(format("    edgelen = %.5f\n") % nd->_edge_length, 1);
-                output(format("    par     = %s\n") % (nd->_parent ? to_string(nd->_parent->_number) : "none"), 1);
-                output(format("    lchild  = %s\n") % (nd->_left_child ? to_string(nd->_left_child->_number) : "none"), 1);
-                output(format("    rchild  = %s\n") % (nd->_right_sib ? to_string(nd->_right_sib->_number) : "none"), 1);
+                output(format("  node %d:\n") % nd->_number);
+                output(format("    name    = \"%s\"\n") % nd->_name);
+                output(format("    height  = %.5f\n") % nd->_height);
+                output(format("    edgelen = %.5f\n") % nd->_edge_length);
+                output(format("    par     = %s\n") % (nd->_parent ? to_string(nd->_parent->_number) : "none"));
+                output(format("    lchild  = %s\n") % (nd->_left_child ? to_string(nd->_left_child->_number) : "none"));
+                output(format("    rchild  = %s\n") % (nd->_right_sib ? to_string(nd->_right_sib->_number) : "none"));
             }
             sub++;
         }
@@ -784,19 +784,19 @@ namespace proj {
 
     inline void Forest::debugShowLineages() const {
         assert(_lineages.size() > 0);
-        output("\n_lineages:\n", 0);
+        output("\n_lineages:\n");
         for (auto nd : _lineages) {
-            output(format("  %d \"%s\" (%s)\n") % nd->_number % nd->_name % G::memoryAddressAsString(nd), 0);
+            output(format("  %d \"%s\" (%s)\n") % nd->_number % nd->_name % G::memoryAddressAsString(nd));
             if (nd->_left_child) {
-                output(format("    left child: %d \"%s\" (%s)\n") % nd->_left_child->_number % nd->_left_child->_name % G::memoryAddressAsString(nd->_left_child), 0);
+                output(format("    left child: %d \"%s\" (%s)\n") % nd->_left_child->_number % nd->_left_child->_name % G::memoryAddressAsString(nd->_left_child));
             }
                 
             if (nd->_right_sib) {
-                output(format("    right sib: %d \"%s\" (%s)\n") % nd->_right_sib->_number % nd->_right_sib->_name %  G::memoryAddressAsString(nd->_right_sib), 0);
+                output(format("    right sib: %d \"%s\" (%s)\n") % nd->_right_sib->_number % nd->_right_sib->_name %  G::memoryAddressAsString(nd->_right_sib));
             }
                 
             if (nd->_parent) {
-                output(format("    parent: %d \"%s\" (%s)\n") % nd->_parent->_number % nd->_parent->_name %  G::memoryAddressAsString(nd->_parent), 0);
+                output(format("    parent: %d \"%s\" (%s)\n") % nd->_parent->_number % nd->_parent->_name %  G::memoryAddressAsString(nd->_parent));
             }
         }
     }
@@ -810,14 +810,14 @@ namespace proj {
         unsigned which_lineage = 0;
         for (auto nd : _lineages) {
             if (_preorders[which_lineage][0] != nd) {
-                output("Forest::debugCheckAllPreorders found a problem\n" , 1);
+                output("Forest::debugCheckAllPreorders found a problem\n");
                 output(format("  Node %d (name %s) not equal to _preorders[%d]\n") % nd->_number % nd->_name % which_lineage, 1);
                 
                 // Print out every lineage root node in _preorders
                 unsigned i = 0;
-                output(format("%12s %12s %s\n") % "index" % "number" % "name", 1);
+                output(format("%12s %12s %s\n") % "index" % "number" % "name");
                 for (const Node::ptr_vect_t & v : _preorders) {
-                    output(format("%12d %12d %s\n") % (i++) % v[0]->_number % v[0]->_name, 1);
+                    output(format("%12d %12d %s\n") % (i++) % v[0]->_number % v[0]->_name);
                 }
                 throw XProj("Aborting from within Forest::debugCheckAllPreorders");
             }
@@ -993,7 +993,7 @@ namespace proj {
                     for (unsigned t = 0; t < num_leaves; t++) {
                         leaf_names[t] = taxa_block->GetTaxonLabel(t);
                     }
-                    output(format("Assuming %d taxon names are those found in taxa block") % num_leaves, 1);
+                    output(format("Assuming %d taxon names are those found in taxa block") % num_leaves);
                 }
                 else {
                     throw XProj(format("Found %d taxa in taxa block %d but expecting %d") % num_leaves % (i+1) % leaf_names.size());
@@ -1237,14 +1237,14 @@ namespace proj {
     }
     
     inline void Forest::debugShowNodePtrVector(Node::ptr_vect_t & v, string title) {
-        output(format("\nNode::ptr_vect_t: %s\n") % title, 2);
-        output(format("%6s %12s %6s %10s\n") % "index" % "address" % "number" % "species", 2);
+        output(format("\nNode::ptr_vect_t: %s\n") % title);
+        output(format("%6s %12s %6s %10s\n") % "index" % "address" % "number" % "species");
         for (unsigned i = 0; i < v.size(); ++i) {
             string memory_address = G::memoryAddressAsString((void *)&_nodes[i]);
             string species_set = G::speciesStringRepresentation(v[i]->getSpecies());
-            output(format("%6d %12s %6d %10s\n") % i % memory_address % v[i]->_number % species_set, 2);
+            output(format("%6d %12s %6d %10s\n") % i % memory_address % v[i]->_number % species_set);
         }
-        output("\n", 2);
+        output("\n");
     }
 
     inline void Forest::debugShowCoalInfo(string title, vector<Forest::coalinfo_t> & coalinfo_vect, string fn) {
@@ -1270,8 +1270,8 @@ namespace proj {
             tmpf.close();
         }
         else {
-            output(format("\n%s:\n") % title, 1);
-            output(format("%12s %12s %s\n") % "height" % "gene" % "child spp", 1);
+            output(format("\n%s:\n") % title);
+            output(format("%12s %12s %s\n") % "height" % "gene" % "child spp");
             for (auto cinfo : coalinfo_vect) {
                 double                                   h = get<0>(cinfo);
                 unsigned                       gene_plus_1 = get<1>(cinfo);
@@ -1282,11 +1282,11 @@ namespace proj {
                 ostringstream oss;
                 copy(spp.begin(), spp.end(), ostream_iterator<G::species_t>(oss, " "));
                 if (gene_plus_1 == 0)
-                    output(format("%12.9f %12s %12s\n") % h % "(0)" % oss.str(), 1);
+                    output(format("%12.9f %12s %12s\n") % h % "(0)" % oss.str());
                 else
-                    output(format("%12.9f %12d %12s\n") % h % gene_plus_1 % oss.str(), 1);
+                    output(format("%12.9f %12d %12s\n") % h % gene_plus_1 % oss.str());
             }
-            output("\n", 1);
+            output("\n");
         }
     }
     

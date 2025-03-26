@@ -522,7 +522,7 @@ namespace proj {
         refreshAllHeightsAndPreorders();
         
         // debugging
-        //output(format("  Rebuilt species tree starting from %g: %s\n") % starting_height % makeNewick(9, true, false), 0);
+        //output(format("  Rebuilt species tree starting from %g: %s\n") % starting_height % makeNewick(9, true, false));
     }
     
 }

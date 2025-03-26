@@ -18,5 +18,5 @@
 
 //#define RANDOM_LOCUS_ORDERING
 
-#define FOSSILS
+//#define FOSSILS
 

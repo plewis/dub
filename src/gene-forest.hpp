@@ -690,6 +690,7 @@ namespace proj {
             curr_loglike += log(newnd_sitelike)*counts[pp];
         }
         
+        G::_npartials_calculated++;
         return curr_loglike - prev_loglike;
     }
     
@@ -726,7 +727,7 @@ struct negLogLikeDist {
     inline void GeneForest::constructUPGMA(const Forest & species_forest) {
         assert(_gene_index >= 0);
 #if defined(DEBUG_UPGMA)
-        G::debugShowDistanceMatrix(_dmatrix_rows, _dmatrix);
+        G::debugShowDistanceMatrix(_dmatrix_rows, _dmatrix, _gene_index);
 #endif
 
         // Create two maps:
@@ -743,7 +744,7 @@ struct negLogLikeDist {
             _upgma_starting_edgelen[nd] = nd->_edge_length;
             
 #if defined(DEBUG_UPGMA)
-            output(format("node %d has split %s ") % i % nd->_split.createPatternRepresentation(), 0);
+            output(format("node %d has split %s ") % i % nd->_split.createPatternRepresentation());
 #endif
 
             // Find index of row corresponding to each lineage
@@ -754,7 +755,7 @@ struct negLogLikeDist {
             node_for_row[row_index] = nd;
             
 #if defined(DEBUG_UPGMA)
-            output(format("and is row %d\n") % row_index, 0);
+            output(format("and is row %d\n") % row_index);
 #endif
         }
         
@@ -824,7 +825,7 @@ struct negLogLikeDist {
             row_of_node[anc] = i;
                         
             //debugShowLineages();
-            // output(format("\nJoining lineages %d and %d\n") % i % j, 0);
+            // output(format("\nJoining lineages %d and %d\n") % i % j);
 
             anc->_partial = pullPartial();
             calcPartialArray(anc);
@@ -847,7 +848,7 @@ struct negLogLikeDist {
                 node_for_row[row_index] = nd;
                 
 #if defined(DEBUG_UPGMA)
-                output(format("node %d has split %s and is row %d\n") % i % nd->_split.createPatternRepresentation() % row_index, 0);
+                output(format("node %d has split %s and is row %d\n") % i % nd->_split.createPatternRepresentation() % row_index);
 #endif
             }
             
@@ -855,8 +856,8 @@ struct negLogLikeDist {
         }
         
 #if defined(DEBUG_UPGMA)
-        output(format("Gene tree for locus %d after UPGMA:\n") % _gene_index, 0);
-        output(format("  %s\n") % makeNewick(9, /*use_names*/true, /*coal_units*/false), 0);
+        output(format("Gene tree for locus %d after UPGMA:\n") % _gene_index);
+        output(format("  %s\n") % makeNewick(9, /*use_names*/true, /*coal_units*/false));
 #endif
     }
 #endif
@@ -918,8 +919,8 @@ struct negLogLikeDist {
         string gene_name = _data->getSubsetName(_gene_index);
 
         // debugging output
-        // output(format("\nGene forest for locus \"%s\" before UPGMA:\n%s\n") % gene_name % makeNewick(9, /*use_names*/true, /*coalunits*/false), 0);
-        // output(format("  Height before UPGMA = %g\n") % _forest_height, 0);
+        // output(format("\nGene forest for locus \"%s\" before UPGMA:\n%s\n") % gene_name % makeNewick(9, /*use_names*/true, /*coalunits*/false));
+        // output(format("  Height before UPGMA = %g\n") % _forest_height);
                 
         // Get the number of patterns
         unsigned npatterns = _data->getNumPatternsInSubset(_gene_index);
@@ -992,7 +993,7 @@ struct negLogLikeDist {
                 dij[k] = r.first;
                 dij_row_col[k] = make_pair(i,j);
                 
-                // output(format("d[%d] = %.5f (i = %d, j = %d, logL = %.5f)\n") % k % dij[k] % i % j % maximized_log_likelihood, 0);
+                // output(format("d[%d] = %.5f (i = %d, j = %d, logL = %.5f)\n") % k % dij[k] % i % j % maximized_log_likelihood);
             }
         }
 
@@ -1044,7 +1045,7 @@ struct negLogLikeDist {
             row[anc] = i;
                         
             //debugShowLineages();
-            // output(format("\nJoining lineages %d and %d\n") % i % j, 0);
+            // output(format("\nJoining lineages %d and %d\n") % i % j);
 
             anc->_partial = pullPartial();
             calcPartialArray(anc);
@@ -1104,8 +1105,8 @@ struct negLogLikeDist {
         }
         
         // debugging output
-        // output(format("\nGene forest for locus \"%s\" after UPGMA:\n%s\n") % gene_name % makeNewick(9, /*use_names*/true, /*coalunits*/false), 0);
-        // output(format("  Height after UPGMA = %g\n") % _forest_height, 0);
+        // output(format("\nGene forest for locus \"%s\" after UPGMA:\n%s\n") % gene_name % makeNewick(9, /*use_names*/true, /*coalunits*/false));
+        // output(format("  Height after UPGMA = %g\n") % _forest_height);
     }
 #endif
     
@@ -1133,12 +1134,12 @@ struct negLogLikeDist {
         }
         
 #if defined(DEBUG_UPGMA)
-        output("\nIn GeneForest::destroyUPGMA:\n", 0);
-        output(format("  Height before refreshAllHeightsAndPreorders = %g\n") % _forest_height, 0);
+        output("\nIn GeneForest::destroyUPGMA:\n");
+        output(format("  Height before refreshAllHeightsAndPreorders = %g\n") % _forest_height);
         refreshAllHeightsAndPreorders();
-        output(format("  newick = %s\n") % makeNewick(9, /*use_names*/true, /*coalunits*/false), 0);
-        output(format("  Height after refreshAllHeightsAndPreorders = %g\n") % _forest_height, 0);
-        output("\n", 0);
+        output(format("  newick = %s\n") % makeNewick(9, /*use_names*/true, /*coalunits*/false));
+        output(format("  Height after refreshAllHeightsAndPreorders = %g\n") % _forest_height);
+        output("\n");
 #endif
     }
 #endif
@@ -1202,9 +1203,9 @@ struct negLogLikeDist {
             tmp++;
         }
 
-        // output(format("GeneForest::calcLogLikelihood for locus \"%s\"\n") % gene_name, 0);
-        // output(format("  newick = \"%s\"\n") % makeNewick(9, true, false), 0);
-        // output(format("  total_log_likelihood = %.9f\n") % total_log_likelihood, 0);
+        // output(format("GeneForest::calcLogLikelihood for locus \"%s\"\n") % gene_name);
+        // output(format("  newick = \"%s\"\n") % makeNewick(9, true, false));
+        // output(format("  total_log_likelihood = %.9f\n") % total_log_likelihood);
 
 #if defined(UPGMA_WEIGHTS)
         if (!trivial_forest)
@@ -1232,7 +1233,7 @@ struct negLogLikeDist {
         
         unsigned nsteps = G::_ntaxa - 1;
         for (unsigned step = 0; step < nsteps; ++step) {
-            //output(format("  step %d of %d") % step % nsteps, 2);
+            //output(format("  step %d of %d") % step % nsteps);
             bool coalescent_event = false;
             while (!coalescent_event) {
                 auto result = advanceGeneForest(step, 0, true);

@@ -70,16 +70,6 @@ using boost::format;
 
 using namespace proj;
 
-void output(format & fmt, unsigned level) {
-    if (G::_verbosity > 0 && level <= G::_verbosity)
-        cout << str(fmt);
-}
-
-void output(string msg, unsigned level) {
-    if (G::_verbosity > 0 && level <= G::_verbosity)
-        cout << msg;
-}
-
 Lot::SharedPtr                      rng(new Lot());
 StopWatch                           stopwatch;
 PartialStore                        ps;
@@ -88,17 +78,20 @@ PartialStore                        ps;
 int                                 G::_hack_atp_index              = -1;
 #endif
 
+unsigned                            G::_log_include                 = G::LogCateg::NONE;
+
+unsigned long                       G::_npartials_calculated        = 0;
+
 string                              G::_species_tree_ref_file_name  = "";
 string                              G::_gene_trees_ref_file_name    = "";
 
+unsigned                            G::_rnseed                      = 1;
 bool                                G::_debugging                   = false;
 bool                                G::_simulating                  = false;
 
 unsigned                            G::_nthreads                    = 1;
 
 unsigned                            G::_treefile_compression        = 0;
-
-unsigned                            G::_verbosity                   = 3;
 
 unsigned                            G::_nstates                     = 4;
 
@@ -126,6 +119,8 @@ double                              G::_comphet                     = numeric_li
 double                              G::_asrv_shape                  = numeric_limits<double>::infinity();
 
 double                              G::_small_enough                = 0.00001;
+
+unsigned                            G::_nsubpops                    = 1;
 
 unsigned                            G::_nparticles                  = 500;
 unsigned                            G::_nparticles2                 = 0;
@@ -187,33 +182,33 @@ int main(int argc, const char * argv[]) {
         //temporary!
         output("\n", 1);
         if (G::_fossils.size() > 0) {
-            output("\nFossils defined:\n", 1);
+            output("\nFossils defined:\n");
             for (auto f : G::_fossils) {
-                output(format("  \"%s\" | %.5f <-- %.5f --> %.5f\n") % f._name % f._lower % f._age % f._upper, 1);
+                output(format("  \"%s\" | %.5f <-- %.5f --> %.5f\n") % f._name % f._lower % f._age % f._upper);
             }
         } else {
-            output("\nNo fossils were defined\n", 1);
+            output("\nNo fossils were defined\n");
         }
         
         if (G::_taxsets.size() > 0) {
-            output("\nTaxon sets defined:\n", 1);
+            output("\nTaxon sets defined:\n");
             for (auto t : G::_taxsets) {
-                output(format("\n  \"%s\":\n") % t._name, 1);
+                output(format("\n  \"%s\":\n") % t._name);
                 for (auto s : t._species_included) {
-                    output(format("    \"%s\"\n") % s, 1);
+                    output(format("    \"%s\"\n") % s);
                 }
             }
         } else {
-            output("\nNo taxon sets were defined\n", 1);
+            output("\nNo taxon sets were defined\n");
         }
-        output("\n", 1);
+        output("\n");
 #endif
         
         StopWatch sw;
         sw.start();
         proj.run();
         double total_seconds = sw.stop();
-        output(format("\nTotal time: %.5f seconds\n") % total_seconds, 1);
+        output(format("\nTotal time: %.5f seconds\n") % total_seconds);
     }
     catch(std::exception & x) {
         cerr << str(format("Exception: %s\n") % x.what());

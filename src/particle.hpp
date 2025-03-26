@@ -291,8 +291,8 @@ namespace proj {
         
 #if defined(DEBUG_COALLIKE)
         if (!coalinfo_vect.empty()) {
-            output("\nContents of coalinfo_vect:\n", 0);
-            output(format("%12s %6s %s\n") % "height" % "locus" % "species", 0);
+            output("\nContents of coalinfo_vect:\n");
+            output(format("%12s %6s %s\n") % "height" % "locus" % "species", G::LogCateg::DEBUGGING);
             for (auto & cinfo : coalinfo_vect) {
                 double      height = get<0>(cinfo);
                 unsigned     locus = get<1>(cinfo);
@@ -301,7 +301,7 @@ namespace proj {
                 for (auto x : sppvect) {
                     s.push_back(to_string(x));
                 }
-                output(format("%12.9f %6d %s\n") % height % locus % boost::algorithm::join(s, ","), 0);
+                output(format("%12.9f %6d %s\n") % height % locus % boost::algorithm::join(s, ","), G::LogCateg::DEBUGGING);
             }
         }
 #endif
@@ -374,18 +374,18 @@ namespace proj {
         set<G::species_t, bitless> bavail(branches.begin(), branches.end());
         
         if (verbose) {
-            output("\nParticle::calcLogCoalescentLikelihood:\n", 1);
-            output("Key:\n", 1);
-            output("  height:   height above leaf-level of this coalescence or speciation event\n", 1);
-            output("  locus:    0 if speciation event, locus index for coalescence events\n", 1);
-            output("  spp:      species of the two lineages involved in a coalescence/speciation event\n", 1);
-            output("  b:        the species tree branch (i.e. species) to which this event contributes\n", 1);
-            output("  n_jbk:    the number of coalescences for branch b\n", 1);
-            output("  c_jbk:    the sojourn time prior to coalescence k\n", 1);
-            output("  log(r_b): the log of 4/pj, where pj is the ploidy of locus j\n", 1);
-            output("  gamma_b:  cumulative 2*n*(n-1)*c_jbk/pj over all loci for branch b\n", 1);
-            output("  q_b:      the cumulative number of coalescences over all loci for branch b\n", 1);
-            output(format("%12s %12s %25s %12s %12s %12s %12s %12s\n") % "height" % "locus" % "spp" % "b" % "n_jbk" % "c_jbk" % "gamma_b" % "q_b", 1);
+            output("\nParticle::calcLogCoalescentLikelihood:\n");
+            output("Key:\n");
+            output("  height:   height above leaf-level of this coalescence or speciation event\n");
+            output("  locus:    0 if speciation event, locus index for coalescence events\n");
+            output("  spp:      species of the two lineages involved in a coalescence/speciation event\n");
+            output("  b:        the species tree branch (i.e. species) to which this event contributes\n");
+            output("  n_jbk:    the number of coalescences for branch b\n");
+            output("  c_jbk:    the sojourn time prior to coalescence k\n");
+            output("  log(r_b): the log of 4/pj, where pj is the ploidy of locus j\n");
+            output("  gamma_b:  cumulative 2*n*(n-1)*c_jbk/pj over all loci for branch b\n");
+            output("  q_b:      the cumulative number of coalescences over all loci for branch b\n");
+            output(format("%12s %12s %25s %12s %12s %12s %12s %12s\n") % "height" % "locus" % "spp" % "b" % "n_jbk" % "c_jbk" % "gamma_b" % "q_b");
         }
 
         // Walk down coalinfo_vect, accumulating Graham Jones r_b, q_b, and gamma_b
@@ -448,7 +448,7 @@ namespace proj {
                 bavail.insert(banc);
 
                 if (verbose) {
-                    output(format("%12.9f %12d %25s %12s %12s %12s %12s %12s\n") % height % 0 % spp_joined % banc % "-" % "-" % "-" % "-", 1);
+                    output(format("%12.9f %12d %25s %12s %12s %12s %12s %12s\n") % height % 0 % spp_joined % banc % "-" % "-" % "-" % "-");
                 }
             }
             else {
@@ -476,13 +476,13 @@ namespace proj {
                 n_jb[locus][b]--;
 
                 if (verbose) {
-                    output(format("%12.9f %12d %25s %12d %12d %12.9f %12.9f %12d\n") % height % locus_plus_one % spp_joined % b % n_jbk % c_jbk % gamma_b[b] % q_b[b], 1);
+                    output(format("%12.9f %12d %25s %12d %12d %12.9f %12.9f %12d\n") % height % locus_plus_one % spp_joined % b % n_jbk % c_jbk % gamma_b[b] % q_b[b]);
                 }
             }
         }
 
         if (verbose) {
-            output(format("\n%12s %12s %12s %12s %12s %12s\n") % "b" % "q_b" % "log(r_b)" % "gamma_b" % "theta_b" % "logL", 1);
+            output(format("\n%12s %12s %12s %12s %12s %12s\n") % "b" % "q_b" % "log(r_b)" % "gamma_b" % "theta_b" % "logL");
         }
     
         double log_likelihood = 0.0;
@@ -500,14 +500,14 @@ namespace proj {
                 log_likelihood += boost::math::lgamma(alpha + q_b[b]);
                 
                 if (verbose) {
-                    output(format("%12d %12d %12.9f %12.9f %12.9f %12.9f\n") % b % q_b[b] % log_r_b[b] % gamma_b[b] % beta % log_likelihood, 1);
+                    output(format("%12d %12d %12.9f %12.9f %12.9f %12.9f\n") % b % q_b[b] % log_r_b[b] % gamma_b[b] % beta % log_likelihood);
                 }
             }
 
             if (verbose) {
-                output(format("\nalpha = %.9f\n") % alpha, 1);
-                output(format("beta  = %.9f\n") % beta, 1);
-                output(format("log(coalescent likelihood) = %.5f\n") % log_likelihood, 1);
+                output(format("\nalpha = %.9f\n") % alpha);
+                output(format("beta  = %.9f\n") % beta);
+                output(format("log(coalescent likelihood) = %.5f\n") % log_likelihood);
             }
         }
         else {
@@ -528,10 +528,10 @@ namespace proj {
             }
             
             if (verbose) {
-                output(format("\nsum log(r_b) = %.9f\n") % sum_log_rb, 1);
-                output(format("sum q_b      = %d\n") % sum_qb, 1);
-                output(format("sum gamma_b  = %d\n") % sum_gamma_b, 1);
-                output(format("log(coalescent likelihood) = %.5f\n") % log_likelihood, 1);
+                output(format("\nsum log(r_b) = %.9f\n") % sum_log_rb);
+                output(format("sum q_b      = %d\n") % sum_qb);
+                output(format("sum gamma_b  = %d\n") % sum_gamma_b);
+                output(format("log(coalescent likelihood) = %.5f\n") % log_likelihood);
             }
         }
 
@@ -551,38 +551,6 @@ namespace proj {
         }
     }
     
-    //inline void Particle::setLastProposedGene(unsigned g) {
-    //    _last_proposed_gene = g;
-    //}
-
-    //inline unsigned Particle::getLastProposedGene() {
-    //    return _last_proposed_gene;
-    //}
-    
-    //inline void Particle::setLastProposedSpecies(G::species_t s) {
-    //    _last_proposed_spp = s;
-    //}
-
-    //inline G::species_t Particle::getLastProposedSpecies() {
-    //    return _last_proposed_spp;
-    //}
-    
-    //inline void Particle::setLastProposedFirstIndex(unsigned f) {
-    //    _last_proposed_first_index = f;
-    //}
-
-    //inline unsigned Particle::getLastProposedFirstIndex() {
-    //    return _last_proposed_first_index;
-    //}
-    
-    //inline void Particle::setLastProposedSecondIndex(unsigned s) {
-    //  _last_proposed_second_index = s;
-    //}
-    
-    //inline unsigned Particle::getLastProposedSecondIndex() {
-    //    return _last_proposed_second_index;
-    //}
-
     inline PartialStore::partial_t Particle::pullPartial(unsigned gene) {
         assert(gene < _gene_forests.size());
 
@@ -664,8 +632,8 @@ namespace proj {
         
         if (step > 0) {
 #if defined(DEBUG_COALLIKE)
-            output("\nSpecies tree before creating speciation:\n", 0);
-            output(format("  %s\n") % _species_forest.makeNewick(9, true, false), 0);
+            output("\nSpecies tree before creating speciation:\n", G::LogCateg::DEBUGGING);
+            output(format("  %s\n") % _species_forest.makeNewick(9, true, false), G::LogCateg::DEBUGGING);
 #endif
 
             // Create speciation event
@@ -673,8 +641,8 @@ namespace proj {
             _species_forest.speciationEvent(rng, left_spp, right_spp, anc_spp);
             
 #if defined(DEBUG_COALLIKE)
-            output("\nSpecies tree after creating speciation:\n", 0);
-            output(format("  %s\n") % _species_forest.makeNewick(9, true, false), 0);
+            output("\nSpecies tree after creating speciation:\n", G::LogCateg::DEBUGGING);
+            output(format("  %s\n") % _species_forest.makeNewick(9, true, false), G::LogCateg::DEBUGGING);
 #endif
 
             // Let sppinfo_vect reflect current state of species forest
@@ -718,16 +686,16 @@ namespace proj {
         num_species_tree_lineages = _species_forest.getNumLineages();
         if (num_species_tree_lineages == 2) {
 #if defined(DEBUG_COALLIKE)
-            output("\nSpecies tree before creating FINAL speciation:\n", 0);
-            output(format("  %s\n") % _species_forest.makeNewick(9, true, false), 0);
+            output("\nSpecies tree before creating FINAL speciation:\n", G::LogCateg::DEBUGGING);
+            output(format("  %s\n") % _species_forest.makeNewick(9, true, false), G::LogCateg::DEBUGGING);
 #endif
             // Create final speciation event
             G::species_t left_spp, right_spp, anc_spp;
             _species_forest.speciationEvent(rng, left_spp, right_spp, anc_spp);
             
 #if defined(DEBUG_COALLIKE)
-            output("\nSpecies tree after creating FINAL speciation:\n", 0);
-            output(format("  %s\n") % _species_forest.makeNewick(9, true, false), 0);
+            output("\nSpecies tree after creating FINAL speciation:\n", G::LogCateg::DEBUGGING);
+            output(format("  %s\n") % _species_forest.makeNewick(9, true, false), G::LogCateg::DEBUGGING);
 #endif
             // Let sppinfo_vect reflect current state of species forest
             //sppinfo_vect.clear();
@@ -943,12 +911,12 @@ namespace proj {
             Split s1 = first_node->getSplit();
             Split s2 = second_node->getSplit();
             
-            //output(format("s1 = %s\n") % s1.createPatternRepresentation(), 0);
-            //output(format("s2 = %s\n") % s2.createPatternRepresentation(), 0);
-            //output("_dmatrix_rows:\n", 0);
+            //output(format("s1 = %s\n") % s1.createPatternRepresentation());
+            //output(format("s2 = %s\n") % s2.createPatternRepresentation());
+            //output("_dmatrix_rows:\n");
             //unsigned z = 0;
             //for (auto s : _dmatrix_rows) {
-            //    output(format("%6d = %s\n") % z++ % s.createPatternRepresentation(), 0);
+            //    output(format("%6d = %s\n") % z++ % s.createPatternRepresentation());
             //}
             
             G::mergeDMatrixPair(gf._dmatrix_rows, gf._dmatrix, s1, s2);
@@ -957,8 +925,8 @@ namespace proj {
             double prevLogL = gf.getPrevLogLikelihood();
             log_weight = logL - prevLogL;
 
-            //output(format("\nLocus %d gene forest (logL = %g, prevLogL = %g, logw = %g):\n") % locus % logL % prevLogL % log_weight, 0);
-            //output(format("%s\n") % gf.makeNewick(9, true, false), 0);
+            //output(format("\nLocus %d gene forest (logL = %g, prevLogL = %g, logw = %g):\n") % locus % logL % prevLogL % log_weight);
+            //output(format("%s\n") % gf.makeNewick(9, true, false));
 #else
             double logL = gf.calcLogLikelihood();
             double prevLogL = gf.getPrevLogLikelihood();

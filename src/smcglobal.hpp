@@ -1,13 +1,28 @@
 #pragma once
 
-extern void output(string msg, unsigned level);
-extern void output(format & fmt, unsigned level);
 extern proj::Lot::SharedPtr rng;
 
 namespace proj {
 
     struct G {
         typedef unsigned long           species_t;
+        
+        enum LogCateg : unsigned {
+            NONE           = 0,
+            INFO           = 1 << 1,
+            VERBOSE        = 1 << 2,
+            DEBUGGING      = 1 << 3,
+            SECONDLEVEL    = 1 << 4
+        };
+
+        //https://stackoverflow.com/questions/24297992/is-it-possible-to-make-a-scoped-enumeration-enum-class-contextually-converti
+        //explicit operator bool() const {
+        //    return *this != LogCateg::NONE;
+        //}
+
+        static unsigned                 _log_include;
+        
+        static unsigned long            _npartials_calculated;
         
 #if defined(HACK_FOR_SNAKE_ATP)
         static int                      _hack_atp_index;
@@ -23,13 +38,13 @@ namespace proj {
         
         static unsigned                 _treefile_compression;
         
+        static unsigned                 _rnseed;
+
         static bool                     _simulating;
         static bool                     _debugging;
         
         static unsigned                 _nthreads;
         
-        static unsigned                 _verbosity;
-
         static unsigned                 _nstates;
         
         static unsigned                 _ntaxa;
@@ -65,6 +80,8 @@ namespace proj {
         static unsigned                 _nkept;
         static unsigned                 _nkept2;
         
+        static unsigned                 _nsubpops;
+
 #if defined(UPGMA_WEIGHTS)
         static vector<vector<double> > _dmatrix;
         static vector<Split>           _dmatrix_rows;
@@ -89,9 +106,31 @@ namespace proj {
 #if defined(UPGMA_WEIGHTS)
         static void     mergeDMatrixPair(vector<Split> & dmatrows, vector<double> & dmatrix, Split & s1, Split & s2);
         //static void     copyDMatrixTo(vector<Split> & dmatrows, vector<vector<double> > & dmatrix);
-        static void     debugShowDistanceMatrix(const vector<Split> rows, const vector<double> & d);
+        static void     debugShowDistanceMatrix(const vector<Split> rows, const vector<double> & d, unsigned locus);
 #endif
     };
+    
+    void output(format & fmt, unsigned level = G::LogCateg::INFO) {
+        if (G::_log_include & level)
+            cout << str(fmt);
+    }
+
+    void output(string msg, unsigned level = G::LogCateg::INFO) {
+        if (G::_log_include & level)
+            cout << msg;
+    }
+
+    G::LogCateg operator|(G::LogCateg a, G::LogCateg b) {
+        return static_cast<G::LogCateg>(static_cast<unsigned>(a) | static_cast<unsigned>(b));
+    }
+
+    void operator|=(G::LogCateg a, G::LogCateg b) {
+        a = static_cast<G::LogCateg>(static_cast<unsigned>(a) | static_cast<unsigned>(b));
+    }
+    
+    G::LogCateg operator&(G::LogCateg a, G::LogCateg b) {
+        return static_cast<G::LogCateg>(static_cast<unsigned>(a) & static_cast<unsigned>(b));
+    }
     
     inline string G::inventName(unsigned k, bool lower_case) {
         // If   0 <= k < 26, returns A, B, ..., Z,
@@ -126,11 +165,11 @@ namespace proj {
     }
 
     inline void G::showSettings() {
-        output(format("Speciation rate (lambda): %.9f\n") % G::_lambda, 2);
-        output(format("Coalescent parameter (theta): %.9f\n") % G::_theta, 2);
-        output(format("Number of 1st-level particles: %d\n") % G::_nparticles, 2);
-        output(format("Number of 1st-level particles kept: %d\n") % G::_nkept, 2);
-        output(format("Number of 2nd-level particles: %d\n") % G::_nparticles2, 2);
+        output(format("Speciation rate (lambda): %.9f\n") % G::_lambda);
+        output(format("Coalescent parameter (theta): %.9f\n") % G::_theta);
+        output(format("Number of 1st-level particles: %d\n") % G::_nparticles);
+        output(format("Number of 1st-level particles kept: %d\n") % G::_nkept);
+        output(format("Number of 2nd-level particles: %d\n") % G::_nparticles2);
     }
 
     inline double G::inverseGammaVariate(double shape, double rate, Lot::SharedPtr lot) {
@@ -171,7 +210,7 @@ namespace proj {
         double log_sum_values = max_logv + log(factored_sum);
         return log_sum_values;
     }
-    
+
     inline string G::unsignedVectToString(const vector<unsigned> & v) {
         ostringstream oss;
         
@@ -366,10 +405,6 @@ namespace proj {
             }
         }
 
-        // //temporary!
-        // output("\nDistance matrix (intermediate state):", 0);
-        // G::debugShowDistanceMatrix(dmatrows, dmatrix);
-
         // Example (5x5 distance matrix):
         //   dmatrix [d10, d20, d21, d30, d31, d32, d40, d41, d42, d43]
         //   number of elements: 5*4/2 = 10
@@ -470,10 +505,6 @@ namespace proj {
         // Replace distance matrix with new one
         dmatrix = dmat2;
         dmatrows = drows2;
-        
-        // //temporary!
-        // output("\nDistance matrix (final):", 0);
-        // G::debugShowDistanceMatrix(dmatrows, dmatrix);
     }
 #endif
 
@@ -491,7 +522,7 @@ namespace proj {
 //#endif
  
 #if defined(UPGMA_WEIGHTS)
-    inline void G::debugShowDistanceMatrix(const vector<Split> rows, const vector<double> & d) {
+    inline void G::debugShowDistanceMatrix(const vector<Split> rows, const vector<double> & d, unsigned locus) {
         // d is a 1-dimensional vector that stores the lower triangle of a square matrix
         // (not including diagonals) in row order
         //
@@ -529,35 +560,35 @@ namespace proj {
         double dbln = (1.0 + sqrt(1.0 + 8.0*x))/2.0;
         unsigned n = (unsigned)dbln;
         
-        output(format("\nDistance matrix (%d x %d):\n") % n % n, 0);
+        output(format("\nJC distance matrix (%d x %d) for locus %d") % n % n % locus, G::LogCateg::DEBUGGING);
 
         // Column headers
-        output(format("%12d") % " ", 0);
+        output(format("%12d") % " ", G::LogCateg::DEBUGGING);
         for (unsigned j = 0; j < n; j++) {
             string s = rows[j].createPatternRepresentation();
-            output(format("%12s") % s, 0);
+            output(format("%12s") % s, G::LogCateg::DEBUGGING);
         }
-        output("\n", 0);
+        output("\n", G::LogCateg::DEBUGGING);
         
         unsigned k = 0;
         for (unsigned i = 0; i < n; i++) {
             string s = rows[i].createPatternRepresentation();
-            output(format("%12s") % s, 0);
+            output(format("%12s") % s, G::LogCateg::DEBUGGING);
             for (unsigned j = 0; j < n; j++) {
                 if (j < i) {
                     double v = d[k++];
                     if (v == G::_infinity)
-                        output("         inf", 0);
+                        output("         inf", G::LogCateg::DEBUGGING);
                     else
-                        output(format("%12.5f") % v, 0);
+                        output(format("%12.5f") % v, G::LogCateg::DEBUGGING);
                 }
                 else {
-                    output("         inf", 0);
+                    output("         inf", G::LogCateg::DEBUGGING);
                 }
             }
-            output("\n", 0);
+            output("\n", G::LogCateg::DEBUGGING);
         }
-        output("\n", 0);
+        output("\n", G::LogCateg::DEBUGGING);
     }
 #endif
 
