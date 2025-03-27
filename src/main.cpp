@@ -44,6 +44,10 @@
 using namespace std;
 using boost::format;
 
+// Include this header to enable macros that Valgrind recognizes
+// but which are ignored if Valgrind is not being used
+#include "valgrind.h"
+
 #include "conditionals.hpp"
 #if defined(FOSSILS)
 #   include <codecvt>
@@ -204,6 +208,8 @@ int main(int argc, const char * argv[]) {
         output("\n");
 #endif
         
+        output(format("sizeof(unsigned) = %d\nsizeof(double) = %d\n") % sizeof(unsigned) % sizeof(double), G::LogCateg::INFO);
+
         StopWatch sw;
         sw.start();
         proj.run();

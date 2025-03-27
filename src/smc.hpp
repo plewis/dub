@@ -206,6 +206,9 @@ namespace proj {
             unsigned locus = G::_nloci;
             
             if (isJointMode()) {
+                VALGRIND_PRINTF("~~> beginning 1st-level step %d", step);
+                VALGRIND_MONITOR_COMMAND("detailed_snapshot stepsnaps.txt");
+                
 #if defined(RANDOM_LOCUS_ORDERING)
 #               error random locus ordering not yet implemented except for sim
 #else
@@ -297,7 +300,7 @@ namespace proj {
             //          \/
             //           2   +     1   +    0    = k*(k-1)/2
             // ---------------------------------------------
-            min_partials_needed = (k + k*(k-1)/2)*G::_nparticles*G::_nloci;
+            min_partials_needed = 0.5*k*(k + 1)*G::_nparticles*G::_nloci;
 #else
             min_partials_needed = k*G::_nparticles*G::_nloci;
 #endif
