@@ -394,11 +394,15 @@ namespace proj {
             unsigned             locus_plus_one   = get<1>(cinfo);
             int                  locus   = locus_plus_one - 1;
             
-            ostringstream oss;
             vector<G::species_t> & b_vect = get<2>(cinfo);
-            copy(b_vect.begin(), b_vect.end(), ostream_iterator<G::species_t>(oss, " "));
-            string spp_joined = oss.str();
-            boost::algorithm::trim_right(spp_joined);
+
+            string spp_joined;
+            if (verbose) {
+                ostringstream oss;
+                copy(b_vect.begin(), b_vect.end(), ostream_iterator<G::species_t>(oss, " "));
+                string spp_joined = oss.str();
+                boost::algorithm::trim_right(spp_joined);
+            }
             
             G::species_t banc = 0;
             for (auto b : b_vect)

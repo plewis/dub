@@ -128,11 +128,13 @@ namespace proj {
         _particle = nullptr;
         
         // Reset partial pointers for all nodes to decrement
-        // their use counts. Note that any given partial may
-        // still be being used in some other particle, so we
-        // do not want to stow the partial back to PartialStore
-        // as that would invalidate the partial everywhere.
+        // their use counts.
         for (auto & nd : _nodes) {
+            if (nd._left_child && nd._partial && nd._partial.use_count() == 1) {
+                // Partial is not being used by any other node, so it is
+                // safe to stow it in PartialStore for reuse later
+                ps.putPartial(_gene_index, nd._partial);
+            }
             nd._partial.reset();
         }
         

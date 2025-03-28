@@ -206,8 +206,8 @@ namespace proj {
             unsigned locus = G::_nloci;
             
             if (isJointMode()) {
-                VALGRIND_PRINTF("~~> beginning 1st-level step %d", step);
-                VALGRIND_MONITOR_COMMAND("detailed_snapshot stepsnaps.txt");
+                VALGRIND_PRINTF("~~> beginning 1st-level step %d at time %d\n", step, clock());
+                VALGRIND_MONITOR_COMMAND(str(format("detailed_snapshot stepsnaps-%d.txt") % step).c_str());
                 
 #if defined(RANDOM_LOCUS_ORDERING)
 #               error random locus ordering not yet implemented except for sim

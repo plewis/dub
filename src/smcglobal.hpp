@@ -361,7 +361,7 @@ namespace proj {
         //   d30  d31  d32  d33
         //
         // Only the lower triangle (not including diagonals) is used,
-        // and elements are storwd by row.
+        // and elements are stored by row.
         //
         // The index k of the (i,j)th element, where i > j, can be
         // obtained as follows:
