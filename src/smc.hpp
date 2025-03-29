@@ -206,8 +206,6 @@ namespace proj {
             unsigned locus = G::_nloci;
             
             if (isJointMode()) {
-                VALGRIND_PRINTF("~~> beginning 1st-level step %d at time %d\n", step, clock());
-                VALGRIND_MONITOR_COMMAND(str(format("detailed_snapshot stepsnaps-%d.txt") % step).c_str());
                 
 #if defined(RANDOM_LOCUS_ORDERING)
 #               error random locus ordering not yet implemented except for sim
@@ -251,10 +249,18 @@ namespace proj {
             double avg_per_step = cum_secs/(step + 1);
             unsigned steps_to_go = _nsteps - (step + 1);
             double wait = avg_per_step*steps_to_go;
-                    
+
+            if (!isConditionalMode()) {
+                VALGRIND_PRINTF("~~> post 1st-level step %d at time %d\n", step, (unsigned)clock());
+                VALGRIND_MONITOR_COMMAND(str(format("detailed_snapshot stepsnaps-%d.txt") % step).c_str());
+                //ps.debugReport();
+            }
+
             unsigned verbosity = isConditionalMode() ? G::LogCateg::SECONDLEVEL : G::LogCateg::INFO;
             output(format("%12d %12.3f %24.6f %12.3f %12.3f\n") % (step+1) % ess % _log_marg_like % secs % wait, verbosity);
         }
+
+        ps.debugReport();
     }
     
     inline void SMC::summarize() {
@@ -447,6 +453,12 @@ namespace proj {
             unsigned which = (unsigned)distance(probs.begin(), it);
             _counts[which]++;
         }
+        
+        //temporary!
+        string countstr = "";
+        for (unsigned i = 0; i < _counts.size(); i++)
+            countstr += to_string(_counts[i]) + " ";
+        output(format("\ncounts: %s\n") % countstr, G::LogCateg::DEBUGGING);
                         
         // Store indexes of particles with non-zero counts in vector nonzeros
         vector<unsigned> zeros;

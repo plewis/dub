@@ -20,3 +20,5 @@
 
 //#define FOSSILS
 
+#define REUSE_PARTIALS
+

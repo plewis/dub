@@ -126,18 +126,7 @@ namespace proj {
     
     inline void GeneForest::clear() {
         _particle = nullptr;
-        
-        // Reset partial pointers for all nodes to decrement
-        // their use counts.
-        for (auto & nd : _nodes) {
-            if (nd._left_child && nd._partial && nd._partial.use_count() == 1) {
-                // Partial is not being used by any other node, so it is
-                // safe to stow it in PartialStore for reuse later
-                ps.putPartial(_gene_index, nd._partial);
-            }
-            nd._partial.reset();
-        }
-        
+        stowAllPartials();
         Forest::clear();
         _lineages_within_species.clear();
     }
@@ -1126,6 +1115,7 @@ struct negLogLikeDist {
             lnode->_parent = nullptr;
             rnode->_parent = nullptr;
             addTwoRemoveOne(_lineages, lnode, rnode, anc);
+            stowPartial(anc);
             stowNode(anc);
             _upgma_additions.pop();
         }
@@ -1307,24 +1297,26 @@ struct negLogLikeDist {
     }
 
     inline void GeneForest::stowPartial(Node * nd) {
-        assert(nd);
-        assert(nd->_partial);
         assert(_gene_index >= 0);
-        ps.putPartial(_gene_index, nd->_partial);
 
-        // Decrement shared pointer reference count
-        nd->_partial.reset();
+        if (nd && nd->_left_child && nd->_partial) {
+            // Nothing to do if nd or nd->_partial is null
+            // Only internal partials are every reset/stowed;
+            // leaf partials are calculated at the beginning
+            // and never changed.
+            if (nd->_partial.use_count() == 1) {
+                // Partial is not being used by any other node, so it is
+                // safe to stow it in PartialStore for reuse later
+                ps.putPartial(_gene_index, nd->_partial);
+            }
+        
+            nd->_partial.reset();
+        }
     }
-
+    
     inline void GeneForest::stowAllPartials() {
         for (auto & nd : _nodes) {
-            // Stow partials belonging to internal nodes
-            // Partials for leaf nodes should be reset but not stowed
-            // because they are copies of _leaf_partials and were not
-            // obtained via PartialStore::getPartial.
-            if (nd._left_child && nd._partial) {
-                stowPartial(&nd);
-            }
+            stowPartial(&nd);
             nd._partial.reset();
         }
     }

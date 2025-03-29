@@ -101,7 +101,7 @@ namespace proj {
         vector<string> fossils;
 #endif
         bool do_compress;
-        bool dummy_bool;
+        //bool dummy_bool;
         int dummy_int;
         variables_map vm;
         options_description desc("Allowed options");
@@ -556,7 +556,7 @@ namespace proj {
         
         // Inform PartialStore of number of genes so that it can allocate
         // its _nelements and _storage vectors
-        ps.setNGenes(nsubsets);
+        ps.setNLoci(nsubsets);
         
         for (unsigned subset = 0; subset < nsubsets; subset++) {
             // Set length of partials for gene g
@@ -959,7 +959,7 @@ namespace proj {
         
         // Inform PartialStore of number of genes so that it can allocate
         // its _nelements and _storage vectors
-        ps.setNGenes(G::_nloci);
+        ps.setNLoci(G::_nloci);
 
         // Simulate sequence data
         unsigned starting_site = 0;

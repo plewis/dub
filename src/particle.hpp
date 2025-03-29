@@ -80,8 +80,6 @@ namespace proj {
             void copyParticleFrom(const Particle & other);
             void operator=(const Particle & other);
             
-            void stowAllPartials();
-
             void setLastProposedGene(unsigned g);
             unsigned getLastProposedGene();
             
@@ -548,13 +546,7 @@ namespace proj {
             gf.computeAllPartials();
         }
     }
-    
-    inline void Particle::stowAllPartials() {
-        for (auto & gf : _gene_forests) {
-            gf.stowAllPartials();
-        }
-    }
-    
+        
     inline PartialStore::partial_t Particle::pullPartial(unsigned gene) {
         assert(gene < _gene_forests.size());
 
