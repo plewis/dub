@@ -630,20 +630,28 @@ namespace proj {
         assert(!new_nd->_left_child->_right_sib->_right_sib);
         assert(new_nd->_left_child->_partial);
         assert(new_nd->_left_child->_right_sib->_partial);
-        
+                
         auto & parent_partial_array = new_nd->_partial->_v;
         unsigned npatterns = _data->getNumPatternsInSubset(_gene_index);
         for (Node * child = new_nd->_left_child; child; child = child->_right_sib) {
             assert(child->_partial);
             auto & child_partial_array = child->_partial->_v;
 
+#if defined(PRECALC_JC_TRANSITION_PROBS)
+            double pr_same = calcTransitionProbability(0, 0, child->_edge_length);
+            double pr_diff = calcTransitionProbability(0, 1, child->_edge_length);
+#endif
             for (unsigned p = 0; p < npatterns; p++) {
                 //unsigned pp = first_pattern + p;
 
                 for (unsigned s = 0; s < G::_nstates; s++) {
                     double sum_over_child_states = 0.0;
                     for (unsigned s_child = 0; s_child < G::_nstates; s_child++) {
+#if defined(PRECALC_JC_TRANSITION_PROBS)
+                        double child_transition_prob = (s == s_child ? pr_same : pr_diff);
+#else
                         double child_transition_prob = calcTransitionProbability(s, s_child, child->_edge_length);
+#endif
                         double child_partial = child_partial_array[p*G::_nstates + s_child];
                                                 
                         sum_over_child_states += child_transition_prob * child_partial;

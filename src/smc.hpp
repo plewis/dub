@@ -422,7 +422,11 @@ namespace proj {
         
         vector<double> log_weights(_nparticles, 0.0);
         for (unsigned i = 0; i < _particles.size(); i++) {
+#if defined(USE_HEATING)
+            log_weights[i] = _particles[i].getPrevLogWeight() + G::_heating_power*_particles[i].getLogWeight();
+#else
             log_weights[i] = _particles[i].getLogWeight();
+#endif
         }
                         
         // Normalize log_weights to create discrete probability distribution
@@ -439,12 +443,44 @@ namespace proj {
         // Compute effective sample size
         double ess = computeEffectiveSampleSize(probs);
         
-        // Compute cumulative probabilities
-        partial_sum(probs.begin(), probs.end(), probs.begin());
-        
         // Zero vector of counts storing number of darts hitting each particle
         _counts.assign(_nparticles, 0);
                 
+        // Store indexes of particles with non-zero counts in vector nonzeros
+        vector<unsigned> zeros;
+        zeros.reserve(_nparticles);
+        vector<unsigned> nonzeros;
+        nonzeros.reserve(_nparticles);
+
+#if defined(SYSTEMATIC_FILTERING)
+        assert(probs.size() == _nparticles);
+        double cump = probs[0];
+        double n = _nparticles;
+        double delta = rng->uniform()/n;
+        unsigned c = (unsigned)(floor(1.0 + n*(cump - delta)));
+        if (c > 0)
+            nonzeros.push_back(0);
+        else
+            zeros.push_back(0);
+        _counts[0] = c;
+        unsigned prev_cum_count = c;
+        for (unsigned i = 1; i < _nparticles; ++i) {
+            cump += probs[i];
+            double cum_count = floor(1.0 + n*(cump - delta));
+            if (cum_count > n)
+                cum_count = n;
+            unsigned c = (unsigned)cum_count - prev_cum_count;
+            if (c > 0)
+                nonzeros.push_back(i);
+            else
+                zeros.push_back(i);
+            _counts[i] = c;
+            prev_cum_count = cum_count;
+        }
+#else
+        // Compute cumulative probabilities
+        partial_sum(probs.begin(), probs.end(), probs.begin());
+        
         // Throw _nparticles darts
         for (unsigned i = 0; i < _nparticles; ++i) {
             double u = ::rng->uniform();
@@ -454,16 +490,14 @@ namespace proj {
             _counts[which]++;
         }
         
-        //temporary!
-        string countstr = "";
-        for (unsigned i = 0; i < _counts.size(); i++)
-            countstr += to_string(_counts[i]) + " ";
-        output(format("\ncounts: %s\n") % countstr, G::LogCateg::DEBUGGING);
+        // //temporary!
+        // string countstr = "";
+        // for (unsigned i = 0; i < _counts.size(); i++)
+        //     countstr += to_string(_counts[i]) + " ";
+        // output(format("\ncounts: %s\n") % countstr, G::LogCateg::DEBUGGING);
                         
-        // Store indexes of particles with non-zero counts in vector nonzeros
-        vector<unsigned> zeros;
-        vector<unsigned> nonzeros;
         classifyCounts(zeros, nonzeros, _counts);
+#endif
         
         // Example of following code that replaces dead
         // particles with copies of surviving particles:
@@ -572,6 +606,10 @@ namespace proj {
             // Compute cumulative probabilities
             partial_sum(probs.begin(), probs.end(), probs.begin());
             
+#if defined(SYSTEMATIC_FILTERING)
+            // This section needs to be written
+            assert(false);
+#else
             // Throw _nparticles darts
             for (unsigned i = 0; i < nparticles_per_subpop; ++i) {
                 double u = ::rng->uniform();
@@ -580,6 +618,7 @@ namespace proj {
                 unsigned which = _nsubpops*subpop + (unsigned)distance(probs.begin(), it);
                 _counts[which]++;
             }
+#endif
                             
             first = last;
         }

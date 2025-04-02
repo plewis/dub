@@ -12,7 +12,9 @@ namespace proj {
             INFO           = 1 << 1,
             VERBOSE        = 1 << 2,
             DEBUGGING      = 1 << 3,
-            SECONDLEVEL    = 1 << 4
+            SECONDLEVEL    = 1 << 4,
+            CONDITIONALS   = 1 << 5,
+            ALWAYS         = 1 << 6
         };
 
         //https://stackoverflow.com/questions/24297992/is-it-possible-to-make-a-scoped-enumeration-enum-class-contextually-converti
@@ -23,6 +25,10 @@ namespace proj {
         static unsigned                 _log_include;
         
         static unsigned long            _npartials_calculated;
+        
+#if defined(USE_HEATING)
+        static double                   _heating_power;
+#endif
         
 #if defined(HACK_FOR_SNAKE_ATP)
         static int                      _hack_atp_index;
@@ -111,12 +117,12 @@ namespace proj {
     };
     
     void output(format & fmt, unsigned level = G::LogCateg::INFO) {
-        if (G::_log_include & level)
+        if ((G::_log_include & level) || (level & G::LogCateg::ALWAYS))
             cout << str(fmt);
     }
 
     void output(string msg, unsigned level = G::LogCateg::INFO) {
-        if (G::_log_include & level)
+        if ((G::_log_include & level) || (level & G::LogCateg::ALWAYS))
             cout << msg;
     }
 
@@ -560,35 +566,35 @@ namespace proj {
         double dbln = (1.0 + sqrt(1.0 + 8.0*x))/2.0;
         unsigned n = (unsigned)dbln;
         
-        output(format("\nJC distance matrix (%d x %d) for locus %d") % n % n % locus, G::LogCateg::DEBUGGING);
+        OUTPUT_DEBUG(format("\nJC distance matrix (%d x %d) for locus %d\n") % n % n % locus);
 
         // Column headers
-        output(format("%12d") % " ", G::LogCateg::DEBUGGING);
+        OUTPUT_DEBUG(format("%12d") % " ");
         for (unsigned j = 0; j < n; j++) {
             string s = rows[j].createPatternRepresentation();
-            output(format("%12s") % s, G::LogCateg::DEBUGGING);
+            OUTPUT_DEBUG(format("%12s") % s);
         }
-        output("\n", G::LogCateg::DEBUGGING);
+        OUTPUT_DEBUG("\n");
         
         unsigned k = 0;
         for (unsigned i = 0; i < n; i++) {
             string s = rows[i].createPatternRepresentation();
-            output(format("%12s") % s, G::LogCateg::DEBUGGING);
+            OUTPUT_DEBUG(format("%12s") % s);
             for (unsigned j = 0; j < n; j++) {
                 if (j < i) {
                     double v = d[k++];
                     if (v == G::_infinity)
-                        output("         inf", G::LogCateg::DEBUGGING);
+                        OUTPUT_DEBUG("         inf");
                     else
-                        output(format("%12.5f") % v, G::LogCateg::DEBUGGING);
+                        OUTPUT_DEBUG(format("%12.5f") % v);
                 }
                 else {
-                    output("         inf", G::LogCateg::DEBUGGING);
+                    OUTPUT_DEBUG("         inf");
                 }
             }
-            output("\n", G::LogCateg::DEBUGGING);
+            OUTPUT_DEBUG("\n");
         }
-        output("\n", G::LogCateg::DEBUGGING);
+        OUTPUT_DEBUG("\n");
     }
 #endif
 

@@ -21,4 +21,9 @@
 //#define FOSSILS
 
 #define REUSE_PARTIALS
+//#define USE_HEATING
+#define PRECALC_JC_TRANSITION_PROBS
+//#define SYSTEMATIC_FILTERING
 
+//#define OUTPUT_DEBUG(a) output((a), G::LogCateg::INFO)
+#define OUTPUT_DEBUG(a)

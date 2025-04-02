@@ -135,6 +135,9 @@ namespace proj {
         ("simcomphet",  value(&G::_comphet)->default_value(G::_infinity), "Dirichlet parameter governing compositional heterogeneity (default value results in compositional homogeneity (used only if startmode is 'sim')")
         ("rnseed",  value(&G::_rnseed)->default_value(13579), "pseudorandom number seed")
         ("theta",  value(&G::_theta)->default_value(0.05), "coalescent parameter assumed for gene trees")
+#if defined(USE_HEATING)
+        ("heatingpower",  value(&G::_heating_power)->default_value(1.0), "power to which weights are raised (default 1.0 means no heating)")
+#endif
         ("nthreads",  value(&dummy_int)->default_value(3), "this option is not used in this version of the program")
         ;
         
@@ -180,6 +183,15 @@ namespace proj {
                 throw XProj(str(format("nsubpops (%d) must divide evenly into nparticles (%d)") % G::_nsubpops % G::_nparticles));
         }
         
+#if defined(USE_HEATING)
+        // If user specified --heatingpower on command line, check to
+        // ensure that heatingpower is between 0.0 and 1.0 (inclusive)
+        if (vm.count("heatingpower") > 0) {
+            if (G::_heating_power < 0.0 || G::_heating_power > 1.0)
+                throw XProj(str(format("heatingpower should be in range [0.0, 1.0] but you specified (%g)") % G::_heating_power));
+        }
+#endif
+        
         // If user specified --log on command line, set G::_log_includes
         // according to the values specified
         if (vm.count("log") > 0) {
@@ -193,6 +205,8 @@ namespace proj {
                     G::_log_include |= G::LogCateg::SECONDLEVEL;
                 else if (s == "DEBUGGING" || s == "debugging" || s == "Debugging")
                     G::_log_include |= G::LogCateg::DEBUGGING;
+                else if (s == "CONDITIONALS" || s == "conditionals" || s == "Conditionals")
+                    G::_log_include |= G::LogCateg::CONDITIONALS;
                 else
                     throw XProj(str(format("unrecognized log category \"%s\"") % s));
             }
@@ -534,7 +548,7 @@ namespace proj {
                 G::_dmatrix[subset][k] = jcdist;
             }
             
-            //G::debugShowDistanceMatrix(G::_dmatrix_rows, G::_dmatrix[subset], subset);
+            G::debugShowDistanceMatrix(G::_dmatrix_rows, G::_dmatrix[subset], subset);
             
         }   // subset loop
         

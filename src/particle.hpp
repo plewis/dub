@@ -52,6 +52,7 @@ namespace proj {
             double priorPrior(unsigned step, unsigned locus, double total_rate);
             
             double getLogWeight() const {return _log_weight;}
+            double getPrevLogWeight() const {return _prev_log_weight;}
             
             //Lot::SharedPtr getLot() const {return _lot;}
             //void setSeed(unsigned seed) const {_lot->setSeed(seed);}
@@ -115,6 +116,7 @@ namespace proj {
             mutable double              _prev_log_coal_like;
 
             mutable double              _log_weight;
+            mutable double              _prev_log_weight;
             
             // Even though a shared pointer, _lot is a private random number
             // generator not shared with any other particle and has nothing to
@@ -149,6 +151,7 @@ namespace proj {
         _log_coal_like = 0.0;
         _prev_log_coal_like = 0.0;
         _log_weight = 0.0;
+        _prev_log_weight = 0.0;
         _gene_forests.clear();
         _species_forest.clear();
     }
@@ -751,6 +754,7 @@ namespace proj {
 #else
         calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/true, /*verbose*/false);
 #endif
+        _prev_log_weight = _log_weight;
         _log_weight = _log_coal_like - _prev_log_coal_like + log_weight_factor;
 
         resetPrevLogCoalLike();
@@ -980,6 +984,7 @@ namespace proj {
             // Forests save delta to allow reversion
             _gene_forests[locus].advanceAllLineagesBy(delta);
 
+            _prev_log_weight = _log_weight;
             _log_weight = priorPrior(step, locus, total_rate);
         }
         
@@ -1066,6 +1071,7 @@ namespace proj {
         _log_coal_like      = other._log_coal_like;
         _prev_log_coal_like = other._prev_log_coal_like;
         _log_weight         = other._log_weight;
+        _prev_log_weight    = other._prev_log_weight;
         
         _species_tuples     = other._species_tuples;        
     }

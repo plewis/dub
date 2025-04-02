@@ -86,6 +86,10 @@ unsigned                            G::_log_include                 = G::LogCate
 
 unsigned long                       G::_npartials_calculated        = 0;
 
+#if defined(USE_HEATING)
+double                              G::_heating_power               = 1.0;
+#endif
+
 string                              G::_species_tree_ref_file_name  = "";
 string                              G::_gene_trees_ref_file_name    = "";
 
@@ -177,6 +181,30 @@ GeneticCode::genetic_code_definitions_t GeneticCode::_definitions = {
 
 int main(int argc, const char * argv[]) {
 
+#if defined(SYSTEMATIC_FILTERING)
+    output("SYSTEMATIC_FILTERING", G::LogCateg::CONDITIONALS);
+#endif
+
+#if defined(PRECALC_JC_TRANSITION_PROBS)
+    output("PRECALC_JC_TRANSITION_PROBS", G::LogCateg::CONDITIONALS);
+#endif
+
+#if defined(REUSE_PARTIALS)
+    output("REUSE_PARTIALS", G::LogCateg::CONDITIONALS);
+#endif
+
+#if defined(USE_HEATING)
+    output("USE_HEATING", G::LogCateg::CONDITIONALS);
+#endif
+
+#if defined(UPGMA_WEIGHTS)
+    output("UPGMA_WEIGHTS", G::LogCateg::CONDITIONALS);
+#endif
+
+#if defined(RANDOM_LOCUS_ORDERING)
+    output("RANDOM_LOCUS_ORDERING", G::LogCateg::CONDITIONALS);
+#endif
+
     Proj proj;
     bool normal_termination = true;
     try {
@@ -214,7 +242,7 @@ int main(int argc, const char * argv[]) {
         sw.start();
         proj.run();
         double total_seconds = sw.stop();
-        output(format("\nTotal time: %.5f seconds\n") % total_seconds);
+        output(format("\nTotal time: %.5f seconds\n") % total_seconds, G::LogCateg::ALWAYS);
     }
     catch(std::exception & x) {
         cerr << str(format("Exception: %s\n") % x.what());
