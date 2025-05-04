@@ -34,7 +34,11 @@ namespace proj {
             void                            outputGeneTreesToFile(string fn, const vector<string> & newicks) const;
             void                            outputNexusTreefile(string fn, const vector<string> & newicks) const;
             void                            outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric, const vector<string> & newick_gene_trees_numeric);
+#if defined(LAZY_COPYING)
+            void                            outputTrees(SpeciesForest & sf, vector<GeneForest::SharedPtr> & gfpvect);
+#else
             void                            outputTrees(SpeciesForest & sf, vector<GeneForest> & gfvect);
+#endif
             void                            simulateTrees(Particle & particle);
             void                            reportDeepCoalescences(Particle & particle);
             
@@ -43,11 +47,6 @@ namespace proj {
             TaxSet                          parseTaxsetDefinition(string & taxset_def);
 #endif
     
-#if defined(UPGMA_WEIGHTS)
-            bool                            isUnambiguous(Data::state_t s0) const;
-            void                            calcPairwiseDistanceMatrix();
-#endif
-
             void                            selectParticlesToKeep(list<Particle> & first_level_particles, vector<unsigned> & kept);
                
             string                          _data_file_prefix;
@@ -153,7 +152,7 @@ namespace proj {
 
         // If user specified --help on command line, output usage summary and quit
         if (vm.count("help") > 0) {
-            output(format("%s\n") % desc);
+            output(format("%s\n") % desc, G::LogCateg::ALWAYS);
             exit(1);
         }
 
@@ -432,129 +431,6 @@ namespace proj {
         _relrate_map[gene_name] = relrate;
     }
     
-#if defined(UPGMA_WEIGHTS)
-    bool Proj::isUnambiguous(Data::state_t s0) const {
-        // Case 1: s0 is ambiguous (AG)
-        //    s0     s   s & s0   s & s0 == s0
-        //  0101  0001     0001          false
-        //  0101  0010     0000          false
-        //  0101  0100     0100          false
-        //  0101  1000     0000          false
-        //
-        // Case 2: s0 is unambiguous (T)
-        //    s0     s   s & s0   s & s0 == s0
-        //  1000  0001     0000          false
-        //  1000  0010     0000          false
-        //  1000  0100     0000          false
-        //  1000  1000     1000          true
-        //
-        // Case 3: s0 is unambiguous (A)
-        //    s0     s   s & s0   s & s0 == s0
-        //  0001  0001     0001          true
-        //  0001  0010     0000          false
-        //  0001  0100     0000          false
-        //  0001  1000     0000          false
-        //
-        // Bottom line, if s & s0 is ever equal to s0, then
-        // state s0 is unambiguous
-        bool is_unambiguous = false;
-        for (unsigned i = 0; i < G::_nstates; i++) {
-            Data::state_t s = (Data::state_t)1 << i;
-            if ( (s & s0) == s0) {
-                is_unambiguous = true;
-                break;
-            }
-        }
-        return is_unambiguous;
-    }
-#endif
-    
-#if defined(UPGMA_WEIGHTS)
-    void Proj::calcPairwiseDistanceMatrix() {
-        // Get number of data subsets
-        unsigned nsubsets = _data->getNumSubsets();
-        
-        // nsubsets should equal the number of loci
-        assert(nsubsets == G::_nloci);
-                
-        // Allocate a distance matrix for each locus
-        G::_dmatrix.resize(nsubsets);
-        
-        // Get number of taxa (i.e. number of leaves in a trivial gene forest
-        unsigned n = G::_ntaxa;
-        unsigned n_choose_2 = n*(n-1)/2;
-        
-        // Populate a vector of species to identify rows and columns of _dmatrix
-        assert(n == G::_taxon_names.size());
-        G::_dmatrix_rows.resize(n);
-        for (unsigned i = 0; i < n; i++) {
-            G::_dmatrix_rows[i].resize(G::_ntaxa);
-            G::_dmatrix_rows[i].setBitAt(i);
-        }
-        
-        // Get references to data matrix and counts
-        const Data::pattern_counts_t & counts = _data->getPatternCounts();
-        const Data::data_matrix_t & data_matrix = _data->getDataMatrix();
-        
-        // Loop through all data subsets (i.e. loci)
-        for (unsigned subset = 0; subset < nsubsets; subset++) {
-            // Create working space to keep track of
-            // pairwise differences and similarities
-            vector<unsigned> diffs(n_choose_2, 0);
-            vector<unsigned> sames(n_choose_2, 0);
-            
-            // Loop through all patterns in subset
-            unsigned npatterns = _data->getNumPatternsInSubset(subset);
-            Data::begin_end_pair_t pattern_range = _data->getSubsetBeginEnd(subset);
-            unsigned first_pattern = pattern_range.first;
-            for (unsigned p = 0; p < npatterns; p++) {
-                unsigned pp = first_pattern + p;
-                unsigned count = counts[pp];
-
-                // Loop through all elements of _dmatrix and update diffs and totals
-                for (unsigned i = 1; i < n; i++) {
-                    Data::state_t di = data_matrix[i][pp];
-                    //TODO: excluding patterns that show ambiguity
-                    bool ok_i = isUnambiguous(di);
-                    for (unsigned j = 0; j < i; j++) {
-                        unsigned k = i*(i-1)/2 + j;
-                        Data::state_t dj = data_matrix[j][pp];
-                        bool ok_j = isUnambiguous(dj);
-                        if (ok_i && ok_j) {
-                            if (di == dj)
-                                sames[k] += (double)count;
-                            else
-                                diffs[k] += (double)count;
-                        }
-                    }   // j loop
-                }   // i loop
-            }   // p loop
-            
-            // Compute JC distances and store in _dmatrix[subset]
-            //TODO: assuming JC for the UPGMA part
-            G::_dmatrix[subset].resize(n_choose_2);
-            for (unsigned k = 0; k < n_choose_2; k++) {
-                unsigned nsites = sames[k] + diffs[k];
-                assert(nsites > 0);
-                double pdist = 1.0*diffs[k]/nsites;
-                if (pdist >= 0.75)
-                    pdist = 0.74986667; // value used by PAUP*
-                    
-                double jcdist = -0.75*log(1 - 4.0*pdist/3.0);
-                
-                if (jcdist <= 0.0)
-                    jcdist = 0.0;
-                    
-                G::_dmatrix[subset][k] = jcdist;
-            }
-            
-            G::debugShowDistanceMatrix(G::_dmatrix_rows, G::_dmatrix[subset], subset);
-            
-        }   // subset loop
-        
-    }
-#endif
-
     inline void Proj::readData() {
         output(format("\nReading and storing the data in the file %s\n") % (_data_file_prefix + ".nex"));
         _data = Data::SharedPtr(new Data());
@@ -647,6 +523,42 @@ namespace proj {
         streef.close();
     }
     
+#if defined(LAZY_COPYING)
+    inline void Proj::outputTrees(SpeciesForest & sf, vector<GeneForest::SharedPtr> & gfpvect) {
+        // This should be a setting
+        bool edgelens_in_coalescent_units = false;
+        
+        // Output tree file containing true species tree
+        string newick_species_tree_alpha = sf.makeNewick(/*precision*/9, /*use names*/true, edgelens_in_coalescent_units);
+        string newick_species_tree_numeric = sf.makeNewick(/*precision*/9, /*use names*/false, edgelens_in_coalescent_units);
+        if (G::_nspecies > 1) {
+            outputNexusTreefile("true-species-tree.tre", {newick_species_tree_alpha});
+            output(format("  True species tree height = %.9f\n") % sf.getHeight());
+            output("  True species tree saved in file \"true-species-tree.tre\"\n");
+        }
+        else {
+            output("  True species tree not saved because it is just a single node!\n");
+        }
+
+        // Output tree file containing true gene trees
+        vector<string> newick_gene_trees_alpha;
+        vector<string> newick_gene_trees_numeric;
+        //output("  True gene tree height (height/theta):\n");
+        for (auto gfp : gfpvect) {
+            string newick_alpha = gfp->makeNewick(/*precision*/9, /*use names*/true, edgelens_in_coalescent_units);
+            newick_gene_trees_alpha.push_back(newick_alpha);
+            
+            string newick_numeric = gfp->makeNewick(/*precision*/9, /*use names*/false, edgelens_in_coalescent_units);
+            newick_gene_trees_numeric.push_back(newick_numeric);
+            //output(format("  %12.9f (%.9f)\n") % gf.getHeight() % (gfp->getHeight()/G::_theta));
+        }
+        outputGeneTreesToFile("true-gene-trees.tre", newick_gene_trees_alpha);
+        output("  True gene trees saved in file \"true-gene-trees.tre\"\n");
+
+        // Output gene trees and species trees for javascript viewer
+        outputJavascriptTreefile("newicks.js", newick_species_tree_numeric, newick_gene_trees_numeric);
+    }
+#else
     inline void Proj::outputTrees(SpeciesForest & sf, vector<GeneForest> & gfvect) {
         // This should be a setting
         bool edgelens_in_coalescent_units = false;
@@ -681,6 +593,7 @@ namespace proj {
         // Output gene trees and species trees for javascript viewer
         outputJavascriptTreefile("newicks.js", newick_species_tree_numeric, newick_gene_trees_numeric);
     }
+#endif
     
     inline void Proj::outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric, const vector<string> & newick_gene_trees_numeric) {
         ofstream jsf(fn);
@@ -728,7 +641,11 @@ namespace proj {
         // Start with trivial gene forests
         particle.resetGeneForests(/*compute_partials*/false);
         
+#if defined(LAZY_COPYING)
+        assert(particle.getGeneForestPtrs().size() == ngenes);
+#else
         assert(particle.getGeneForests().size() == ngenes);
+#endif
         
         // Determine total number of steps required to build all gene trees and the species tree
         unsigned nsteps = ngenes*(ntaxa - 1);
@@ -902,7 +819,7 @@ namespace proj {
             G::_nsites_per_gene[g] = gnsites;
             G::_gene_names[g] = gname;
         }
-
+        
         setRelativeRates();
 
         // Invent taxon/species names and numbers, and create
@@ -968,6 +885,22 @@ namespace proj {
         reportDeepCoalescences(particle);
         
         SpeciesForest      & species_forest = particle.getSpeciesForest();
+#if defined(LAZY_COPYING)
+        vector<GeneForest::SharedPtr> & gene_forest_ptrs   = particle.getGeneForestPtrs();
+        outputTrees(species_forest, gene_forest_ptrs);
+        
+        // Inform PartialStore of number of genes so that it can allocate
+        // its _nelements and _storage vectors
+        ps.setNLoci(G::_nloci);
+
+        // Simulate sequence data
+        unsigned starting_site = 0;
+        for (unsigned g = 0; g < G::_nloci; ++g) {
+            ps.setNElements(4*G::_nsites_per_gene[g], g);
+            gene_forest_ptrs[g]->simulateData(::rng, _data, starting_site, G::_nsites_per_gene[g]);
+            starting_site += G::_nsites_per_gene[g];
+        }
+#else
         vector<GeneForest> & gene_forests   = particle.getGeneForests();
         outputTrees(species_forest, gene_forests);
         
@@ -982,6 +915,7 @@ namespace proj {
             gene_forests[g].simulateData(::rng, _data, starting_site, G::_nsites_per_gene[g]);
             starting_site += G::_nsites_per_gene[g];
         }
+#endif
                        
         // Output data for each locus to a separate file
         
@@ -1022,16 +956,14 @@ namespace proj {
         else if (_start_mode == "smc") {
             output("Starting...\n");
 
-#if defined(UPGMA_WEIGHTS)
-            output("Using UPGMA completion\n");
-#endif
-
             output(format("Current working directory: %s\n") % current_path());
         
             readData();
             
             G::_nloci = _data->getNumSubsets();
             assert(G::_nloci > 0);
+            
+            setRelativeRates();
 
             // Copy taxon names to global variable _taxon_names
             G::_ntaxa = _data->getNumTaxa();
@@ -1042,10 +974,6 @@ namespace proj {
             // the species index for each taxon name
             G::_nspecies = buildSpeciesMap(/*taxa_from_data*/true);
             
-#if defined(UPGMA_WEIGHTS)
-            calcPairwiseDistanceMatrix();
-#endif
-
             // Create global _species_mask that has "on" bits only for
             // the least significant _nspecies bits
             Node::setSpeciesMask(G::_species_mask, G::_nspecies);
@@ -1087,6 +1015,17 @@ namespace proj {
                     Particle & p = first_level_particles[k];
 
                     // Rebuild coal info vectors, stripping effect of previous species tree
+#if defined(LAZY_COPYING)
+                    vector<GeneForest::SharedPtr> & gtpvect = p.getGeneForestPtrs();
+                    for (auto gtp : gtpvect) {
+                        // Each gene forest's _coalinfo vector stores a tuple for each internal node:
+                        // <1> height
+                        // <2> gene_index + 1
+                        // <3> left child species
+                        // <4> right child species
+                        gtp->buildCoalInfoVect();
+                    }
+#else
                     vector<GeneForest> & gtvect = p.getGeneForests();
                     for (auto & gt : gtvect) {
                         // Each gene forest's _coalinfo vector stores a tuple for each internal node:
@@ -1096,6 +1035,7 @@ namespace proj {
                         // <4> right child species
                         gt.buildCoalInfoVect();
                     }
+#endif
                                             
                     SMC smc2;
                     smc2.setNParticles(G::_nparticles2, 1); //TODO: let 2nd level have subpops?

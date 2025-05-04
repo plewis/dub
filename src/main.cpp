@@ -49,11 +49,13 @@ using boost::format;
 #include "valgrind.h"
 
 #include "conditionals.hpp"
+
 #if defined(FOSSILS)
 #   include <codecvt>
 #   include "fossil.hpp"
 #   include "taxset.hpp"
 #endif
+
 #include "xproj.hpp"
 #include "lot.hpp"
 #include "split.hpp"
@@ -68,6 +70,12 @@ using boost::format;
 #include "forest.hpp"
 #include "species-forest.hpp"
 #include "gene-forest.hpp"
+
+#if defined(LAZY_COPYING)
+#   include "gene-forest-extension.hpp"
+#endif
+
+#include "gene-forest-func.hpp"
 #include "particle.hpp"
 #include "smc.hpp"
 #include "proj.hpp"
@@ -140,12 +148,6 @@ vector<Fossil>                      G::_fossils;
 vector<TaxSet>                      G::_taxsets;
 #endif
 
-#if defined(UPGMA_WEIGHTS)
-vector<vector<double> >             G::_dmatrix;
-vector<Split>                       G::_dmatrix_rows;
-#endif
-
-
 static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 required in order to use infinity()");
 double                              G::_infinity = numeric_limits<double>::infinity();
 double                              G::_negative_infinity = -numeric_limits<double>::infinity();
@@ -185,8 +187,8 @@ int main(int argc, const char * argv[]) {
     output("SYSTEMATIC_FILTERING", G::LogCateg::CONDITIONALS);
 #endif
 
-#if defined(PRECALC_JC_TRANSITION_PROBS)
-    output("PRECALC_JC_TRANSITION_PROBS", G::LogCateg::CONDITIONALS);
+#if defined(LAZY_COPYING)
+    output("LAZY_COPYING", G::LogCateg::CONDITIONALS);
 #endif
 
 #if defined(REUSE_PARTIALS)
@@ -195,10 +197,6 @@ int main(int argc, const char * argv[]) {
 
 #if defined(USE_HEATING)
     output("USE_HEATING", G::LogCateg::CONDITIONALS);
-#endif
-
-#if defined(UPGMA_WEIGHTS)
-    output("UPGMA_WEIGHTS", G::LogCateg::CONDITIONALS);
 #endif
 
 #if defined(RANDOM_LOCUS_ORDERING)

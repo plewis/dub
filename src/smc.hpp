@@ -28,6 +28,11 @@ namespace proj {
             void                     init();
             void                     run();
 
+#if defined(LAZY_COPYING)
+            void                    buildNonzeroMap(unsigned locus,
+                                        map<const void *, list<unsigned> > & nonzero_map,
+                                        const vector<unsigned> & nonzeros);
+#endif
             double                   filterParticles(unsigned step, int locus);
             double                   filterParticlesWithinSubpops(unsigned step, int locus);
 
@@ -128,7 +133,7 @@ namespace proj {
         p.resetPrevLogCoalLike();
             
         // Initialize particle list with _nparticles Particles, each of which
-        // is a copy of template_particle
+        // is a copy of p
         assert(_particles.size() == 0);
         _particles.resize(_nparticles, p);
         
@@ -177,10 +182,17 @@ namespace proj {
         _starting_log_likelihoods.resize(G::_nloci, 0.0);
         template_particle.calcLogLikelihood();
         template_particle.resetAllPrevLogLikelihood();
+#if defined(LAZY_COPYING)
+        const vector<GeneForest::SharedPtr> & gene_forest_ptrs = template_particle.getGeneForestPtrsConst();
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            _starting_log_likelihoods[g] = gene_forest_ptrs[g]->getLogLikelihood();
+        }
+#else
         const vector<GeneForest> & gene_forests = template_particle.getGeneForestsConst();
         for (unsigned g = 0; g < G::_nloci; g++) {
-            _starting_log_likelihoods[g] = gene_forests[g].getPrevLogLikelihood();
+            _starting_log_likelihoods[g] = gene_forests[g].getLogLikelihood();
         }
+#endif
 
         // Initialize particles vector
         assert(_particles.size() == 0);
@@ -209,6 +221,7 @@ namespace proj {
                 
 #if defined(RANDOM_LOCUS_ORDERING)
 #               error random locus ordering not yet implemented except for sim
+                //TODO: if implemented, make sure species tree rebuilt for first locus considered, not just locus == 0
 #else
                 locus = step % G::_nloci;
                 assert(locus < G::_nloci);
@@ -269,14 +282,7 @@ namespace proj {
         string prefix = "1st";
         if (isConditionalMode())
             prefix = "2nd";
-                    
-        // //temporary!
-        // Particle & p = *(_particles.begin());
-        // vector<Forest::coalinfo_t> coalinfo_vect;
-        // p.recordAllForests(coalinfo_vect);
-        // double log_coallike = p.calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/true, /*verbose*/false);
-        // output(format("log(coalescent likelihood) = %.9f\n") % log_coallike, 2);
-        
+                            
         output("\nSpecies trees saved to file \"final-species-trees.tre\"\n", G::LogCateg::VERBOSE);
         string sfn = str(format("%s-final-species-trees") % prefix);
         saveAllSpeciesTrees(sfn, _particles, G::_treefile_compression);
@@ -293,23 +299,7 @@ namespace proj {
         if (!isConditionalMode()) {
             unsigned long min_partials_needed = 0;
             unsigned long k = G::_ntaxa - 1;
-#if defined(UPGMA_WEIGHTS)
-            // ntaxa = 4, k = 3
-            //       step 1    step 2    step 3
-            // ---------------------------------------------
-            // SMC   \/ | |    \/ / |    \/ / /
-            //                  \/  |     \/ /
-            //                             \/
-            //           1   +    1    +    1    = k
-            // ---------------------------------------------
-            // UPGMA   \/ /       \/
-            //          \/
-            //           2   +     1   +    0    = k*(k-1)/2
-            // ---------------------------------------------
-            min_partials_needed = 0.5*k*(k + 1)*G::_nparticles*G::_nloci;
-#else
             min_partials_needed = k*G::_nparticles*G::_nloci;
-#endif
         
             output(str(format("%20d %s\n") % G::_nspecies % "Species"), G::LogCateg::INFO);
             output(str(format("%20d %s\n") % G::_ntaxa % "Taxa"), G::LogCateg::INFO);
@@ -415,6 +405,22 @@ namespace proj {
             
         }
     }
+
+#if defined(LAZY_COPYING)
+    inline void SMC::buildNonzeroMap(unsigned locus,
+        map<const void *, list<unsigned> > & nonzero_map,
+        const vector<unsigned> & nonzeros) {
+        for (auto i : nonzeros) {
+            void * ptr = _particles[i].getGeneForestPtr(locus).get();
+            if (nonzero_map.count(ptr) > 0) {
+                nonzero_map[ptr].push_back(i);
+            }
+            else {
+                nonzero_map[ptr] = {i};
+            }
+        }
+    }
+#endif
     
     inline double SMC::filterParticles(unsigned step, int locus) {
         // Sanity checks
@@ -489,14 +495,20 @@ namespace proj {
             unsigned which = (unsigned)distance(probs.begin(), it);
             _counts[which]++;
         }
-        
-        // //temporary!
-        // string countstr = "";
-        // for (unsigned i = 0; i < _counts.size(); i++)
-        //     countstr += to_string(_counts[i]) + " ";
-        // output(format("\ncounts: %s\n") % countstr, G::LogCateg::DEBUGGING);
-                        
+                                
         classifyCounts(zeros, nonzeros, _counts);
+#endif
+
+#if defined(LAZY_COPYING)
+        // Create map (nonzero_map) in which the key for an element
+        // is the memory address of a gene forest and
+        // the value is a vector of indices of non-zero counts.
+        // This map is used to determine which of the nonzeros
+        // that need to be copied (last nonzero count for any
+        // memory address does not need to be copied and can be
+        // modified in place).
+        map<const void *, list<unsigned> > nonzero_map;
+        buildNonzeroMap(locus, nonzero_map, nonzeros);
 #endif
         
         // Example of following code that replaces dead
@@ -522,6 +534,9 @@ namespace proj {
         unsigned next_nonzero = 0;
         while (next_nonzero < nonzeros.size()) {
             double index_survivor = nonzeros[next_nonzero];
+#if defined(LAZY_COPYING)
+            _particles[index_survivor].finalizeLatestJoin(locus, index_survivor, nonzero_map);
+#endif
             unsigned ncopies = _counts[index_survivor] - 1;
             for (unsigned k = 0; k < ncopies; k++) {
                 double index_nonsurvivor = zeros[next_zero++];
@@ -692,9 +707,14 @@ namespace proj {
         set<Forest::treeid_t> unique_topologies;
         for (auto & p : _particles) {
             for (unsigned g = 0; g < G::_nloci; g++) {
-                GeneForest & gf = p.getGeneForest(g);
                 Forest::treeid_t id;
+#if defined(LAZY_COPYING)
+                GeneForest::SharedPtr gfp = p.getGeneForestPtr(g);
+                gfp->storeSplits(id);
+#else
+                GeneForest & gf = p.getGeneForest(g);
                 gf.storeSplits(id);
+#endif
                 unique_topologies.insert(id);
             }
         }
@@ -831,14 +851,19 @@ namespace proj {
                 info._count = 1;
                 
                 // Get newick tree description for this gene tree
+#if defined(LAZY_COPYING)
+                assert(gene_index < p.getGeneForestPtrsConst().size());
+                GeneForest::SharedPtr gfp = p.getGeneForestPtrs()[gene_index];
+                string newick = gfp->makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
+
+                // Calculate log-likelihood for this gene tree
+                info._log_likelihood = gfp->calcLogLikelihood();
+#else
                 assert(gene_index < p.getGeneForestsConst().size());
                 GeneForest & gf = p.getGeneForests()[gene_index];
                 string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
                 
                 // Calculate log-likelihood for this gene tree
-#if defined(UPGMA_WEIGHTS)
-                info._log_likelihood = gf.calcLogLikelihood(p.getSpeciesForestConst());
-#else
                 info._log_likelihood = gf.calcLogLikelihood();
 #endif
                 
@@ -882,9 +907,15 @@ namespace proj {
             unsigned i = 0;
             for (const Particle & p : particles) {
                 unsigned c = 1;
+#if defined(LAZY_COPYING)
+                assert(gene_index < p.getGeneForestPtrsConst().size());
+                const GeneForest::SharedPtr gfp = p.getGeneForestPtrsConst()[gene_index];
+                string newick = gfp->makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
+#else
                 assert(gene_index < p.getGeneForestsConst().size());
                 const GeneForest & gf = p.getGeneForestsConst()[gene_index];
                 string newick = gf.makeNewick(/*precision*/9, /*use names*/true, /*coalunits*/false);
+#endif
                 if (compression_level == 1) {
                     double pct = 100.0*c/_nparticles;
                     string note = str(format("freq = %d") % c);

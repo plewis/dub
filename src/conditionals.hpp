@@ -5,10 +5,10 @@
 // (but unhelpful to users, however)
 //#define OUTPUT_FOR_DEBUGGING
 
-// Calculate likelihood using the existing forest with the rest of
-// the tree filled in by UPGMA.
-#define UPGMA_WEIGHTS
-//#define DEBUG_UPGMA
+// Calculates log likelihood and subtracts previous log likelihood to
+// check whether log weight calculation is correct.
+// Should be undefined in production version for speed.
+#define DEBUG_CHECK_WEIGHTS
 
 //#define ADHOC_REMOVE_BEFORE_RELEASE
 //#define DEBUG_COALLIKE
@@ -22,8 +22,10 @@
 
 #define REUSE_PARTIALS
 //#define USE_HEATING
-#define PRECALC_JC_TRANSITION_PROBS
 //#define SYSTEMATIC_FILTERING
 
-//#define OUTPUT_DEBUG(a) output((a), G::LogCateg::INFO)
+// This option is not yet working
+#define LAZY_COPYING
+
 #define OUTPUT_DEBUG(a)
+

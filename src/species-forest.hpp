@@ -113,12 +113,12 @@ namespace proj {
     inline void SpeciesForest::createTrivialForest(bool compute_partials) {
         assert(!compute_partials); // catch non-sensical true value
         clear();
-        unsigned nnodes = 2*G::_nspecies - 1;
+        _nleaves = G::_nspecies;
+        unsigned nnodes = 2*_nleaves - 1;
         Forest::_nodes.resize(nnodes);
-        for (unsigned i = 0; i < G::_nspecies; i++) {
+        for (unsigned i = 0; i < _nleaves; i++) {
             string species_name = G::_species_names[i];
             _nodes[i]._number = (int)i;
-            _nodes[i]._my_index = (int)i;
             _nodes[i]._name = species_name;
             _nodes[i]._edge_length = 0.0;
             _nodes[i]._height = 0.0;
@@ -128,18 +128,13 @@ namespace proj {
 
         // Add all remaining nodes to _unused_nodes vector
         _unused_nodes.clear();
-        for (unsigned i = G::_nspecies; i < nnodes; i++) {
-            _nodes[i]._my_index = (int)i;
-            _nodes[i]._number = -1;
+        for (unsigned i = _nleaves; i < nnodes; i++) {
+            _nodes[i]._number = (int)i;
             _unused_nodes.push_back(i);
         }
         
         refreshAllPreorders();
         _forest_height = 0.0;
-        //_next_node_index = G::_nspecies;
-        //_next_node_number = G::_nspecies;
-        _log_likelihood = 0.0;
-        _prev_log_likelihood = 0.0;
     }
     
     inline double SpeciesForest::calcLogSpeciesTreeDensity(double lambda) const {
@@ -154,14 +149,15 @@ namespace proj {
             }
         }
         
-        // Number of internal nodes should be _nspecies - 1
-        assert(internal_heights.size() == G::_nspecies - 1);
+        // Number of internal nodes should be _nleaves - 1
+        assert(internal_heights.size() == _nleaves - 1);
         
         // Sort heights
         sort(internal_heights.begin(), internal_heights.end());
         
         double log_prob_density = 0.0;
-        unsigned n = G::_nspecies;
+        //unsigned n = G::_nspecies;
+        unsigned n = _nleaves;
         double h0 = 0.0;
         for (auto it = internal_heights.begin(); it != internal_heights.end(); ++it) {
             double h = *it;
@@ -273,6 +269,7 @@ namespace proj {
     }
         
     inline void SpeciesForest::speciationEvent(Lot::SharedPtr lot, G::species_t & left_spp, G::species_t & right_spp, G::species_t & anc_spp) {
+
         unsigned nlineages = (unsigned)_lineages.size();
         
         // Choose two lineages to join
@@ -289,11 +286,19 @@ namespace proj {
 
         // Create ancestral node
         Node * anc_node = pullNode();
-        joinLineagePair(anc_node, first_node, second_node);
-        anc_node->setSpeciesToUnion(left_spp, right_spp);
-        
+        anc_node->_edge_length = 0.0;
+
         // Get species for the new ancestral node
-        anc_spp = anc_node->getSpecies();
+        anc_node->setSpeciesToUnion(left_spp, right_spp);
+
+        // Set ancestral node height
+        double h1 = first_node->_height + first_node->_edge_length;
+        double h2 = second_node->_height + second_node->_edge_length;
+        anc_node->_height = 0.5*(h1 + h2);
+
+        joinLineagePair(anc_node, first_node, second_node);
+        
+        //anc_spp = anc_node->getSpecies();
         
         // Update _lineages vector
         removeTwoAddOne(_lineages, first_node, second_node, anc_node);
@@ -490,7 +495,8 @@ namespace proj {
         else {
             // If species forest is not a complete tree, then it should
             // still be a trivial forest that needs to be constructed
-            assert(_lineages.size() == G::_nspecies);
+            //assert(_lineages.size() == G::_nspecies);
+            assert(_lineages.size() == _nleaves);
         }
         
         // Trim edge lengths of nodes remaining in _lineages so that
@@ -503,7 +509,7 @@ namespace proj {
             nd->setEdgeLength(node_edgelen - overlap);
         }
         
-        // Now build up complete species tree again staring with current height
+        // Now build up complete species tree again starting with current height
         while (_lineages.size() > 1) {
 
             // Draw a speciation increment Delta. Note: speciation_increment will
@@ -520,9 +526,6 @@ namespace proj {
         }
         
         refreshAllHeightsAndPreorders();
-        
-        // debugging
-        //output(format("  Rebuilt species tree starting from %g: %s\n") % starting_height % makeNewick(9, true, false));
     }
     
 }

@@ -7,6 +7,7 @@ namespace proj {
     class Updater;
     class Forest;
     class GeneForest;
+    class GeneForestExtension;
     class SpeciesForest;
     class Particle;
 
@@ -17,6 +18,7 @@ namespace proj {
         friend class Updater;
         friend class Forest;
         friend class GeneForest;
+        friend class GeneForestExtension;
         friend class SpeciesForest;
         friend class Particle;
 
@@ -25,11 +27,16 @@ namespace proj {
                                         ~Node();
 
                     typedef vector<Node *>  ptr_vect_t;
+                    typedef vector<Node const *>  const_ptr_vect_t;
+
+#if defined(LAZY_COPYING)
+#else
                     //  0. number of lineages
                     //  1. gene index
                     //  2. species within gene
-                    //  3. vector<Node *> lineage roots for gene/species combination
+                    //  3. vector<Node const *> lineage roots for gene/species combination
                     typedef tuple<unsigned, unsigned, G::species_t, Node::ptr_vect_t>  species_tuple_t;
+#endif
         
                     Node *              getParent()                 {return _parent;}
                     const Node *        getParent() const           {return _parent;}
@@ -47,9 +54,9 @@ namespace proj {
                     const string        getName() const             {return _name;}
 
                     int                 getNumber() const           {return _number;}
-                    int                 getMyIndex() const          {return _my_index;}
                     Split               getSplit()                  {return _split;}
-        
+                    PartialStore::partial_t getPartial()            {return _partial;}
+                    
                     bool                isSelected()                {return _flags & Flag::Selected;}
                     void                select()                    {_flags |= Flag::Selected;}
                     void                deselect()                  {_flags &= ~Flag::Selected;}
@@ -120,7 +127,6 @@ namespace proj {
             Node *          _right_sib;
             Node *          _parent;
             int             _number;
-            int             _my_index;
             string          _name;
             double          _edge_length;
             
@@ -136,7 +142,7 @@ namespace proj {
             PartialStore::partial_t _partial;
     };
         
-    inline Node::Node() {
+    inline Node::Node() : _number(-1) {
         clear();
     }
 
@@ -144,10 +150,9 @@ namespace proj {
     }
 
     inline void Node::clear() {
+        // Note: _number is not affected by clear()
         _flags = 0;
         clearPointers();
-        _number = -1;
-        //_my_index should not be cleared because clear is called by Forest::stowNode
         _name = "";
         _edge_length = _smallest_edge_length;
         _height = 0.0;
@@ -212,7 +217,6 @@ namespace proj {
         // Internal nodes can have species that are unions and hence have size > 1, but
         // leaf nodes should be assigned to just a single species. This function should only
         // be called for internal nodes.
-        assert(_left_child);
         _species = left;
         Node::setSpeciesBits(_species, right, /*init_to_zero_first*/false);
     }

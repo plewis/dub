@@ -567,9 +567,6 @@ namespace proj {
                 nchar[locus] += count;
                 p++;
             }
-
-            //temporary!
-            cerr << "subset " << g << ", npatterns = " << npatterns << ", nchar = " << nchar[g] << endl;
         }
         
         // Determine longest taxon name for formatting purposes
@@ -580,10 +577,7 @@ namespace proj {
         }
         const format name_format( str(format("    %%%ds ") % longest_taxon_name) );
         
-        for (unsigned g = 0; g < _partition->getNumSubsets(); g++) {
-            //temporary!
-            cerr << "starting_pattern for subset " << g << " = " << starting_pattern[g] << endl;
-            
+        for (unsigned g = 0; g < _partition->getNumSubsets(); g++) {            
             string filename = fnprefix + "-" + to_string(g+1) + ".nex";
             ofstream nexf(filename);
             

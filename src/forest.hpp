@@ -24,6 +24,7 @@ namespace proj {
             virtual void        clear();
             double              getPrevHeight() const;
             double              getHeight() const;
+            double              getForestHeight() const;
             unsigned            getNumLineages() const;
             
             Node *              findNodeNumbered(unsigned num);
@@ -42,7 +43,12 @@ namespace proj {
             void                storeSplits(Forest::treeid_t & splitset);
             //void                alignTaxaUsing(const map<unsigned, unsigned> & taxon_map);
             
+#if defined(LAZY_COPYING)
+            virtual pair<double, double> getBoundaryExtension() const;
+            void                advanceAllLineagesBy(double dt);
+#else
             unsigned            advanceAllLineagesBy(double dt);
+#endif
             void                heightsInternalsPreorders();
 
             double              mrcaHeight(G::species_t lspp, G::species_t rspp) const;
@@ -71,6 +77,10 @@ namespace proj {
             void        addTwoRemoveOneAt(Node::ptr_vect_t & node_vect, unsigned pos1, Node * del1, unsigned pos2, Node * del2, Node * add);
 
             void        refreshAllPreorders() const;
+            
+#if defined(LAZY_COPYING)
+            Node *      getMostRecentAncestor();
+#endif
 
         protected:
         
@@ -83,6 +93,8 @@ namespace proj {
             void        storeEdgelensBySplit(map<Split, double> & edgelenmap);
             void        resizeAllSplits(unsigned nleaves);
             void        refreshAllHeightsAndPreorders();
+            void        debugCheckNodeNumbers() const;
+            void        debugCheckSpecies() const;
             Node *      pullNode();
             void        stowNode(Node * nd);
             void        joinLineagePair(Node * anc, Node * first, Node * second);
@@ -101,21 +113,20 @@ namespace proj {
             vector<unsigned>        _unused_nodes;
 
             double                  _forest_height;
-            //unsigned                _next_node_index;
-            double                  _log_likelihood;
-            double                  _prev_log_likelihood;
             double                  _log_prior;
             vector<Node>            _nodes;
             Node::ptr_vect_t        _lineages;
             vector<coalinfo_t>      _coalinfo;
-                                                
+            
+            unsigned                _nleaves;
+
             // Because these can be recalculated at any time, they should not
             // affect the const status of the Forest object
-            mutable unsigned                 _next_node_number;
             mutable vector<Node::ptr_vect_t> _preorders;
 };
     
     inline Forest::Forest() {
+        clear();
     }
 
     inline Forest::~Forest() {
@@ -125,11 +136,8 @@ namespace proj {
     inline void Forest::clear() {
         _unused_nodes.clear();
         _forest_height = 0.0;
-        //_next_node_index = 0;
-        _next_node_number = 0;
-        _log_likelihood = 0.0;
-        _prev_log_likelihood = 0.0;
         _log_prior = 0.0;
+        _nleaves = 0;
         _nodes.clear();
         _preorders.clear();
         _lineages.clear();
@@ -141,6 +149,10 @@ namespace proj {
     }
     
     inline double Forest::getHeight() const {
+        return _forest_height;
+    }
+    
+    inline double Forest::getForestHeight() const {
         return _forest_height;
     }
     
@@ -273,7 +285,7 @@ namespace proj {
     
     inline string Forest::makeNewick(unsigned precision, bool use_names, bool coalunits) const  {
         refreshAllPreorders();
-        //refreshAllHeightsAndPreorders();
+
         // Place basal polytomy (if there is one) at a height 10% greater than
         // the _forest_height
         double basal_polytomy_height = 0.0; //_forest_height*(1.1);
@@ -301,6 +313,7 @@ namespace proj {
                         // Subtree consists of just this one leaf node
                         edge_length += basal_polytomy_height*coalfactor;
                     }
+                    
                     if (use_names) {
                         if (precision > 0)
                             subtree_newick += str(format(tip_node_name_format) % nd->_name % edge_length);
@@ -423,19 +436,19 @@ namespace proj {
         regex taxonexpr("[(,]\\s*(\\d+|\\S+?|['].+?['])\\s*(?=[,):])");
         sregex_iterator m1(commentless_newick.begin(), commentless_newick.end(), taxonexpr);
         sregex_iterator m2;
-        unsigned nleaves = (unsigned)distance(m1, m2);
-        if (nleaves < 2)
+        _nleaves = (unsigned)distance(m1, m2);
+        if (_nleaves < 2)
             throw XProj("Expecting newick tree description to have at least 2 leaves");
 
         // Assumes rooted, fully-bifurcating tree
         //
-        //  A    B    C    nleaves = 3
+        //  A    B    C    _nleaves = 3
         //   \   /   /     nnodes  = 5 = 2*3 - 1
         //    \ /   /
         //     X   /
         //      \ /
         //       Y
-        unsigned max_nodes = 2*nleaves - 1;
+        unsigned max_nodes = 2*_nleaves - 1;
 
         // Resize the _nodes vector
         _nodes.resize(max_nodes);
@@ -443,8 +456,7 @@ namespace proj {
         // Set _number for each node to its index in _nodes vector
         _unused_nodes.clear();
         for (int i = 0; i < _nodes.size(); i++) {
-            _nodes[i]._number = -1;
-            _nodes[i]._my_index = i;
+            _nodes[i]._number = i;
             _unused_nodes.push_back(i);
         }
         
@@ -694,17 +706,13 @@ namespace proj {
     
     inline void Forest::refreshPreorder(Node::ptr_vect_t & preorder) const {
         // Assumes preorder just contains the root node when this function is called
-        // Also assumes that _next_node_number was initialized prior to calling this function
         assert(preorder.size() == 1);
         
         Node * nd = preorder[0];
         while (true) {
             nd = findNextPreorder(nd);
-            if (nd) {
+            if (nd)
                 preorder.push_back(nd);
-                if (nd->_left_child)
-                    nd->_number = _next_node_number++;
-            }
             else
                 break;
         }
@@ -770,13 +778,15 @@ namespace proj {
         for (auto preorder : _preorders) {
             output(format("\nSubtree %d\n") % sub);
             for (auto nd : preorder) {
-                output(format("  node %d:\n") % nd->_number);
-                output(format("    name    = \"%s\"\n") % nd->_name);
-                output(format("    height  = %.5f\n") % nd->_height);
-                output(format("    edgelen = %.5f\n") % nd->_edge_length);
-                output(format("    par     = %s\n") % (nd->_parent ? to_string(nd->_parent->_number) : "none"));
-                output(format("    lchild  = %s\n") % (nd->_left_child ? to_string(nd->_left_child->_number) : "none"));
-                output(format("    rchild  = %s\n") % (nd->_right_sib ? to_string(nd->_right_sib->_number) : "none"));
+                output(format("  node %d:\n") % nd->_number, G::LogCateg::DEBUGGING);
+                output(format("    name    = \"%s\"\n") % nd->_name, G::LogCateg::DEBUGGING);
+                output(format("    species = %d\n") % nd->_species, G::LogCateg::DEBUGGING);
+                output(format("    split   = \"%s\"\n") % nd->_split.createPatternRepresentation(), G::LogCateg::DEBUGGING);
+                output(format("    height  = %.5f\n") % nd->_height, G::LogCateg::DEBUGGING);
+                output(format("    edgelen = %.5f\n") % nd->_edge_length, G::LogCateg::DEBUGGING);
+                output(format("    par     = %s\n") % (nd->_parent ? to_string(nd->_parent->_number) : "none"), G::LogCateg::DEBUGGING);
+                output(format("    lchild  = %s\n") % (nd->_left_child ? to_string(nd->_left_child->_number) : "none"), G::LogCateg::DEBUGGING);
+                output(format("    rchild  = %s\n") % (nd->_right_sib ? to_string(nd->_right_sib->_number) : "none"), G::LogCateg::DEBUGGING);
             }
             sub++;
         }
@@ -829,18 +839,29 @@ namespace proj {
         }
     }
     
+#if defined(LAZY_COPYING)
+    inline Node * Forest::getMostRecentAncestor() {
+        assert(_lineages.size() == 1); // assumes forest is a complete tree
+        assert(_preorders[0].size() > 0);
+        Node * anc = nullptr;
+        for (auto nd : boost::adaptors::reverse(_preorders[0])) {
+            if (nd->_left_child) {
+                anc = nd;
+                break;
+            }
+        }
+        assert(anc);
+        return anc;
+    }
+#endif
+    
     inline void Forest::refreshAllPreorders() const {
         // For each subtree stored in _lineages, create a vector of node pointers in preorder sequence
-        _next_node_number = isSpeciesForest() ? G::_nspecies : G::_ntaxa;
         _preorders.clear();
         if (_lineages.size() == 0)
             return;
         
         for (auto nd : _lineages) {
-            if (nd->_left_child) {
-                nd->_number = _next_node_number++;
-            }
-            
             // lineage is a Node::ptr_vect_t (i.e. vector<Node *>)
             // lineage[0] is the first node pointer in the preorder sequence for this lineage
             // Add a new vector to _preorders containing, for now, just the root of the subtree
@@ -853,6 +874,11 @@ namespace proj {
     }
     
     inline void Forest::refreshAllHeightsAndPreorders() {
+#if defined(LAZY_COPYING)
+        // Ensure this is not a gene forest extension
+        assert(getBoundaryExtension().first < 0);
+#endif
+        
         // Refreshes _preorders and then recalculates heights of all nodes
         // and sets _forest_height
         
@@ -899,15 +925,17 @@ namespace proj {
     }
     
     inline void Forest::heightsInternalsPreorders() {
+#if defined(LAZY_COPYING)
+        // Ensure this is not a gene forest extension
+        assert(getBoundaryExtension().first < 0);
+#endif
+
         // Recalculates heights of all nodes, refreshes preorder sequences, and renumbers internal nodes
         assert(_lineages.size() == 1);
         refreshAllPreorders();
         _forest_height = 0.0;
 
-        // First internal node number is the number of leaves
-        int next_node_number = (unsigned)(isSpeciesForest() ? G::_species_names.size() : G::_taxon_names.size());
-
-        // Renumber internal nodes in postorder sequence for each lineage in turn
+        // Check _height, _species, and pointers for each lineage in turn
         for (auto & preorder : _preorders) {
             for (auto nd : boost::adaptors::reverse(preorder)) {
                 if (nd->_left_child) {
@@ -915,8 +943,8 @@ namespace proj {
                     assert(nd->_height != G::_infinity);
                     if (nd->_height > _forest_height)
                         _forest_height = nd->_height;
-                    nd->_number = next_node_number++;
                     nd->_species = nd->_left_child->_species;
+                    assert(nd->_species > 0);
                     assert(nd->_left_child->_right_sib);
                     nd->_species |= nd->_left_child->_right_sib->_species;
                     assert(nd->_left_child->_right_sib->_right_sib == nullptr);
@@ -1069,21 +1097,33 @@ namespace proj {
         nexus_reader.DeleteBlocksFromFactories();
     }
             
+#if defined(LAZY_COPYING)
+    inline void Forest::advanceAllLineagesBy(double dt) {
+        // Add dt to the edge length of all lineage root nodes, unless
+        // 1. there is just one lineage or
+        // 2. this is a gene forest extension and the
+        //    lineage root node belongs to the parent,
+        // in which case do nothing
+        unsigned n = (unsigned)_lineages.size();
+        if (n > 1) {
+            for (auto nd : _lineages) {
+                double elen = nd->getEdgeLength() + dt;
+                assert(elen >= 0.0 || fabs(elen) < Node::_smallest_edge_length);
+                nd->setEdgeLength(elen);
+            }
+        
+            // Add to to the current forest height
+            _forest_height += dt;
+        }
+    }
+#else
     inline unsigned Forest::advanceAllLineagesBy(double dt) {
-        // Add t to the edge length of all lineage root nodes, unless there
+        // Add dt to the edge length of all lineage root nodes, unless there
         // is just one lineage, in which case do nothing
         unsigned n = (unsigned)_lineages.size();
         if (n > 1) {
             for (auto nd : _lineages) {
                 double elen = nd->getEdgeLength() + dt;
-#if 0 //temporary!
-                if (elen >= 0.0 || fabs(elen) < Node::_smallest_edge_length) {
-                    // do nothing
-                }
-                else {
-                    cerr << "elen = "<< elen << endl;
-                }
-#endif
                 assert(elen >= 0.0 || fabs(elen) < Node::_smallest_edge_length);
                 nd->setEdgeLength(elen);
                 ++n;
@@ -1092,64 +1132,72 @@ namespace proj {
             // Add to to the current forest height
             _forest_height += dt;
         }
-        
         return n;
+    }
+#endif
+    
+    inline void Forest::debugCheckNodeNumbers() const {
+        for (auto & nd : _nodes) {
+            assert(nd._number > -1);
+        }
+    }
+    
+    inline void Forest::debugCheckSpecies() const {
+        for (auto nd : _lineages) {
+            assert(nd->_species > 0);
+        }
     }
     
     inline Node * Forest::pullNode() {
-        //if (_next_node_index == _nodes.size()) {
         if (_unused_nodes.empty()) {
-            unsigned nleaves = 2*(isSpeciesForest() ? G::_nspecies : G::_ntaxa) - 1;
-            //throw XProj(str(format("Forest::pullNode tried to return a node beyond the end of the _nodes vector (_next_node_index = %d equals %d nodes allocated for %d leaves)") % _next_node_index % _nodes.size() % nleaves));
-            throw XProj(str(format("Forest::pullNode tried to return a node beyond the end of the _nodes vector (%d nodes allocated for %d leaves)") % _nodes.size() % nleaves));
+            //unsigned nleaves = 2*(isSpeciesForest() ? G::_nspecies : G::_ntaxa) - 1;
+            throw XProj(str(format("Forest::pullNode tried to return a node beyond the end of the _nodes vector (%d nodes allocated for %d leaves)") % _nodes.size() % _nleaves));
         }
         double node_index = _unused_nodes.back();
         _unused_nodes.pop_back();
         
-        //Node * new_nd = &_nodes[_next_node_index++];
         Node * new_nd = &_nodes[node_index];
-        assert(new_nd->getMyIndex() == node_index);
+        assert(new_nd->_number == node_index);
         
         assert(!new_nd->_partial);
         new_nd->clear();
-        new_nd->_number = -2;
+        new_nd->_number = node_index;
         new_nd->_split.resize(G::_ntaxa);
         return new_nd;
     }
     
     inline void Forest::stowNode(Node * nd) {
         // Get index of nd in _nodes vector
-        int offset = nd->_my_index;
-        assert(offset > -1);
-        _unused_nodes.push_back(offset);
-        //_next_node_index--;
-        //_next_node_number--;
-        //assert(nd == &_nodes[_next_node_index]);
+        int ndnum = nd->_number;
+        assert(ndnum > -1);
+        _unused_nodes.push_back(ndnum);
         nd->clear();
     }
     
     inline void Forest::joinLineagePair(Node * new_nd, Node * subtree1, Node * subtree2) {
-        // Note: must call pullNode to obtain new_nd before calling this function
+        // Assumes pullNode has been called to obtain new_nd before calling this function
+        // and that new_nd already has correct _height, _edge_length, and _species.
+        
+        // Perform sanity checks
         assert(new_nd);
         assert(subtree1);
         assert(subtree2);
-        assert(new_nd->_my_index > -1);
-        new_nd->_name        = "anc-" + to_string(new_nd->_my_index);
-        new_nd->_left_child  = subtree1;
-        new_nd->_edge_length = 0.0;
-        new_nd->_species = 0;
-                
-        // Calculate height of the new node
-        // (should be the same whether computed via the left or right child)
+        assert(new_nd->_number > -1);
+        assert(new_nd->_edge_length == 0.0);
+        assert(new_nd->_species == (subtree1->_species | subtree2->_species));
+
+        // Check whether the left and right subtrees imply the same ancestral node height
         double h1 = subtree1->_height + subtree1->_edge_length;
         double h2 = subtree2->_height + subtree2->_edge_length;
+        assert(fabs(h1 - h2) < G::_small_enough);
 
-        // //temporary! Probably need to reinstate this assert
-        //assert(fabs(h1 - h2) < G::_small_enough);
+        // Check whether height of the new node is consistent with average of h1 and h2
+        double havg = (h1 + h2)/2.0;
+        assert(fabs(havg - new_nd->_height) < G::_small_enough);
 
-        new_nd->_height = (h1 + h2)/2.0;
-
-        // Finish connecting new trio of nodes
+        new_nd->_name = "anc-" + to_string(new_nd->_number);
+        new_nd->_left_child  = subtree1;
+                
         subtree1->_right_sib = subtree2;
         subtree1->_parent    = new_nd;
         subtree2->_parent    = new_nd;
@@ -1158,7 +1206,6 @@ namespace proj {
     inline void Forest::unjoinLineagePair(Node * anc, Node * subtree1, Node * subtree2) {
         // Note: be sure to call stowNode for anc after calling this function
         // Reset members set by joinLineagePair function
-        anc->_number = -1;
         anc->_name = "";
         anc->_left_child = nullptr;
         anc->_edge_length = 0.0;
@@ -1291,21 +1338,18 @@ namespace proj {
     }
     
     inline void Forest::operator=(const Forest & other) {
+        _nleaves                        = other._nleaves;
         _forest_height                  = other._forest_height;
-        //_next_node_index                = other._next_node_index;
         _unused_nodes                   = other._unused_nodes;
-        _next_node_number               = other._next_node_number;
-        _log_likelihood                 = other._log_likelihood;
-        _prev_log_likelihood            = other._prev_log_likelihood;
         
+        //TODO: is node_map necessary; nodes are always numbered by their index
         // Create node map: if other._nodes[3]._number = 2, then node_map[2] = 3
         // (i.e. node number 2 is at index 3 in _nodes vector)
         map<unsigned, unsigned> node_map;
         for (unsigned i = 0; i < other._nodes.size(); ++i) {
             int other_node_number = other._nodes[i]._number;
-            if (other_node_number > -1) {
-                node_map[other_node_number] = i;
-            }
+            assert(other_node_number == i);
+            node_map[other_node_number] = i;
         }
         
         _nodes.resize(other._nodes.size());
@@ -1341,7 +1385,6 @@ namespace proj {
             }
             
             _nodes[i]._number      = other._nodes[i]._number;
-            _nodes[i]._my_index    = other._nodes[i]._my_index;
             _nodes[i]._name        = other._nodes[i]._name;
             _nodes[i]._edge_length = other._nodes[i]._edge_length;
             _nodes[i]._height      = other._nodes[i]._height;
@@ -1352,11 +1395,9 @@ namespace proj {
 
         // Build _lineages
         _lineages.clear();
-        for (auto & nd : _nodes) {
-            // Assume that nodes that are being used have _number > -1
-            // and nodes serving as the root of a lineage have no parent
-            if (nd._number > -1 && !nd._parent)
-                _lineages.push_back(&nd);
+        for (auto nd : other._lineages) {
+            int i = nd->_number;
+            _lineages.push_back(&_nodes[i]);
         }
         assert(_lineages.size() == other._lineages.size());
         
@@ -1496,4 +1537,9 @@ namespace proj {
         return h;
     }
 
+#if defined(LAZY_COPYING)
+    inline pair<double, double> Forest::getBoundaryExtension() const {
+        return make_pair(-1.0, 0.0);
+    }
+#endif
 }
