@@ -8,7 +8,9 @@ namespace proj {
         typedef unsigned long                           species_t;
         typedef pair<unsigned, unsigned>                uint_pair_t;
         typedef tuple<double,G::species_t,G::species_t> merge_t; // <speciation height, spp 1, spp 2>
-        typedef vector<const merge_t>                   merge_vect_t;
+        
+        //TODO: Xcode' clang allows vector<const merge_t> but not other compilers
+        typedef vector<merge_t>                         merge_vect_t;
         
         enum LogCateg : unsigned {
             NONE           = 0,

@@ -10,6 +10,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <unordered_map>
 #include <memory>   // shared_ptr
 #include <new>      // used by Mallocator: bad_alloc, bad_array_new_length
 #include <numeric>
