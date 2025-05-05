@@ -56,8 +56,8 @@ namespace proj {
         static bool                     _simulating;
         static bool                     _debugging;
         
-        static unsigned                 _nthreads;
 #if defined(USING_MULTITHREADING)
+        static unsigned                 _nthreads;
         static mutex                    _mutex;
 #endif
         

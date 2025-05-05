@@ -19,7 +19,6 @@
 #include <set>
 #include <stack>
 #include <string>
-#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -50,6 +49,10 @@ using boost::format;
 #include "valgrind.h"
 
 #include "conditionals.hpp"
+
+#if defined(USING_MULTITHREADING)
+#   include <thread>
+#endif
 
 #if defined(FOSSILS)
 #   include <codecvt>
@@ -107,9 +110,8 @@ unsigned                            G::_rnseed                      = 1;
 bool                                G::_debugging                   = false;
 bool                                G::_simulating                  = false;
 
-unsigned                            G::_nthreads                    = 1;
-
 #if defined(USING_MULTITHREADING)
+unsigned                            G::_nthreads                    = 1;
 mutex                               G::_mutex;
 #endif
 

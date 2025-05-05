@@ -164,6 +164,16 @@ namespace proj {
             exit(1);
         }
         
+#if defined(USING_MULTITHREADING)
+        // User specified --nthreads on command line,
+        if (vm.count("nthreads") > 0) {
+            if (G::_nthreads < 1) {
+                output(format("Number of threads specified cannot be less than 1 (you specified %d)\n") % G::_nthreads);
+                exit(1);
+            }
+        }
+#endif
+
         // If user specified --relrate on command line, break specified relrate
         // definition into name and rate
         if (vm.count("relrate") > 0) {

@@ -20,7 +20,7 @@ namespace proj {
             void resetSpeciesForest();
             void resetGeneForests(bool compute_partials);
 
-            void threadComputePartials(unsigned first, unsigned last);
+            //void threadComputePartials(unsigned first, unsigned last);
             void computeAllPartials();
             
             void rebuildCoalInfo();
@@ -222,15 +222,15 @@ namespace proj {
 #endif
     }
 
-    inline void Particle::threadComputePartials(unsigned first, unsigned last) {
-        for (unsigned k = first; k < last; k++) {
-#if defined(LAZY_COPYING)
-            _gene_forest_ptrs[k]->computeAllPartials();
-#else
-            _gene_forests[k].computeAllPartials();
-#endif
-        }
-    }
+//    inline void Particle::threadComputePartials(unsigned first, unsigned last) {
+//        for (unsigned k = first; k < last; k++) {
+//#if defined(LAZY_COPYING)
+//            _gene_forest_ptrs[k]->computeAllPartials();
+//#else
+//            _gene_forests[k].computeAllPartials();
+//#endif
+//        }
+//    }
     
     inline double Particle::calcLogLikelihood() {
         double log_likelihood = 0.0;
