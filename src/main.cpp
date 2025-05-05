@@ -102,11 +102,16 @@ double                              G::_heating_power               = 1.0;
 string                              G::_species_tree_ref_file_name  = "";
 string                              G::_gene_trees_ref_file_name    = "";
 
+vector<unsigned>                    G::_seed_bank;
 unsigned                            G::_rnseed                      = 1;
 bool                                G::_debugging                   = false;
 bool                                G::_simulating                  = false;
 
 unsigned                            G::_nthreads                    = 1;
+
+#if defined(USING_MULTITHREADING)
+mutex                               G::_mutex;
+#endif
 
 unsigned                            G::_treefile_compression        = 0;
 

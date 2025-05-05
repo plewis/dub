@@ -24,8 +24,8 @@
 //#define USE_HEATING
 //#define SYSTEMATIC_FILTERING
 
-// This option is not yet working
 #define LAZY_COPYING
+#define USING_MULTITHREADING
 
 #define OUTPUT_DEBUG(a)
 

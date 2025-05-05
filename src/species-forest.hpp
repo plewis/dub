@@ -38,7 +38,7 @@ namespace proj {
             void recordHeights(vector<double> & height_vect) const;
             
             tuple<double, G::species_t, G::species_t, G::species_t> findNextSpeciationEvent(double starting_height) const;
-            void rebuildStartingFromHeight(double starting_height);
+            void rebuildStartingFromHeight(Lot::SharedPtr lot, double starting_height);
             
             typedef shared_ptr<SpeciesForest> SharedPtr;
 
@@ -428,7 +428,8 @@ namespace proj {
         return make_tuple(speciation_height, left_spp, right_spp, anc_spp);
     }
     
-    void SpeciesForest::rebuildStartingFromHeight(double starting_height) {
+    void SpeciesForest::rebuildStartingFromHeight(Lot::SharedPtr lot, double starting_height) {
+        
         refreshAllHeightsAndPreorders();
         
         if (_lineages.size() == 1) {
@@ -514,7 +515,7 @@ namespace proj {
 
             // Draw a speciation increment Delta. Note: speciation_increment will
             // equal "infinity" if species tree is complete.
-            auto incr_rate = drawIncrement(::rng);
+            auto incr_rate = drawIncrement(lot);
             double Delta = incr_rate.first;
             
             // advance all lineages by an amount Delta
@@ -522,7 +523,7 @@ namespace proj {
             
             // Create speciation event
             G::species_t left_spp, right_spp, anc_spp;
-            speciationEvent(::rng, left_spp, right_spp, anc_spp);
+            speciationEvent(lot, left_spp, right_spp, anc_spp);
         }
         
         refreshAllHeightsAndPreorders();

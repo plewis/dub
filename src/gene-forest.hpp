@@ -947,6 +947,9 @@ namespace proj {
     }
     
     inline PartialStore::partial_t GeneForest::pullPartial() {
+#if defined(USING_MULTITHREADING)
+        lock_guard<mutex> guard(G::_mutex);
+#endif
         assert(_gene_index >= 0);
         PartialStore::partial_t ptr;
         
@@ -1000,6 +1003,9 @@ namespace proj {
     }
 
     inline void GeneForest::stowPartial(Node * nd) {
+#if defined(USING_MULTITHREADING)
+        lock_guard<mutex> guard(G::_mutex);
+#endif
         assert(_gene_index >= 0);
 
         if (nd && nd->_left_child && nd->_partial) {
@@ -1073,23 +1079,35 @@ namespace proj {
             bool other_partial_exists = (other._nodes[i]._partial != nullptr);
             
             if (this_partial_exists && other_partial_exists) {
+#if defined(USING_MULTITHREADING)
+                // not thread safe to access PartialStore function
+#else
                 // Sanity check: make sure _partials are both of the correct length
                 assert(other._nodes[i]._partial->_v.size() == ps.getNElements(_gene_index));
+#endif
                 
                 // Just copy the shared pointer
                 _nodes[i]._partial.reset();
                 _nodes[i]._partial = other._nodes[i]._partial;
             }
             else if (this_partial_exists && !other_partial_exists) {
+#if defined(USING_MULTITHREADING)
+                // not thread safe to access PartialStore function
+#else
                 // Sanity check: make sure this _partial is of the correct length
                 assert(_nodes[i]._partial->_v.size() == ps.getNElements(_gene_index));
+#endif
                 
                 // OK to set partial to null
                 _nodes[i]._partial.reset();
             }
             else if (other_partial_exists && !this_partial_exists) {
+#if defined(USING_MULTITHREADING)
+                // not thread safe to access PartialStore function
+#else
                 // Sanity check: make sure other _partial is of the correct length
                 assert(other._nodes[i]._partial->_v.size() == ps.getNElements(_gene_index));
+#endif
                 
                 // Just copy the shared pointer
                 _nodes[i]._partial = other._nodes[i]._partial;

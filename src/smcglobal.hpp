@@ -43,6 +43,8 @@ namespace proj {
         static vector<Fossil>           _fossils;
         static vector<TaxSet>           _taxsets;
 #endif
+
+        static vector<unsigned>         _seed_bank;
                 
         static string                   _species_tree_ref_file_name;
         static string                   _gene_trees_ref_file_name;
@@ -55,6 +57,9 @@ namespace proj {
         static bool                     _debugging;
         
         static unsigned                 _nthreads;
+#if defined(USING_MULTITHREADING)
+        static mutex                    _mutex;
+#endif
         
         static unsigned                 _nstates;
         
@@ -97,7 +102,7 @@ namespace proj {
         static void     showSettings();
         static double   inverseGammaVariate(double shape, double rate, Lot::SharedPtr lot);
         static void     getAllParamNames(vector<string> & names);
-        static void     generateUpdateSeeds(vector<unsigned> & seeds);
+        static void     generateUpdateSeeds(unsigned num_seeds_needed);
         static double   calcLogSum(const vector<double> & log_values);
         static string   unsignedVectToString(const vector<unsigned> & v);
         static void     createDefaultGeneTreeNexusTaxonMap();
@@ -192,12 +197,10 @@ namespace proj {
         }
     }
 
-    inline void G::generateUpdateSeeds(vector<unsigned> & seeds) {
-        unsigned psuffix = 1;
-        for (auto & s : seeds) {
-            s = ::rng->randint(1,9999) + psuffix;
-            psuffix += 2;    // pure superstition (I always use odd seeds)
-        }
+    inline void G::generateUpdateSeeds(unsigned num_seeds_needed) {
+        _seed_bank.resize(num_seeds_needed);
+        unsigned maxseed = num_seeds_needed*100 - 1;
+        for_each(_seed_bank.begin(), _seed_bank.end(), [maxseed](unsigned & x){x = ::rng->randint(1,maxseed);});
     }
 
     inline double G::calcLogSum(const vector<double> & log_values) {

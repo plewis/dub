@@ -22,7 +22,13 @@ namespace proj {
             bool                     isConditionalMode() const  {return _mode == SPECIES_GIVEN_GENE;}
 
             void                     setNParticles(unsigned nparticles, unsigned nsubpops)  {_nparticles = nparticles; _nsubpops = nsubpops; }
-            
+
+#if defined(USING_MULTITHREADING)
+            typedef vector<pair<unsigned, unsigned> > thread_sched_t;
+            void buildThreadSchedule(thread_sched_t & thread_schedule);
+            void advanceParticleRange(unsigned step, unsigned locus, bool rebuild_species_tree, unsigned first_particle, unsigned last_particle);
+#endif
+    
             void                     setData(Data::SharedPtr d) {_data = d;}
             void                     initFromParticle(Particle & p);
             void                     init();
@@ -207,9 +213,125 @@ namespace proj {
         // Display header for progress table
         output(format("\n%12s %12s  %24s %12s %12s\n") % "Step" % "ESS" % "logml" % "secs" % "wait");
     }
+    
+#if defined(USING_MULTITHREADING)
+    inline void SMC::buildThreadSchedule(vector<pair<unsigned, unsigned> > & thread_schedule) {
+        // Calculate thread_schedule and its associated entropy and return the percentage
+        // entropy relative to the maximum possible entropy
+
+#if 1
+        // Example: _nparticles = 11, _nthreads = 3
+        // particles_per_thread = 3, remainder = 2
+        // thread 0: begin = 0, end = 4  (= 0 + 3 + 1) <-- 0, 1, 2, 3
+        // thread 1: begin = 4, end = 8  (= 4 + 3 + 1) <-- 4, 5, 6, 7
+        // thread 2: begin = 8, end = 11 (= 8 + 3 + 0) <-- 8, 9, 10
+        unsigned particles_per_thread = (unsigned)floor(1.0*_nparticles/G::_nthreads);
+        unsigned remainder = _nparticles - G::_nthreads*particles_per_thread;
+        unsigned begin = 0;
+        for (unsigned i = 0; i < G::_nthreads; i++) {
+            unsigned end = begin + particles_per_thread;
+            if (remainder > 0) {
+                end++;
+                remainder--;
+            }
+            thread_schedule.push_back(make_pair(begin,end));
+            begin = end;
+        }
+#else
+        // Old version: used when there was a list of particles each of which
+        // had a count associated with it of identical particles.
+        //
+        // Suppose we are using 3 threads and there are 10 particles with these counts:
+        // _nparticles = 100 = 20 + 10 + 5 + 1 + 4 + 20 + 23 + 12 + 1 + 4 = 100
+        // prefix_sum        = 20   30  35  36  40   60   83   95  96  100
+        // thread_index      =  0    0   1   1   1    1    2    2   2    2
+        // max_count = 100/3 = 33
+
+        // Create thread schedule using the prefix-sum algorithm
+        thread_schedule.clear();
+        unsigned current_thread = 0;
+        pair<unsigned, unsigned> begin_end = make_pair(0,0);
+        unsigned prefix_sum = 0;
+        unsigned max_count = (unsigned)floor(1.0*_nparticles/G::_nthreads);
+        
+        vector<unsigned> freqs(SMCGlobal::_nthreads, 0);
+        for (auto & p : _particle_list) {
+            // Add particle count to prefix sum
+            unsigned count = p.getCount();
+            
+            // If count greater than max_count, we cannot create
+            // a schedule because the schedule cannot split up
+            // the count of a single particle
+            if (count > max_count) {
+                thread_schedule.clear();
+                return 0.0;
+            }
+            
+            p.setBeginIndex(prefix_sum);
+            prefix_sum += count;
+                
+            // Calculate thread index
+            unsigned thread_index = (unsigned)floor(1.0*G::_nthreads*(prefix_sum - 1)/_nparticles);
+            
+            if (thread_index > current_thread) {
+                // Add thread to the schedule
+                thread_schedule.push_back(begin_end);
+                current_thread++;
+                
+                // Start work on next thread
+                begin_end.first  = begin_end.second;
+                begin_end.second = begin_end.first + 1;
+            }
+            else {
+                begin_end.second += 1;
+            }
+            freqs[current_thread] += count;
+        }
+        thread_schedule.push_back(begin_end);
+
+        // Calculate entropy, max_entropy, and percentage
+        double max_entropy = log(SMCGlobal::_nthreads);
+        double entropy = 0.0;
+        assert(_nparticles == accumulate(freqs.begin(), freqs.end(), 0));
+        for_each(freqs.begin(), freqs.end(), [&entropy](unsigned f){entropy -= 1.0*f*log(f);});
+        entropy /= _nparticles;
+        entropy += log(_nparticles);
+        double percentage = 100.0*entropy/max_entropy;
+        assert(!isnan(percentage));
+        
+        return percentage;
+#endif
+    }
+#endif
+    
+#if defined(USING_MULTITHREADING)
+    inline void SMC::advanceParticleRange(unsigned step, unsigned locus, bool rebuild_species_tree, unsigned first_particle, unsigned last_particle) {
+        for (unsigned i = first_particle; i < last_particle; i++) {
+            // Advance each particle by one coalescent event in one locus
+            _particles[i].proposeCoalescence(
+                step,
+                locus,
+                G::_seed_bank[i],
+                rebuild_species_tree
+            );
+        }
+    }
+#endif
 
     inline void SMC::run() {
         assert(_nsteps > 0);
+        
+#if defined(USING_MULTITHREADING)
+        vector<pair<unsigned, unsigned> > thread_sched;
+        buildThreadSchedule(thread_sched);
+
+        //temporary!
+        output(format("\nThread schedule (%d thread%s):\n") % thread_sched.size() % (G::_nthreads > 1 ? "s" : ""));
+        unsigned t = 0;
+        for (auto be : thread_sched) {
+            output(format("%12d %12d %12d\n") % (t++) % be.first % (be.second - 1));
+        }
+#endif
                 
         _log_marg_like = 0.0;
         double cum_secs = 0.0;
@@ -226,11 +348,43 @@ namespace proj {
                 locus = step % G::_nloci;
                 assert(locus < G::_nloci);
 #endif
-            
+                // Replace seeds in seed bank
+                G::generateUpdateSeeds(_nparticles);
+
+#if defined(USING_MULTITHREADING)
+                if (G::_nthreads > 1) {
+                    vector<thread> threads;
+                    for (unsigned i = 0; i < G::_nthreads; i++) {
+                        threads.push_back(thread(&SMC::advanceParticleRange,
+                            this,
+                            step,
+                            locus,
+                            locus == 0,
+                            thread_sched[i].first,
+                            thread_sched[i].second)
+                        );
+                    }
+
+                    // The join function causes this loop to pause until
+                    // the ith thread finishes
+                    for (unsigned i = 0; i < threads.size(); i++) {
+                        threads[i].join();
+                    }
+                }
+                else {
+                    advanceParticleRange(step, locus, locus == 0, 0, _nparticles);
+                }
+#else
                 for (unsigned i = 0; i < _nparticles; i++) {
                     // Advance each particle by one coalescent event in one locus
-                    _particles[i].proposeCoalescence(step, locus);
+                    _particles[i].proposeCoalescence(
+                        step,
+                        locus,
+                        G::_seed_bank[i],
+                        locus == 0 /*rebuild_species_tree*/
+                    );
                 }
+#endif
             }
             else if (isConditionalMode()) {
                 for (unsigned i = 0; i < _nparticles; i++) {

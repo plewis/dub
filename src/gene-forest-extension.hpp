@@ -9,7 +9,7 @@ namespace proj {
             
                             GeneForestExtension();
                                 
-            void            dock(const GeneForest::SharedPtr gf, PartialStore::partial_t partial);
+            void            dock(const GeneForest::SharedPtr gf, PartialStore::partial_t partial, Lot::SharedPtr lot);
             void            undock();
 
             G::uint_pair_t  chooseNodesToJoin(const vector<unsigned> & node_indices) const;
@@ -46,17 +46,21 @@ namespace proj {
             vector<G::species_t>          _species_vect;
             G::merge_vect_t               _mergers;
             sppmap_t                      _sppmap;
+            Lot::SharedPtr                _lot;
     };
     
     inline GeneForestExtension::GeneForestExtension() {
         undock();
     }
     
-    inline void GeneForestExtension::dock(const GeneForest::SharedPtr gf, PartialStore::partial_t partial) {
+    inline void GeneForestExtension::dock(const GeneForest::SharedPtr gf, PartialStore::partial_t partial, Lot::SharedPtr lot) {
         // Check to make sure this extension was previously undocked
         assert(gf);
         assert(_docked_gene_forest == nullptr);
         assert(_species_vect.empty());
+        
+        // Reset the random number generator
+        _lot = lot;
 
         // Attach GeneForest
         _docked_gene_forest = gf;
@@ -71,6 +75,7 @@ namespace proj {
     }
     
     inline void GeneForestExtension::undock() {
+        _lot.reset();
         _docked_gene_forest.reset();
         _species_vect.clear();
         _mergers.clear();
@@ -179,7 +184,7 @@ namespace proj {
         }
         
         // Choose a species using a multinomial draw from probs
-        unsigned which = G::multinomialDraw(::rng, probs);
+        unsigned which = G::multinomialDraw(_lot, probs);
         assert(which < probs.size());
         G::species_t spp = species_vect[which];
         return spp;
@@ -190,7 +195,7 @@ namespace proj {
         assert(n > 1);
         
         // Choose a random pair of lineages to join
-        pair<unsigned,unsigned> chosen_pair = ::rng->nchoose2(n);
+        pair<unsigned,unsigned> chosen_pair = _lot->nchoose2(n);
         unsigned i = node_indices[chosen_pair.first];
         unsigned j = node_indices[chosen_pair.second];
         

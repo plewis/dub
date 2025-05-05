@@ -48,7 +48,7 @@ namespace proj {
             double calcMaxGeneForestHeight() const;
 
             unsigned proposeSpeciation(unsigned step);
-            void proposeCoalescence(unsigned step, unsigned locus);
+            void proposeCoalescence(unsigned step, unsigned locus, unsigned rnseed, bool rebuild_species_tree);
 
             bool advanceByOneCoalescence(unsigned step, unsigned locus, bool first_attempt);
 
@@ -117,6 +117,11 @@ namespace proj {
             void stowPartial(unsigned gene, Node * nd);
 
             Data::SharedPtr            _data;
+
+            // Even though it is a shared pointer, _lot is a private random number
+            // generator not shared with any other particle and has nothing to
+            // to do with the global Lot shared_ptr ::rng defined in main.cpp
+            mutable Lot::SharedPtr     _lot;
             
             vector<double>             _prev_log_likelihoods;
 
@@ -129,20 +134,13 @@ namespace proj {
 #endif
             SpeciesForest              _species_forest;
             
-            
             mutable double              _log_coal_like;
             mutable double              _prev_log_coal_like;
-
             mutable double              _log_weight;
 
 #if defined(USE_HEATING)
             mutable double              _prev_log_weight;
 #endif
-            
-            // Even though a shared pointer, _lot is a private random number
-            // generator not shared with any other particle and has nothing to
-            // to do with the global Lot shared_ptr ::rng defined in main.cpp
-            //mutable Lot::SharedPtr  _lot;
     };
 
     void Particle::setSpeciesTree(string species_tree_newick) {
@@ -155,12 +153,12 @@ namespace proj {
     }
 
     inline Particle::Particle() {
-        //_lot.reset(new Lot());
+        _lot.reset(new Lot());
         clear();
     }
 
     inline Particle::Particle(const Particle & other) {
-        //_lot.reset(new Lot());
+        _lot.reset(new Lot());
         copyParticleFrom(other);
     }
 
@@ -629,6 +627,9 @@ namespace proj {
     }
         
     inline PartialStore::partial_t Particle::pullPartial(unsigned gene) {
+#if defined(USING_MULTITHREADING)
+        lock_guard<mutex> guard(G::_mutex);
+#endif
 #if defined(LAZY_COPYING)
         assert(gene < _gene_forest_ptrs.size());
 #else
@@ -643,6 +644,9 @@ namespace proj {
     }
 
     inline void Particle::stowPartial(unsigned gene, Node * nd) {
+#if defined(USING_MULTITHREADING)
+        lock_guard<mutex> guard(G::_mutex);
+#endif
 #if defined(LAZY_COPYING)
         assert(gene < _gene_forest_ptrs.size());
 #else
@@ -862,25 +866,22 @@ namespace proj {
         return max_gene_forest_height;
     }
     
-    inline void Particle::proposeCoalescence(unsigned step, unsigned locus) {
-        // If first locus, rebuild species tree starting from
-        // the height of the tallest gene forest over all loci
-        if (locus == 0) {
-            //TODO: won't work if RANDOM_LOCUS_ORDERING implemented
-            double max_height = calcMaxGeneForestHeight();
-            _species_forest.rebuildStartingFromHeight(max_height);
-        }
+    inline void Particle::proposeCoalescence(unsigned step, unsigned locus, unsigned rnseed, bool rebuild_species_tree) {
+        _lot->setSeed(rnseed);
         
+        // Rebuild species tree starting from the height of the
+        // tallest gene forest over all loci
+        if (rebuild_species_tree) {
+            double max_height = calcMaxGeneForestHeight();
+            _species_forest.rebuildStartingFromHeight(_lot, max_height);
+        }
+
         // Record previous log likelihood
 #if defined(LAZY_COPYING)
         _prev_log_likelihoods[locus] = _gene_forest_ptrs[locus]->getLogLikelihood();
 #else
         _prev_log_likelihoods[locus] = _gene_forests[locus].getLogLikelihood();
 #endif
-
-        //f (step == 10 && locus == 0) {
-        //   cerr << endl;
-        //
 
         // Advance locus gene forest by one coalescent event.
         // Function advanceByOneCoalescence returns
@@ -1040,7 +1041,7 @@ namespace proj {
             // without touching existing forest (which may be used
             // by many particles)
             assert(_gene_forest_extensions.size() == G::_nloci);
-            _gene_forest_extensions[locus].dock(_gene_forest_ptrs[locus], pullPartial(locus));
+            _gene_forest_extensions[locus].dock(_gene_forest_ptrs[locus], pullPartial(locus), _lot);
         }
         GeneForestExtension & gfx = _gene_forest_extensions[locus];
 #else
@@ -1086,7 +1087,7 @@ namespace proj {
         
         // Draw coalescence increment delta ~ Exponential(total_rate)
         double delta = total_rate > 0.0
-                       ? -log(1.0 - ::rng->uniform())/total_rate
+                       ? -log(1.0 - _lot->uniform())/total_rate
                        : G::_infinity;
         
         // Sanity check: delta and speciation_delta cannot both

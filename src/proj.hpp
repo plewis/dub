@@ -137,7 +137,9 @@ namespace proj {
 #if defined(USE_HEATING)
         ("heatingpower",  value(&G::_heating_power)->default_value(1.0), "power to which weights are raised (default 1.0 means no heating)")
 #endif
-        ("nthreads",  value(&dummy_int)->default_value(3), "this option is not used in this version of the program")
+#if defined(USING_MULTITHREADING)
+        ("nthreads",  value(&G::_nthreads)->default_value(1), "specify number of threads")
+#endif
         ;
         
         store(parse_command_line(argc, argv, desc), vm);
@@ -650,8 +652,7 @@ namespace proj {
         // Determine total number of steps required to build all gene trees and the species tree
         unsigned nsteps = ngenes*(ntaxa - 1);
         
-        vector<unsigned> update_seeds(nsteps);
-        G::generateUpdateSeeds(update_seeds);
+        G::generateUpdateSeeds(nsteps);
         
         vector< pair<double, unsigned> > locus_ordering(G::_nloci);
 
@@ -674,7 +675,7 @@ namespace proj {
                 sort(locus_ordering.begin(), locus_ordering.end());
             }
             unsigned locus = locus_ordering[step_modulus].second;
-            particle.proposeCoalescence(step, locus);
+            particle.proposeCoalescence(step, locus, G::_seed_bank[step], /*rebuild_species_tree*/locus == locus_ordering[0].second);
         }
         
         particle.refreshHeightsInternalsPreorders();
