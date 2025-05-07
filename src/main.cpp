@@ -111,6 +111,7 @@ bool                                G::_debugging                   = false;
 bool                                G::_simulating                  = false;
 
 #if defined(USING_MULTITHREADING)
+vector<pair<unsigned,unsigned> >    G::_thread_sched;
 unsigned                            G::_nthreads                    = 1;
 mutex                               G::_mutex;
 #endif

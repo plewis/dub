@@ -57,8 +57,9 @@ namespace proj {
         static bool                     _debugging;
         
 #if defined(USING_MULTITHREADING)
-        static unsigned                 _nthreads;
-        static mutex                    _mutex;
+        static unsigned                  _nthreads;
+        static mutex                     _mutex;
+        static vector<pair<unsigned,unsigned> > _thread_sched;
 #endif
         
         static unsigned                 _nstates;
@@ -97,13 +98,17 @@ namespace proj {
         static unsigned                 _nkept2;
         
         static unsigned                 _nsubpops;
+        
+#if defined(USING_MULTITHREADING)
+        static void     buildThreadSchedule(unsigned n, string entity_name);
+#endif
 
         static string   inventName(unsigned k, bool lower_case);
         static void     showSettings();
         static double   inverseGammaVariate(double shape, double rate, Lot::SharedPtr lot);
         static void     getAllParamNames(vector<string> & names);
         static void     generateUpdateSeeds(unsigned num_seeds_needed);
-        static double   calcLogSum(const vector<double> & log_values);
+        //static double   calcLogSum(const vector<double> & log_values);
         static string   unsignedVectToString(const vector<unsigned> & v);
         static void     createDefaultGeneTreeNexusTaxonMap();
         static void     createDefaultSpeciesTreeNexusTaxonMap();
@@ -203,16 +208,16 @@ namespace proj {
         for_each(_seed_bank.begin(), _seed_bank.end(), [maxseed](unsigned & x){x = ::rng->randint(1,maxseed);});
     }
 
-    inline double G::calcLogSum(const vector<double> & log_values) {
-        double max_logv = *max_element(log_values.begin(), log_values.end());
-        
-        double factored_sum = 0.0;
-        for (auto & logv : log_values) {
-            factored_sum += exp(logv - max_logv);
-        }
-        double log_sum_values = max_logv + log(factored_sum);
-        return log_sum_values;
-    }
+    //inline double G::calcLogSum(const vector<double> & log_values) {
+    //    double max_logv = *max_element(log_values.begin(), log_values.end());
+    //
+    //    double factored_sum = 0.0;
+    //    for (auto & logv : log_values) {
+    //        factored_sum += exp(logv - max_logv);
+    //    }
+    //    double log_sum_values = max_logv + log(factored_sum);
+    //    return log_sum_values;
+    //}
 
     inline string G::unsignedVectToString(const vector<unsigned> & v) {
         ostringstream oss;
@@ -351,5 +356,107 @@ namespace proj {
         return s;
     }
     
+#if defined(USING_MULTITHREADING)
+    inline void G::buildThreadSchedule(unsigned n, string entity_name) {
+        // Populate _thread_sched for the specified number of entities
+        assert(n > 0);
+        G::_thread_sched.clear();
+#if 1
+        // Example: n = 11, _nthreads = 3
+        // entities_per_thread = 3, remainder = 2
+        // thread 0: begin = 0, end = 4  (= 0 + 3 + 1) <-- 0, 1, 2, 3
+        // thread 1: begin = 4, end = 8  (= 4 + 3 + 1) <-- 4, 5, 6, 7
+        // thread 2: begin = 8, end = 11 (= 8 + 3 + 0) <-- 8, 9, 10
+        unsigned entities_per_thread = (unsigned)floor(1.0*n/G::_nthreads);
+        unsigned remainder = n - G::_nthreads*entities_per_thread;
+        unsigned begin = 0;
+        for (unsigned i = 0; i < G::_nthreads; i++) {
+            unsigned end = begin + entities_per_thread;
+            if (remainder > 0) {
+                end++;
+                remainder--;
+            }
+            G::_thread_sched.push_back(make_pair(begin,end));
+            begin = end;
+        }
+#else
+//        // Old version: used when there was a list of particles each of which
+//        // had a count associated with it of identical particles.
+//        //
+//        // Suppose we are using 3 threads and there are 10 particles with these counts:
+//        // _nparticles = 100 = 20 + 10 + 5 + 1 + 4 + 20 + 23 + 12 + 1 + 4 = 100
+//        // prefix_sum        = 20   30  35  36  40   60   83   95  96  100
+//        // thread_index      =  0    0   1   1   1    1    2    2   2    2
+//        // max_count = 100/3 = 33
+//
+//        // Create thread schedule using the prefix-sum algorithm
+//        thread_schedule.clear();
+//        unsigned current_thread = 0;
+//        pair<unsigned, unsigned> begin_end = make_pair(0,0);
+//        unsigned prefix_sum = 0;
+//        unsigned max_count = (unsigned)floor(1.0*_nparticles/G::_nthreads);
+//        
+//        vector<unsigned> freqs(SMCGlobal::_nthreads, 0);
+//        for (auto & p : _particle_list) {
+//            // Add particle count to prefix sum
+//            unsigned count = p.getCount();
+//            
+//            // If count greater than max_count, we cannot create
+//            // a schedule because the schedule cannot split up
+//            // the count of a single particle
+//            if (count > max_count) {
+//                thread_schedule.clear();
+//                return 0.0;
+//            }
+//            
+//            p.setBeginIndex(prefix_sum);
+//            prefix_sum += count;
+//                
+//            // Calculate thread index
+//            unsigned thread_index = (unsigned)floor(1.0*G::_nthreads*(prefix_sum - 1)/_nparticles);
+//            
+//            if (thread_index > current_thread) {
+//                // Add thread to the schedule
+//                thread_schedule.push_back(begin_end);
+//                current_thread++;
+//                
+//                // Start work on next thread
+//                begin_end.first  = begin_end.second;
+//                begin_end.second = begin_end.first + 1;
+//            }
+//            else {
+//                begin_end.second += 1;
+//            }
+//            freqs[current_thread] += count;
+//        }
+//        thread_schedule.push_back(begin_end);
+//
+//        // Calculate entropy, max_entropy, and percentage
+//        double max_entropy = log(SMCGlobal::_nthreads);
+//        double entropy = 0.0;
+//        assert(_nparticles == accumulate(freqs.begin(), freqs.end(), 0));
+//        for_each(freqs.begin(), freqs.end(), [&entropy](unsigned f){entropy -= 1.0*f*log(f);});
+//        entropy /= _nparticles;
+//        entropy += log(_nparticles);
+//        double percentage = 100.0*entropy/max_entropy;
+//        assert(!isnan(percentage));
+//        
+//        return percentage;
+#endif
+
+        output(format("\nThread schedule (n = %d %s%s spread over %d thread%s):\n")
+            % n
+            % entity_name
+            % (n > 1 ? "s" : "")
+            % _thread_sched.size()
+            % (G::_nthreads > 1 ? "s" : "")
+        );
+        unsigned t = 0;
+        output(format("%24s %12s %12s\n") % entity_name % "begin" % "end", G::LogCateg::INFO);
+        for (auto be : _thread_sched) {
+            output(format("%24d %12d %12d\n") % (t++) % be.first % (be.second - 1), G::LogCateg::INFO);
+        }
+    }
+#endif
 }
 

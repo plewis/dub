@@ -180,7 +180,7 @@ namespace proj {
             }
         }
     }
-            
+
     inline void GeneForest::debugCheckPartials(bool verbose) const {
         assert(_gene_index >= 0);
         double tmp = 0.0;
@@ -1119,7 +1119,8 @@ namespace proj {
         // every time it is used
     }
         
-    inline void GeneForest::addCoalInfoElem(const Node * nd, vector<coalinfo_t> & recipient) {
+    inline void GeneForest::addCoalInfoElem(const Node * nd, vector<coalinfo_t> & recipient)
+     {
         assert(_gene_index >= 0);
 
         // Assumes nd is an internal node

@@ -17,7 +17,7 @@ namespace proj {
             
             Node * findSpecies(G::species_t spp);
                                                 
-            void fixupCoalInfo(vector<coalinfo_t> & coalinfo_vect, vector<coalinfo_t> & sppinfo_vect) const;
+            void fixupCoalInfo(vector<coalinfo_t> & coalinfo_vect, vector<coalinfo_t> & sppinfo_vect, bool capstone) const;
             tuple<double,double,double> drawTruncatedIncrement(Lot::SharedPtr lot, double truncate_at);
             pair<double,double> drawIncrement(Lot::SharedPtr lot);
             double calcLogSpeciesTreeDensity(double lambda) const;
@@ -173,7 +173,7 @@ namespace proj {
         return log_prob_density;
     }
     
-    inline void SpeciesForest::fixupCoalInfo(vector<coalinfo_t> & coalinfo_vect, vector<coalinfo_t> & sppinfo_vect) const {
+    inline void SpeciesForest::fixupCoalInfo(vector<coalinfo_t> & coalinfo_vect, vector<coalinfo_t> & sppinfo_vect, bool capstone) const {
         // No fixing up to do if there are no species tree joins
         if (sppinfo_vect.empty())
             return;
@@ -230,6 +230,15 @@ namespace proj {
             // Advance through coalinfo_vect to the first event that might be
             // affected by the current species tree join
             unsigned j = jstart;
+            
+            //temporary!
+            if (j >= coalinfo_vect.size()) {
+#if defined(USING_MULTITHREADING)
+                lock_guard<mutex> guard(G::_mutex);
+#endif
+                cerr << "\n*** j = " << j << ", coalinfo_vect.size() = " << coalinfo_vect.size() << " ***\n" << endl;
+            }
+            
             assert(j < coalinfo_vect.size());
             double h = get<0>(coalinfo_vect[j]);
             while (h < h0) {
@@ -246,6 +255,13 @@ namespace proj {
             while (j < coalinfo_vect.size()) {
                 h = get<0>(coalinfo_vect[j]);
                 vector<G::species_t> & v = get<2>(coalinfo_vect[j]);
+                
+                //temporary!
+                if (v.size() != 2) {
+                    cerr << "v.size() = " << v.size() << endl;
+                    cerr << "capstone = " << (capstone ? "yes" : "no") << endl;
+                }
+                
                 assert(v.size() == 2);
                 for (auto & kv : replacements) {
                     if (subsumed(kv.first, v[0])) {

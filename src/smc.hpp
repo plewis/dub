@@ -9,8 +9,8 @@ namespace proj {
 
     class SMC {
         public:
-                                     SMC()  {clear();}
-            virtual                  ~SMC() {}
+                                     SMC();
+            virtual                  ~SMC();
                         
             enum mode_type_t {
                 SPECIES_AND_GENE = 0,
@@ -24,21 +24,29 @@ namespace proj {
             void                     setNParticles(unsigned nparticles, unsigned nsubpops)  {_nparticles = nparticles; _nsubpops = nsubpops; }
 
 #if defined(USING_MULTITHREADING)
-            typedef vector<pair<unsigned, unsigned> > thread_sched_t;
-            void buildThreadSchedule(thread_sched_t & thread_schedule);
-            void advanceParticleRange(unsigned step, unsigned locus, bool rebuild_species_tree, unsigned first_particle, unsigned last_particle);
+            void                     runFirstLevelMultithread();
+            void                     runSecondLevelMultithread();
+            void                     advanceParticleRange(unsigned step, unsigned locus, bool rebuild_species_tree, unsigned first_particle, unsigned last_particle);
+#else
+            void                     runFirstLevelSerial();
+            void                     runSecondLevelSerial();
 #endif
+
+            Lot::SharedPtr           getLot();
+            void                     setRandomNumberSeed(unsigned rnseed);
     
             void                     setData(Data::SharedPtr d) {_data = d;}
-            void                     initFromParticle(Particle & p);
+            void                     initFromParticle(const Particle & p, Data::SharedPtr data);
             void                     init();
             void                     run();
+            void                     keepSecondLevel(vector<unsigned> & kept);
 
 #if defined(LAZY_COPYING)
             void                    buildNonzeroMap(unsigned locus,
                                         map<const void *, list<unsigned> > & nonzero_map,
                                         const vector<unsigned> & nonzeros);
 #endif
+            double                   calcLogSum(const vector<double> & log_values) const;
             double                   filterParticles(unsigned step, int locus);
             double                   filterParticlesWithinSubpops(unsigned step, int locus);
 
@@ -63,6 +71,7 @@ namespace proj {
         
             unsigned                 _mode;
             Data::SharedPtr          _data;
+            Lot::SharedPtr           _lot;
             vector<unsigned>         _counts;
             
             unsigned                 _nparticles;
@@ -79,6 +88,14 @@ namespace proj {
             vector<double>           _log_weights;
     };
         
+    inline SMC::SMC() {
+        _lot.reset(new Lot);
+        clear();
+    }
+    
+    inline SMC::~SMC() {
+    }
+    
     inline void SMC::clear() {
         _mode = SPECIES_AND_GENE;
         _nsteps = 0;
@@ -89,21 +106,29 @@ namespace proj {
         _subpop_id.clear();
     }
     
-    inline void SMC::initFromParticle(Particle & p) {
+    inline Lot::SharedPtr SMC::getLot() {
+        return _lot;
+    }
+    
+    inline void SMC::setRandomNumberSeed(unsigned rnseed) {
+        _lot->setSeed(rnseed);
+    }
+    
+    inline void SMC::initFromParticle(const Particle & parent_particle, Data::SharedPtr data) {
         assert(_nparticles > 0);
         
 #if defined(DEBUGGING_INITFROMPARTICLE)
         // output first level gene trees and species tree
-        output(format("\nSpecies forest:\n%s\n") % p.getSpeciesForest().makeNewick(9, true, false));
+        output(format("\nSpecies forest:\n%s\n") % parent_particle.getSpeciesForest().makeNewick(9, true, false));
         auto gene_forests = p.getGeneForestsConst();
         for (auto & gf : gene_forests) {
             output(format("\nGene forest:\n%s\n") % gf.makeNewick(9, true, false));
         }
 #endif
-        _data = p.getData();
+        _data = data;
         
         // This function should only be used when estimating species
-        // trees from complete gene trees (obtained from p)
+        // trees from complete gene trees (obtained from parent_particle)
         assert(_mode == SPECIES_GIVEN_GENE);
         
         // The _counts vector stores the number of darts that hit
@@ -125,7 +150,12 @@ namespace proj {
         // Create log_weights vector that stores log weight of each particle
         _log_weights.resize(_nparticles);
         
+        // Make a copy of parent_particle
+        Particle p = parent_particle;
+        assert(p.isEnsembleCoalInfo());
+        
         // Replace existing species tree with trivial forest
+        //TODO: this is better done before we start second level
         p.resetSpeciesForest();
         
         // Compute starting log coalescent likelihood
@@ -138,18 +168,14 @@ namespace proj {
 #endif
         p.resetPrevLogCoalLike();
             
-        // Initialize particle list with _nparticles Particles, each of which
-        // is a copy of p
+        // Initialize particle list with _nparticles Particles,
+        // each of which is a copy of p
         assert(_particles.size() == 0);
         _particles.resize(_nparticles, p);
         
         // Determine total number of steps required to build the species tree
         assert(G::_nspecies > 1);
         _nsteps = G::_nspecies - 1;
-
-        output(format("\nSMC (level 2) will require %d steps.\n") % _nsteps, G::LogCateg::SECONDLEVEL);
-
-        output(format("\n%12s %12s %24s %12s %12s\n") % "Step" % "ESS" % "logml" % "secs" % "wait", G::LogCateg::SECONDLEVEL);
     }
     
     inline void SMC::init() {
@@ -206,104 +232,8 @@ namespace proj {
                         
         // Determine total number of steps required to build all gene trees
         _nsteps = G::_nloci*(G::_ntaxa - 1);
-        output(format("\nSMC (level 1) will require %d steps.\n") % _nsteps, 1);
-        
-        G::showSettings();
-        
-        // Display header for progress table
-        output(format("\n%12s %12s  %24s %12s %12s\n") % "Step" % "ESS" % "logml" % "secs" % "wait");
     }
-    
-#if defined(USING_MULTITHREADING)
-    inline void SMC::buildThreadSchedule(vector<pair<unsigned, unsigned> > & thread_schedule) {
-        // Calculate thread_schedule and its associated entropy and return the percentage
-        // entropy relative to the maximum possible entropy
-
-#if 1
-        // Example: _nparticles = 11, _nthreads = 3
-        // particles_per_thread = 3, remainder = 2
-        // thread 0: begin = 0, end = 4  (= 0 + 3 + 1) <-- 0, 1, 2, 3
-        // thread 1: begin = 4, end = 8  (= 4 + 3 + 1) <-- 4, 5, 6, 7
-        // thread 2: begin = 8, end = 11 (= 8 + 3 + 0) <-- 8, 9, 10
-        unsigned particles_per_thread = (unsigned)floor(1.0*_nparticles/G::_nthreads);
-        unsigned remainder = _nparticles - G::_nthreads*particles_per_thread;
-        unsigned begin = 0;
-        for (unsigned i = 0; i < G::_nthreads; i++) {
-            unsigned end = begin + particles_per_thread;
-            if (remainder > 0) {
-                end++;
-                remainder--;
-            }
-            thread_schedule.push_back(make_pair(begin,end));
-            begin = end;
-        }
-#else
-        // Old version: used when there was a list of particles each of which
-        // had a count associated with it of identical particles.
-        //
-        // Suppose we are using 3 threads and there are 10 particles with these counts:
-        // _nparticles = 100 = 20 + 10 + 5 + 1 + 4 + 20 + 23 + 12 + 1 + 4 = 100
-        // prefix_sum        = 20   30  35  36  40   60   83   95  96  100
-        // thread_index      =  0    0   1   1   1    1    2    2   2    2
-        // max_count = 100/3 = 33
-
-        // Create thread schedule using the prefix-sum algorithm
-        thread_schedule.clear();
-        unsigned current_thread = 0;
-        pair<unsigned, unsigned> begin_end = make_pair(0,0);
-        unsigned prefix_sum = 0;
-        unsigned max_count = (unsigned)floor(1.0*_nparticles/G::_nthreads);
         
-        vector<unsigned> freqs(SMCGlobal::_nthreads, 0);
-        for (auto & p : _particle_list) {
-            // Add particle count to prefix sum
-            unsigned count = p.getCount();
-            
-            // If count greater than max_count, we cannot create
-            // a schedule because the schedule cannot split up
-            // the count of a single particle
-            if (count > max_count) {
-                thread_schedule.clear();
-                return 0.0;
-            }
-            
-            p.setBeginIndex(prefix_sum);
-            prefix_sum += count;
-                
-            // Calculate thread index
-            unsigned thread_index = (unsigned)floor(1.0*G::_nthreads*(prefix_sum - 1)/_nparticles);
-            
-            if (thread_index > current_thread) {
-                // Add thread to the schedule
-                thread_schedule.push_back(begin_end);
-                current_thread++;
-                
-                // Start work on next thread
-                begin_end.first  = begin_end.second;
-                begin_end.second = begin_end.first + 1;
-            }
-            else {
-                begin_end.second += 1;
-            }
-            freqs[current_thread] += count;
-        }
-        thread_schedule.push_back(begin_end);
-
-        // Calculate entropy, max_entropy, and percentage
-        double max_entropy = log(SMCGlobal::_nthreads);
-        double entropy = 0.0;
-        assert(_nparticles == accumulate(freqs.begin(), freqs.end(), 0));
-        for_each(freqs.begin(), freqs.end(), [&entropy](unsigned f){entropy -= 1.0*f*log(f);});
-        entropy /= _nparticles;
-        entropy += log(_nparticles);
-        double percentage = 100.0*entropy/max_entropy;
-        assert(!isnan(percentage));
-        
-        return percentage;
-#endif
-    }
-#endif
-    
 #if defined(USING_MULTITHREADING)
     inline void SMC::advanceParticleRange(unsigned step, unsigned locus, bool rebuild_species_tree, unsigned first_particle, unsigned last_particle) {
         for (unsigned i = first_particle; i < last_particle; i++) {
@@ -318,116 +248,212 @@ namespace proj {
     }
 #endif
 
-    inline void SMC::run() {
-        assert(_nsteps > 0);
-        
 #if defined(USING_MULTITHREADING)
-        vector<pair<unsigned, unsigned> > thread_sched;
-        buildThreadSchedule(thread_sched);
-
-        //temporary!
-        output(format("\nThread schedule (%d thread%s):\n") % thread_sched.size() % (G::_nthreads > 1 ? "s" : ""));
-        unsigned t = 0;
-        for (auto be : thread_sched) {
-            output(format("%12d %12d %12d\n") % (t++) % be.first % (be.second - 1));
-        }
-#endif
+    //*****************************************************************************************
+    //********** runFirstLevelMultithread *****************************************************
+    //*****************************************************************************************
+    inline void SMC::runFirstLevelMultithread() {
+        G::buildThreadSchedule(_nparticles, "particle");
                 
+        output(format("\nSMC (level 1) will require %d steps.\n") % _nsteps, 1);
+        
+        G::showSettings();
+        
+        // Display header for progress table
+        output(format("\n%12s %12s  %24s %12s %12s\n") % "Step" % "ESS" % "logml" % "secs" % "wait");
+        
         _log_marg_like = 0.0;
         double cum_secs = 0.0;
         for (unsigned step = 0; step < _nsteps; ++step) {
             stopwatch.start();
-            unsigned locus = G::_nloci;
+            unsigned locus = 0;
             
-            if (isJointMode()) {
-                
 #if defined(RANDOM_LOCUS_ORDERING)
-#               error random locus ordering not yet implemented except for sim
-                //TODO: if implemented, make sure species tree rebuilt for first locus considered, not just locus == 0
+#error random locus ordering not yet implemented except for sim
+            //TODO: if implemented, make sure species tree rebuilt for first locus considered, not just locus == 0
 #else
-                locus = step % G::_nloci;
-                assert(locus < G::_nloci);
+            locus = step % G::_nloci;
+            assert(locus < G::_nloci);
 #endif
-                // Replace seeds in seed bank
-                G::generateUpdateSeeds(_nparticles);
+            // Replace seeds in seed bank
+            G::generateUpdateSeeds(_nparticles);
 
-#if defined(USING_MULTITHREADING)
-                if (G::_nthreads > 1) {
-                    vector<thread> threads;
-                    for (unsigned i = 0; i < G::_nthreads; i++) {
-                        threads.push_back(thread(&SMC::advanceParticleRange,
-                            this,
-                            step,
-                            locus,
-                            locus == 0,
-                            thread_sched[i].first,
-                            thread_sched[i].second)
-                        );
-                    }
-
-                    // The join function causes this loop to pause until
-                    // the ith thread finishes
-                    for (unsigned i = 0; i < threads.size(); i++) {
-                        threads[i].join();
-                    }
-                }
-                else {
-                    advanceParticleRange(step, locus, locus == 0, 0, _nparticles);
-                }
-#else
-                for (unsigned i = 0; i < _nparticles; i++) {
-                    // Advance each particle by one coalescent event in one locus
-                    _particles[i].proposeCoalescence(
+            if (G::_nthreads > 1) {
+                vector<thread> threads;
+                for (unsigned i = 0; i < G::_nthreads; i++) {
+                    threads.push_back(thread(&SMC::advanceParticleRange,
+                        this,
                         step,
                         locus,
-                        G::_seed_bank[i],
-                        locus == 0 /*rebuild_species_tree*/
+                        locus == 0,
+                        G::_thread_sched[i].first,
+                        G::_thread_sched[i].second)
                     );
                 }
-#endif
-            }
-            else if (isConditionalMode()) {
-                for (unsigned i = 0; i < _nparticles; i++) {
-                    // Advance each particle by one speciation event
-                    _particles[i].proposeSpeciation(step);
+
+                // The join function causes this loop to pause until
+                // the ith thread finishes
+                for (unsigned i = 0; i < threads.size(); i++) {
+                    threads[i].join();
                 }
             }
             else {
-                throw XProj(format("Unknown SMC mode encountered (%d) in ParallelPolicyNone<T>::particleLoop function") % _mode);
+                advanceParticleRange(step, locus, locus == 0, 0, _nparticles);
             }
 
             // Filter particles using normalized weights and multinomial sampling
             // The _counts vector will be filled with the number of times each particle was chosen.
             double ess = _nparticles;
-            if (isJointMode()) {
-                if (_nsubpops == 1)
-                    ess = filterParticles(step, locus);
-                else
-                    ess = filterParticlesWithinSubpops(step, locus);
-            }
-            else {
-                ess = filterParticles(step, -1);
-            }
-            
-            double secs = stopwatch.stop();
-            
+            if (_nsubpops == 1)
+                ess = filterParticles(step, locus);
+            else
+                ess = filterParticlesWithinSubpops(step, locus);
+
+            VALGRIND_PRINTF("~~> post 1st-level step %d at time %d\n", step, (unsigned)clock());
+            VALGRIND_MONITOR_COMMAND(str(format("detailed_snapshot stepsnaps-%d.txt") % step).c_str());
+
             // Calculate waiting time until done
+            double secs = stopwatch.stop();
             cum_secs += secs;
             double avg_per_step = cum_secs/(step + 1);
             unsigned steps_to_go = _nsteps - (step + 1);
             double wait = avg_per_step*steps_to_go;
+            
+            output(format("%12d %12.3f %24.6f %12.3f %12.3f\n") % (step+1) % ess % _log_marg_like % secs % wait, G::LogCateg::INFO);
+        }
+    }
 
-            if (!isConditionalMode()) {
-                VALGRIND_PRINTF("~~> post 1st-level step %d at time %d\n", step, (unsigned)clock());
-                VALGRIND_MONITOR_COMMAND(str(format("detailed_snapshot stepsnaps-%d.txt") % step).c_str());
-                //ps.debugReport();
+    //*****************************************************************************************
+    //********** runSecondLevelMultithread ****************************************************
+    //*****************************************************************************************
+    inline void SMC::runSecondLevelMultithread() {
+        _log_marg_like = 0.0;
+        for (unsigned step = 0; step < _nsteps; ++step) {
+            unsigned locus = 0;
+            
+            for (unsigned i = 0; i < _nparticles; i++) {
+                // Advance each particle by one speciation event
+                _particles[i].proposeSpeciation(step, _lot);
             }
 
-            unsigned verbosity = isConditionalMode() ? G::LogCateg::SECONDLEVEL : G::LogCateg::INFO;
-            output(format("%12d %12.3f %24.6f %12.3f %12.3f\n") % (step+1) % ess % _log_marg_like % secs % wait, verbosity);
+            // Filter particles using normalized weights and multinomial sampling
+            // The _counts vector will be filled with the number of times each particle was chosen.
+            //TODO: should second level use subpops?
+            double ess = filterParticles(step, -1);
         }
+    }
+#else
+    //*****************************************************************************************
+    //********** runFirstLevelSerial **********************************************************
+    //*****************************************************************************************
+    inline void SMC::runFirstLevelSerial() {
+        output(format("\nSMC (level 1) will require %d steps.\n") % _nsteps, 1);
+        
+        G::showSettings();
+        
+        // Display header for progress table
+        output(format("\n%12s %12s  %24s %12s %12s\n") % "Step" % "ESS" % "logml" % "secs" % "wait");
+        
+        _log_marg_like = 0.0;
+        double cum_secs = 0.0;
+        for (unsigned step = 0; step < _nsteps; ++step) {
+            stopwatch.start();
+            unsigned locus = 0;
+            
+#if defined(RANDOM_LOCUS_ORDERING)
+#error random locus ordering not yet implemented except for sim
+            //TODO: if implemented, make sure species tree rebuilt for first locus considered, not just locus == 0
+#else
+            locus = step % G::_nloci;
+            assert(locus < G::_nloci);
+#endif
+            // Replace seeds in seed bank
+            G::generateUpdateSeeds(_nparticles);
 
-        ps.debugReport();
+            for (unsigned i = 0; i < _nparticles; i++) {
+                // Advance each particle by one coalescent event in one locus
+                _particles[i].proposeCoalescence(
+                    step,
+                    locus,
+                    G::_seed_bank[i],
+                    locus == 0 /*rebuild_species_tree*/
+                );
+            }
+
+            // Filter particles using normalized weights and multinomial sampling
+            // The _counts vector will be filled with the number of times each particle was chosen.
+            double ess = _nparticles;
+            if (_nsubpops == 1)
+                ess = filterParticles(step, locus);
+            else
+                ess = filterParticlesWithinSubpops(step, locus);
+
+            VALGRIND_PRINTF("~~> post 1st-level step %d at time %d\n", step, (unsigned)clock());
+            VALGRIND_MONITOR_COMMAND(str(format("detailed_snapshot stepsnaps-%d.txt") % step).c_str());
+
+            // Calculate waiting time until done
+            double secs = stopwatch.stop();
+            cum_secs += secs;
+            double avg_per_step = cum_secs/(step + 1);
+            unsigned steps_to_go = _nsteps - (step + 1);
+            double wait = avg_per_step*steps_to_go;
+            
+            output(format("%12d %12.3f %24.6f %12.3f %12.3f\n") % (step+1) % ess % _log_marg_like % secs % wait, G::LogCateg::INFO);
+        }
+    }
+
+    //*****************************************************************************************
+    //********** runSecondLevelSerial *********************************************************
+    //*****************************************************************************************
+    inline void SMC::runSecondLevelSerial() {
+        output(format("\nSMC (level 2) will require %d steps.\n") % _nsteps, G::LogCateg::SECONDLEVEL);
+        output(format("\n%12s %12s %24s %12s %12s\n") % "Step" % "ESS" % "logml" % "secs" % "wait", G::LogCateg::SECONDLEVEL);
+        
+        _log_marg_like = 0.0;
+        double cum_secs = 0.0;
+        for (unsigned step = 0; step < _nsteps; ++step) {
+            stopwatch.start();
+            
+            for (unsigned i = 0; i < _nparticles; i++) {
+                // Advance each particle by one speciation event
+                _particles[i].proposeSpeciation(step, _lot);
+            }
+
+            // Filter particles using normalized weights and multinomial sampling
+            // The _counts vector will be filled with the number of times each particle was chosen.
+            double ess = _nparticles;
+            //TODO: should second level use subpops?
+            ess = filterParticles(step, -1);
+
+            // Calculate waiting time until done
+            double secs = stopwatch.stop();
+            cum_secs += secs;
+            double avg_per_step = cum_secs/(step + 1);
+            unsigned steps_to_go = _nsteps - (step + 1);
+            double wait = avg_per_step*steps_to_go;
+            
+            output(format("%12d %12.3f %24.6f %12.3f %12.3f\n") % (step+1) % ess % _log_marg_like % secs % wait, G::LogCateg::SECONDLEVEL);
+        }
+    }
+#endif
+
+    inline void SMC::run() {
+        assert(_nsteps > 0);
+        bool first_level = isJointMode();
+        bool second_level = isConditionalMode();
+        assert(first_level || second_level);
+        
+#if defined(USING_MULTITHREADING)
+        if (first_level)
+            runFirstLevelMultithread();
+        else
+            runSecondLevelMultithread();
+#else
+        if (first_level)
+            runFirstLevelSerial();
+        else
+            runSecondLevelSerial();
+#endif
     }
     
     inline void SMC::summarize() {
@@ -575,11 +601,26 @@ namespace proj {
         }
     }
 #endif
+
+    inline double SMC::calcLogSum(const vector<double> & log_values) const {
+        double max_logv = *max_element(log_values.begin(), log_values.end());
+        
+        double factored_sum = 0.0;
+        for (auto & logv : log_values) {
+            factored_sum += exp(logv - max_logv);
+        }
+        double log_sum_values = max_logv + log(factored_sum);
+        return log_sum_values;
+    }
     
     inline double SMC::filterParticles(unsigned step, int locus) {
+        bool first_level = (locus > -1);
+        Lot::SharedPtr lot = (first_level ? ::rng : _lot);
+        
         // Sanity checks
         assert(_counts.size() == _nparticles);
         
+        // Build vector log_weights
         vector<double> log_weights(_nparticles, 0.0);
         for (unsigned i = 0; i < _particles.size(); i++) {
 #if defined(USE_HEATING)
@@ -590,13 +631,13 @@ namespace proj {
         }
                         
         // Normalize log_weights to create discrete probability distribution
-        double log_sum_weights = G::calcLogSum(log_weights);
+        double log_sum_weights = calcLogSum(log_weights);
         vector<double> probs(_nparticles, 0.0);
         transform(log_weights.begin(), log_weights.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
                 
         // Compute component of the log marginal likelihood due to this step
         _log_marg_like += log_sum_weights - log(_nparticles);
-        if (locus > -1 && step < G::_nloci) {
+        if (first_level && step < G::_nloci) {
             _log_marg_like += _starting_log_likelihoods[locus];
         }
         
@@ -606,9 +647,11 @@ namespace proj {
         // Zero vector of counts storing number of darts hitting each particle
         _counts.assign(_nparticles, 0);
                 
-        // Store indexes of particles with non-zero counts in vector nonzeros
+        // Store indices of particles with zero counts in vector zeros
         vector<unsigned> zeros;
         zeros.reserve(_nparticles);
+
+        // Store indices of particles with non-zero counts in vector nonzeros
         vector<unsigned> nonzeros;
         nonzeros.reserve(_nparticles);
 
@@ -616,7 +659,7 @@ namespace proj {
         assert(probs.size() == _nparticles);
         double cump = probs[0];
         double n = _nparticles;
-        double delta = rng->uniform()/n;
+        double delta = lot->uniform()/n;
         unsigned c = (unsigned)(floor(1.0 + n*(cump - delta)));
         if (c > 0)
             nonzeros.push_back(0);
@@ -643,7 +686,7 @@ namespace proj {
         
         // Throw _nparticles darts
         for (unsigned i = 0; i < _nparticles; ++i) {
-            double u = ::rng->uniform();
+            double u = lot->uniform();
             auto it = find_if(probs.begin(), probs.end(), [u](double cump){return cump > u;});
             assert(it != probs.end());
             unsigned which = (unsigned)distance(probs.begin(), it);
@@ -662,7 +705,9 @@ namespace proj {
         // memory address does not need to be copied and can be
         // modified in place).
         map<const void *, list<unsigned> > nonzero_map;
-        buildNonzeroMap(locus, nonzero_map, nonzeros);
+        if (first_level) {
+            buildNonzeroMap(locus, nonzero_map, nonzeros);
+        }
 #endif
         
         // Example of following code that replaces dead
@@ -689,7 +734,9 @@ namespace proj {
         while (next_nonzero < nonzeros.size()) {
             double index_survivor = nonzeros[next_nonzero];
 #if defined(LAZY_COPYING)
-            _particles[index_survivor].finalizeLatestJoin(locus, index_survivor, nonzero_map);
+            if (first_level) {
+                _particles[index_survivor].finalizeLatestJoin(locus, index_survivor, nonzero_map);
+            }
 #endif
             unsigned ncopies = _counts[index_survivor] - 1;
             for (unsigned k = 0; k < ncopies; k++) {
@@ -704,8 +751,11 @@ namespace proj {
                                     
         return ess;
     }
-    
+
     inline double SMC::filterParticlesWithinSubpops(unsigned step, int locus) {
+        // If used in second level, need to replace rng when multithreading
+        assert(isJointMode());
+        
         // Sanity checks
         assert(_counts.size() == _nparticles);
         assert(_subpop_id.size() == _nparticles);
@@ -758,7 +808,7 @@ namespace proj {
                 log_weights[j++] = particles[i]->getLogWeight();
             }
                         
-            double log_sum_weights = G::calcLogSum(log_weights);
+            double log_sum_weights = calcLogSum(log_weights);
             transform(log_weights.begin(), log_weights.end(), probs.begin(), [log_sum_weights](double logw){return exp(logw - log_sum_weights);});
             
             // Compute component of the log marginal likelihood due to this step
@@ -1172,7 +1222,7 @@ namespace proj {
         }
     }
 
-    double SMC::calcLogSpeciesTreePrior(vector<Forest::coalinfo_t> & coalinfo_vect, bool include_join_probs) const {
+    inline double SMC::calcLogSpeciesTreePrior(vector<Forest::coalinfo_t> & coalinfo_vect, bool include_join_probs) const {
         double log_prior = 0.0;
         double tprev = 0.0;
         double t = 0.0;
@@ -1200,13 +1250,24 @@ namespace proj {
         return log_prior;
     }
 
-    void SMC::dumpParticles(SMC & ensemble, vector<unsigned> & kept) {
+    inline void SMC::dumpParticles(SMC & ensemble, vector<unsigned> & kept) {
         // Dump _particles into ensemble, leaving _particles empty
-        //move(_particles.begin(), _particles.end(), back_inserter(ensemble._particles));
+        assert(kept.size() > 0);
         for (auto k : kept) {
             ensemble._particles.push_back(_particles[k]);
         }
+        assert(ensemble._particles.size() > 0);
         _particles.clear();
     }
-    
+
+    inline void SMC::keepSecondLevel(vector<unsigned> & kept) {
+        assert(isConditionalMode());
+        assert(_particles.size() == G::_nparticles2);
+        assert(_lot);
+        kept.reserve(_particles.size());
+        for (unsigned k = 0; k < G::_nkept2; k++) {
+            unsigned i = _lot->randint(0, G::_nparticles2 - 1);
+            kept.push_back(i);
+        }
+    }
 }

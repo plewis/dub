@@ -14,6 +14,7 @@ namespace proj {
             
             void setData(Data::SharedPtr data);
             Data::SharedPtr getData() {return _data;}
+            Data::SharedPtrConst getDataConst() const {return _data;}
                         
             double setThetas();
             
@@ -23,6 +24,8 @@ namespace proj {
             //void threadComputePartials(unsigned first, unsigned last);
             void computeAllPartials();
             
+            bool isEnsembleCoalInfo();
+            void buildEnsembleCoalInfo();
             void rebuildCoalInfo();
             void recordAllForests(vector<Forest::coalinfo_t> & coalinfo_vect) const;
             
@@ -47,7 +50,7 @@ namespace proj {
             double findHeightNextCoalescentEvent(double hstart, vector<Forest::coalinfo_t> & coalinfo_vect);
             double calcMaxGeneForestHeight() const;
 
-            unsigned proposeSpeciation(unsigned step);
+            unsigned proposeSpeciation(unsigned step, Lot::SharedPtr lot);
             void proposeCoalescence(unsigned step, unsigned locus, unsigned rnseed, bool rebuild_species_tree);
 
             bool advanceByOneCoalescence(unsigned step, unsigned locus, bool first_attempt);
@@ -87,7 +90,7 @@ namespace proj {
 #endif
             
             void setGeneTrees(vector<GeneForest> & gtvect);
-            pair<double,double> chooseTruncatedSpeciesForestIncrement(double truncate_at);
+            pair<double,double> chooseTruncatedSpeciesForestIncrement(double truncate_at, Lot::SharedPtr lot);
             
             unsigned debugCountNumCoalEvents() const;
             void debugCheckPartials() const;
@@ -108,6 +111,10 @@ namespace proj {
             
             void setLastProposedSecondIndex(unsigned s);
             unsigned getLastProposedSecondIndex();
+            
+            void stowAllPartials(unsigned locus);
+            
+            void setRandomNumberSeed(unsigned rnseed);
             
             typedef shared_ptr<Particle> SharedPtr;
                                 
@@ -133,6 +140,8 @@ namespace proj {
             mutable vector<Node::species_tuple_t> _species_tuples;
 #endif
             SpeciesForest              _species_forest;
+            
+            vector<Forest::coalinfo_t> _ensemble_coalinfo;  // second level only
             
             mutable double              _log_coal_like;
             mutable double              _prev_log_coal_like;
@@ -299,20 +308,56 @@ namespace proj {
         _species_forest.buildCoalInfoVect();
     }
     
-    inline void Particle::recordAllForests(vector<Forest::coalinfo_t> & coalinfo_vect) const {
-        // Record gene trees
-        for (unsigned g = 0; g < G::_nloci; g++) {
+    inline bool Particle::isEnsembleCoalInfo() {
+        return (bool)(_ensemble_coalinfo.size() > 0);
+    }
+    
+    inline void Particle::buildEnsembleCoalInfo() {
+        // Store a tuple (height, gene + 1, vector of species)
+        // for each join in any gene tree in _ensemble_coalinfo.
+        // To get 0-offset gene index,
+        // subtract 1 from 2nd element of tuple (if 2nd element
+        // is 0, then tuple represents a species tree join)
+        _ensemble_coalinfo.clear();
+
+        // Add gene tree joins to _ensemble_coalinfo_vect
 #if defined(LAZY_COPYING)
+        for (unsigned g = 0; g < G::_nloci; g++) {
             GeneForest::SharedPtr gfp = _gene_forest_ptrs[g];
-            assert(gfp->getNumLineages() == 1);
-            gfp->saveCoalInfo(coalinfo_vect);
-#else
-            const GeneForest & gf = _gene_forests[g];
-            assert(gf.getNumLineages() == 1);
-            gf.saveCoalInfo(coalinfo_vect);
-#endif
+            gfp->saveCoalInfo(_ensemble_coalinfo);
         }
-        sort(coalinfo_vect.begin(), coalinfo_vect.end());
+#else
+        for (unsigned g = 0; g < G::_nloci; g++) {
+            GeneForest & gf = _gene_forests[g];
+            gf.saveCoalInfo(_ensemble_coalinfo);
+        }
+#endif
+        
+        // Sort coalinfo_vect from smallest to largest height
+        sort(_ensemble_coalinfo.begin(), _ensemble_coalinfo.end());
+    }
+    
+    inline void Particle::recordAllForests(vector<Forest::coalinfo_t> & coalinfo_vect) const {
+    
+        // Record gene trees if not already done
+        if (_ensemble_coalinfo.empty()) {
+            for (unsigned g = 0; g < G::_nloci; g++) {
+#if defined(LAZY_COPYING)
+                GeneForest::SharedPtr gfp = _gene_forest_ptrs[g];
+                assert(gfp->getNumLineages() == 1);
+                gfp->saveCoalInfo(coalinfo_vect);
+#else
+                const GeneForest & gf = _gene_forests[g];
+                assert(gf.getNumLineages() == 1);
+                gf.saveCoalInfo(coalinfo_vect);
+#endif
+            }
+            sort(coalinfo_vect.begin(), coalinfo_vect.end());
+        }
+        else {
+            // Copy precalculated ensemble coalinfo vector
+            coalinfo_vect = _ensemble_coalinfo;
+        }
 
         // Record species tree
         vector<Forest::coalinfo_t> sppinfo_vect;
@@ -320,7 +365,7 @@ namespace proj {
         sort(sppinfo_vect.begin(), sppinfo_vect.end());
         
         // Modify coalescent elements according to species tree
-        _species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect);
+        _species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect, /*capstone*/false);
         
         //BUG lines below fix 2nd level bug 2024-06-19
         // see also Particle::proposeSpeciation
@@ -660,6 +705,20 @@ namespace proj {
         nd->_partial.reset();
     }
     
+    inline void Particle::setRandomNumberSeed(unsigned rnseed) {
+        _lot->setSeed(rnseed);
+    }
+
+    inline void Particle::stowAllPartials(unsigned locus) {
+#if defined(LAZY_COPYING)
+        assert(locus < _gene_forest_ptrs.size());
+        _gene_forest_ptrs[locus]->stowAllPartials();
+#else
+        assert(locus < _gene_forests.size());
+        _gene_forests[locus].stowAllPartials();
+#endif
+    }
+    
     double Particle::findHeightNextCoalescentEvent(double hstart, vector<Forest::coalinfo_t> & coalinfo_vect) {
         double min_height = G::_infinity;
         for (auto & ci : coalinfo_vect) {
@@ -679,7 +738,8 @@ namespace proj {
         return min_height;
     }
     
-    inline unsigned Particle::proposeSpeciation(unsigned step) {
+#if defined(DEBUG_COALLIKE)
+    inline unsigned Particle::proposeSpeciation(unsigned step, Lot::SharedPtr lot) {
         // This function is only used for proposing speciation events when there are
         // complete gene trees available. It thus draws increments from a truncated
         // exponential distribution where the trunction point is the next height at
@@ -687,7 +747,8 @@ namespace proj {
         // species.
         unsigned num_species_tree_lineages = 0;
         
-        // Stores tuple (height, 0, vector of species) for each join in the current species forest.
+        // Store tuple (height, 0, vector of species) for
+        // each join in the current species forest.
         // Do not cap with ancestral species at this point.
         vector<Forest::coalinfo_t> sppinfo_vect;
         _species_forest.saveCoalInfo(sppinfo_vect);
@@ -695,10 +756,10 @@ namespace proj {
         // Sort sppinfo_vect from smallest height to largest height
         sort(sppinfo_vect.begin(), sppinfo_vect.end());
         
-        // coalinfo_vect stores a tuple (height, gene + 1, vector of species)
+        // Store a tuple (height, gene + 1, vector of species)
         // for each join in any gene tree. To get 0-offset gene index,
-        // subtract 1 from 2nd element of tuple (if 2nd element is 0, then
-        // tuple represents a species tree join)
+        // subtract 1 from 2nd element of tuple (if 2nd element
+        // is 0, then tuple represents a species tree join)
         vector<Forest::coalinfo_t> coalinfo_vect;
         
         // Add gene tree joins to coalinfo_vect
@@ -723,19 +784,15 @@ namespace proj {
         double max_height = get<0>((*coalinfo_vect.rbegin()));
         
         if (step > 0) {
-#if defined(DEBUG_COALLIKE)
             output("\nSpecies tree before creating speciation:\n", G::LogCateg::DEBUGGING);
             output(format("  %s\n") % _species_forest.makeNewick(9, true, false), G::LogCateg::DEBUGGING);
-#endif
 
             // Create speciation event
             G::species_t left_spp, right_spp, anc_spp;
-            _species_forest.speciationEvent(rng, left_spp, right_spp, anc_spp);
+            _species_forest.speciationEvent(lot, left_spp, right_spp, anc_spp);
             
-#if defined(DEBUG_COALLIKE)
             output("\nSpecies tree after creating speciation:\n", G::LogCateg::DEBUGGING);
             output(format("  %s\n") % _species_forest.makeNewick(9, true, false), G::LogCateg::DEBUGGING);
-#endif
 
             // Let sppinfo_vect reflect current state of species forest
             sppinfo_vect.clear();
@@ -745,19 +802,15 @@ namespace proj {
             // Sort sppinfo_vect from smallest height to largest height
             sort(sppinfo_vect.begin(), sppinfo_vect.end());
 
-#if defined(DEBUG_COALLIKE)
             // Show coalinfo_vect before fixing up
             _species_forest.debugShowCoalInfo("sppinfo_vect after speciation event", sppinfo_vect, /*fn*/"");
             _species_forest.debugShowCoalInfo("coalinfo_vect before fixup", coalinfo_vect, /*fn*/"");
-#endif
                 
             // Adjust elements of coalinfo_vect affected by species tree joins
             _species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect);
 
-#if defined(DEBUG_COALLIKE)
             // Show coalinfo_vect before fixing up
             _species_forest.debugShowCoalInfo("coalinfo_vect after fixup", coalinfo_vect, /*fn*/"");
-#endif
         }
                 
         // Draw a speciation increment dt.
@@ -772,38 +825,14 @@ namespace proj {
         
         num_species_tree_lineages = _species_forest.getNumLineages();
         if (num_species_tree_lineages == 2) {
-#if defined(DEBUG_COALLIKE)
             output("\nSpecies tree before creating FINAL speciation:\n", G::LogCateg::DEBUGGING);
             output(format("  %s\n") % _species_forest.makeNewick(9, true, false), G::LogCateg::DEBUGGING);
-#endif
             // Create final speciation event
             G::species_t left_spp, right_spp, anc_spp;
-            _species_forest.speciationEvent(rng, left_spp, right_spp, anc_spp);
+            _species_forest.speciationEvent(lot, left_spp, right_spp, anc_spp);
             
-#if defined(DEBUG_COALLIKE)
             output("\nSpecies tree after creating FINAL speciation:\n", G::LogCateg::DEBUGGING);
             output(format("  %s\n") % _species_forest.makeNewick(9, true, false), G::LogCateg::DEBUGGING);
-#endif
-            // Let sppinfo_vect reflect current state of species forest
-            //sppinfo_vect.clear();
-            //_species_forest.buildCoalInfoVect();
-            //_species_forest.saveCoalInfo(sppinfo_vect, /*cap*/false);
-            
-            // Sort sppinfo_vect from smallest height to largest height
-            //sort(sppinfo_vect.begin(), sppinfo_vect.end());
-
-#if defined(DEBUG_COALLIKE)
-            // Show coalinfo_vect before fixing up
-            //_species_forest.debugShowCoalInfo("sppinfo_vect after FINAL speciation event", sppinfo_vect, /*fn*/"");
-            //_species_forest.debugShowCoalInfo("coalinfo_vect before fixup", coalinfo_vect, /*fn*/"");
-#endif
-            // Adjust elements of coalinfo_vect affected by species tree joins
-            //_species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect);
-
-#if defined(DEBUG_COALLIKE)
-            // Show coalinfo_vect before fixing up
-            //_species_forest.debugShowCoalInfo("coalinfo_vect after fixup", coalinfo_vect, /*fn*/"");
-#endif
         }
         
         // Add species tree joins to sppinfo_vect. Cap with ancestral species
@@ -815,19 +844,15 @@ namespace proj {
         // Sort sppinfo_vect from smallest height to largest height
         sort(sppinfo_vect.begin(), sppinfo_vect.end());
         
-#if defined(DEBUG_COALLIKE)
         // Show coalinfo_vect before fixing up
         _species_forest.debugShowCoalInfo("sppinfo_vect", sppinfo_vect, /*fn*/"");
         _species_forest.debugShowCoalInfo("coalinfo_vect before fixup", coalinfo_vect, /*fn*/"");
-#endif
                 
         // Adjust elements of coalinfo_vect affected by species tree joins
         _species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect);
 
-#if defined(DEBUG_COALLIKE)
         // Show coalinfo_vect after fixing up
         _species_forest.debugShowCoalInfo("coalinfo_vect after fixup", coalinfo_vect, /*fn*/"");
-#endif
 
         // Add speciations into coalinfo_vect
         //BUG lines below fix 2nd level bug 2024-06-19
@@ -837,11 +862,8 @@ namespace proj {
 
         // Compute coalescent likelihood and log weight
         //double prev_log_coallike = _prev_log_coallike;
-#if defined(DEBUG_COALLIKE)
         calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/true, /*verbose*/true);
-#else
-        calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/true, /*verbose*/false);
-#endif
+
 #if defined(USE_HEATING)
         _prev_log_weight = _log_weight;
 #endif
@@ -851,7 +873,92 @@ namespace proj {
         
         return num_species_tree_lineages;
     }
-    
+#else
+    // DEBUG_COALLIKE not defined
+    inline unsigned Particle::proposeSpeciation(unsigned step, Lot::SharedPtr lot) {
+        // This function is only used for proposing speciation events when there are
+        // complete gene trees available. It thus draws increments from a truncated
+        // exponential distribution where the trunction point is the next height at
+        // which at least one coalescent event combines lineages from two different
+        // species.
+        unsigned num_species_tree_lineages = 0;
+        
+        // Store tuple (height, 0, vector of species) for
+        // each join in the current species forest.
+        // Do not cap with ancestral species at this point.
+        vector<Forest::coalinfo_t> sppinfo_vect;
+        _species_forest.saveCoalInfo(sppinfo_vect);
+
+        // Sort sppinfo_vect from smallest height to largest height
+        sort(sppinfo_vect.begin(), sppinfo_vect.end());
+        
+        // Make a copy of _ensemble_coalinfo;
+        vector<Forest::coalinfo_t> coalinfo_vect = _ensemble_coalinfo;
+
+        // Get maximum height of any gene tree
+        double max_height = get<0>((*coalinfo_vect.rbegin()));
+        
+        if (step > 0) {
+            // Create speciation event
+            G::species_t left_spp, right_spp, anc_spp;
+            _species_forest.speciationEvent(lot, left_spp, right_spp, anc_spp);
+            
+            // Let sppinfo_vect reflect current state of species forest
+            sppinfo_vect.clear();
+            _species_forest.buildCoalInfoVect();
+            _species_forest.saveCoalInfo(sppinfo_vect, /*cap*/false);
+            
+            // Sort sppinfo_vect from smallest height to largest height
+            sort(sppinfo_vect.begin(), sppinfo_vect.end());
+
+            // Adjust elements of coalinfo_vect affected by species tree joins
+            _species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect, /*capstone*/false);
+        }
+                
+        // Draw a speciation increment dt.
+        double forest_height = _species_forest.getHeight();
+        double h = findHeightNextCoalescentEvent(forest_height, coalinfo_vect);
+        assert(h <= max_height);
+        
+        pair<double,double> tmp = chooseTruncatedSpeciesForestIncrement(h, lot);
+        double log_weight_factor = tmp.first;
+        
+        num_species_tree_lineages = _species_forest.getNumLineages();
+        if (num_species_tree_lineages == 2) {
+            // Create final speciation event
+            G::species_t left_spp, right_spp, anc_spp;
+            _species_forest.speciationEvent(lot, left_spp, right_spp, anc_spp);
+        }
+        
+        // Add species tree joins to sppinfo_vect. Cap with ancestral species
+        // in order to compute complete coalescent likelihood.
+        sppinfo_vect.clear();
+        _species_forest.buildCoalInfoVect();
+        _species_forest.saveCoalInfo(sppinfo_vect, /*cap*/true);
+
+        // Sort sppinfo_vect from smallest height to largest height
+        sort(sppinfo_vect.begin(), sppinfo_vect.end());
+                
+        // Adjust elements of coalinfo_vect affected by species tree joins
+        _species_forest.fixupCoalInfo(coalinfo_vect, sppinfo_vect, /*capstone*/true);
+
+        // Add speciations into coalinfo_vect
+        coalinfo_vect.insert(coalinfo_vect.begin(), sppinfo_vect.begin(), sppinfo_vect.end());
+        sort(coalinfo_vect.begin(), coalinfo_vect.end());
+
+        // Compute coalescent likelihood and log weight
+        calcLogCoalescentLikelihood(coalinfo_vect, /*integrate_out_thetas*/true, /*verbose*/false);
+#if defined(USE_HEATING)
+        _prev_log_weight = _log_weight;
+#endif
+        _log_weight = _log_coal_like - _prev_log_coal_like + log_weight_factor;
+
+        resetPrevLogCoalLike();
+        
+        return num_species_tree_lineages;
+    }
+#endif // DEBUG_COALLIKE not defined
+
     inline double Particle::calcMaxGeneForestHeight() const {
         double max_gene_forest_height = 0.0;
         for (unsigned g = 0; g < G::_nloci; g++) {
@@ -946,7 +1053,7 @@ namespace proj {
         assert(n > 1);
         
         // Choose a random pair of lineages to join
-        pair<unsigned,unsigned> chosen_pair = ::rng->nchoose2(n);
+        pair<unsigned,unsigned> chosen_pair = lot->nchoose2(n);
         unsigned i = chosen_pair.first;
         unsigned j = chosen_pair.second;
         
@@ -977,7 +1084,7 @@ namespace proj {
         calcProbCoalescenceWithinSpecies(probs, total_rate);
                 
         // Choose the species in which the coalescence will happen
-        unsigned which = G::multinomialDraw(::rng, probs);
+        unsigned which = G::multinomialDraw(lot, probs);
         assert(which < probs.size());
         G::species_t spp = get<2>(_species_tuples[which]);
                     
@@ -1311,6 +1418,7 @@ namespace proj {
         // Performs a deep copy of other to this particle
         _data = other._data;
         _prev_log_likelihoods = other._prev_log_likelihoods;
+        _ensemble_coalinfo = other._ensemble_coalinfo;
         
 #if defined(LAZY_COPYING)
         // Ensure that _gene_forest_extensions is allocated
@@ -1359,9 +1467,9 @@ namespace proj {
         copyParticleFrom(other);
     }
         
-    inline pair<double,double> Particle::chooseTruncatedSpeciesForestIncrement(double truncate_at) {
+    inline pair<double,double> Particle::chooseTruncatedSpeciesForestIncrement(double truncate_at, Lot::SharedPtr lot) {
         double upper_bound = truncate_at - _species_forest.getHeight();
-        auto incr_rate_cum = _species_forest.drawTruncatedIncrement(::rng, upper_bound);
+        auto incr_rate_cum = _species_forest.drawTruncatedIncrement(lot, upper_bound);
         double incr = get<0>(incr_rate_cum);
         double rate = get<1>(incr_rate_cum);
         assert(rate > 0.0);

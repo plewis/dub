@@ -26,6 +26,10 @@ namespace proj {
    
             void                            clear();
             void                            processCommandLineOptions(int argc, const char * argv[]);
+            void                            secondLevelRange(vector<Particle> & first_level_particles, SMC & ensemble, unsigned nparticles, unsigned nkept, unsigned first, unsigned last);
+            void                            secondLevelConditionedOn(unsigned rnseed, const Particle & p, unsigned nparticles, unsigned nkept, SMC & ensemble);
+        void                                buildEnsembleCoalInfo(vector<Particle> & first_level_particles);
+            void                            stripPartials(vector<Particle> & first_level_particles);
             void                            run();
             void                            readData();
             void                            setRelativeRates();
@@ -33,7 +37,8 @@ namespace proj {
             void                            simulateData();
             void                            outputGeneTreesToFile(string fn, const vector<string> & newicks) const;
             void                            outputNexusTreefile(string fn, const vector<string> & newicks) const;
-            void                            outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric, const vector<string> & newick_gene_trees_numeric);
+            void                            outputJavascriptTreefile(string fn, const string & newick_species_tree_numeric,
+                                                const vector<string> & newick_gene_trees_numeric);
 #if defined(LAZY_COPYING)
             void                            outputTrees(SpeciesForest & sf, vector<GeneForest::SharedPtr> & gfpvect);
 #else
@@ -152,20 +157,17 @@ namespace proj {
         }
         notify(vm);
 
-        // If user specified --help on command line, output usage summary and quit
         if (vm.count("help") > 0) {
             output(format("%s\n") % desc, G::LogCateg::ALWAYS);
             exit(1);
         }
 
-        // If user specified --version on command line, output version and quit
         if (vm.count("version") > 0) {
             output(format("This is %s version %d.%d\n") % _program_name % _major_version % _minor_version);
             exit(1);
         }
         
 #if defined(USING_MULTITHREADING)
-        // User specified --nthreads on command line,
         if (vm.count("nthreads") > 0) {
             if (G::_nthreads < 1) {
                 output(format("Number of threads specified cannot be less than 1 (you specified %d)\n") % G::_nthreads);
@@ -174,6 +176,17 @@ namespace proj {
         }
 #endif
 
+        if (vm.count("nspeciesparticles") > 0 || vm.count("nspecieskept") > 0) {
+            if (G::_nparticles2 > 0 && G::_nkept2 == 0) {
+                output(format("You specified nspeciesparticles = %d but nspecieskept is still set to default value 0\n") % G::_nparticles2);
+                exit(1);
+            }
+            else if (G::_nparticles2 == 0 && G::_nkept2 > 0) {
+                output(format("You specified nspecieskept = %d but nspeciesparticles is still set to default value 0\n") % G::_nkept2);
+                exit(1);
+            }
+        }
+        
         // If user specified --relrate on command line, break specified relrate
         // definition into name and rate
         if (vm.count("relrate") > 0) {
@@ -957,6 +970,101 @@ namespace proj {
         paupf.close();
      }
      
+    inline void Proj::secondLevelRange(vector<Particle> & first_level_particles, SMC & ensemble, unsigned nparticles, unsigned nkept, unsigned first, unsigned last) {
+        for (unsigned i = first; i < last; i++) {
+            unsigned rnseed = 1;
+            Particle * p = nullptr;
+            {
+#if defined(USING_MULTITHREADING)
+                lock_guard<mutex> guard(G::_mutex);
+#endif
+                p = &first_level_particles[i];
+                rnseed = G::_seed_bank[i];
+                //output(format("  kept %d\n") % (i+1), G::LogCateg::INFO);
+            }
+            secondLevelConditionedOn(rnseed, *p, nparticles, nkept, ensemble);
+        }
+    }
+    
+    inline void Proj::secondLevelConditionedOn(unsigned rnseed, const Particle & p, unsigned nparticles, unsigned nkept, SMC & ensemble) {
+        
+        SMC smc2;
+        smc2.setNParticles(G::_nparticles2, 1); //TODO: let 2nd level have subpops?
+        smc2.setMode(SMC::SPECIES_GIVEN_GENE);
+        smc2.initFromParticle(p, _data);
+        smc2.setRandomNumberSeed(rnseed);
+        smc2.run();
+        
+        // Choose (discrete-uniform-randomly) G::_nkept2 2nd-level particles
+        vector<unsigned> kept2;
+        smc2.keepSecondLevel(kept2);
+
+        {
+#if defined(USING_MULTITHREADING)
+            lock_guard<mutex> guard(G::_mutex);
+#endif
+            smc2.dumpParticles(ensemble, kept2);
+        }
+    }
+    
+    inline void Proj::buildEnsembleCoalInfo(vector<Particle> & first_level_particles) {
+        for (auto & p : first_level_particles) {
+            // Gather gene tree info into particle's _ensemble_coalinfo vector
+            p.rebuildCoalInfo();
+            p.buildEnsembleCoalInfo();
+        }
+    }
+    
+    inline void Proj::stripPartials(vector<Particle> & first_level_particles) {
+        // Strip all partials from gene trees (not needed in second level
+
+#if 0
+        //TODO: needs work
+        // First create map whose keys store unique gene forest pointers
+        // and whose values store the particle and locus of that gene forest
+        map<const void *, vector<pair<unsigned, unsigned> > > unique_gene_forests;
+        map<unsigned, unsigned> locus_counts;
+        map<unsigned, unsigned> particle_counts;
+        unsigned particle_index = 0;
+        for (auto & p : first_level_particles) {
+            unsigned locus_index = 0;
+            vector<GeneForest::SharedPtr> & gene_forest_ptrs = p.getGeneForestPtrs();
+            for (auto & gfp : gene_forest_ptrs) {
+                const void * ptr = (const void *)gfp.get();
+                if (unique_gene_forests.count(ptr) > 0) {
+                    unique_gene_forests[ptr].push_back(make_pair(particle_index, locus_index));
+                }
+                else {
+                    unique_gene_forests[ptr] = {make_pair(particle_index, locus_index)};
+                }
+                locus_index++;
+            }
+            particle_index++;
+        }
+        
+        //temporary!
+        for (auto & m : unique_gene_forests) {
+            //output(format("%s\n") % G::memoryAddressAsString(m.first));
+            for (auto & v : m.second) {
+                //output(format("  %d, %d\n") % v.first % v.second);
+                particle_counts[v.first]++;
+                locus_counts[v.second]++;
+            }
+        }
+        //temporary!
+        output("\nNumber of unique gene forests per particle:\n");
+        for (auto & m : particle_counts) {
+            output(format("  %d: %d\n") % m.first % m.second);
+        }
+        //temporary!
+        output("\nNumber of unique gene forests per locus:\n");
+        for (auto & m : locus_counts) {
+            output(format("  %d: %d\n") % m.first % m.second);
+        }
+        cerr << endl;
+#endif
+    }
+     
     inline void Proj::run() {
     
         ::rng->setSeed(G::_rnseed);
@@ -1004,13 +1112,23 @@ namespace proj {
             smc.run();
             smc.summarize();
             
-            if (G::_nparticles2 > 0) {
-                output(format("Performing 2nd-level SMC on %d 1st-level particles...\n") % G::_nkept, G::LogCateg::INFO);
+            bool second_level = (G::_nparticles2 > 0 && G::_nkept2 > 0);
+            if (second_level) {
+                output(format("\nPerforming 2nd-level SMC on %d 1st-level particles...\n") % G::_nkept, G::LogCateg::INFO);
                 
                 vector<Particle> & first_level_particles = smc.getParticles();
                 assert(first_level_particles.size() == G::_nparticles);
+                
+                // No longer need partials stored in gene trees
+                //stripPartials(first_level_particles);
+                
+                // Calculate ensemble coal info vectors for each first-level
+                // particle to avoid accessing gene tree pointers in multithreaded
+                // version
+                buildEnsembleCoalInfo(first_level_particles);
 
-                // Choose (discrete-uniform-randomly) G::_nkept 1st-level particles for use in 2nd level
+                // Choose (discrete-uniform-randomly) G::_nkept
+                // 1st-level particles for use in 2nd level
                 // Save indices in kept vector
                 vector<unsigned> kept;
                 kept.reserve(first_level_particles.size());
@@ -1022,52 +1140,41 @@ namespace proj {
                 // Second-level particle filtering
                 SMC ensemble;
                 ensemble.setMode(SMC::SPECIES_GIVEN_GENE);
-                for (auto k : kept) {
-                    Particle & p = first_level_particles[k];
+                
+                // Replace seeds in seed bank
+                G::generateUpdateSeeds(G::_nkept);
 
-                    // Rebuild coal info vectors, stripping effect of previous species tree
-#if defined(LAZY_COPYING)
-                    vector<GeneForest::SharedPtr> & gtpvect = p.getGeneForestPtrs();
-                    for (auto gtp : gtpvect) {
-                        // Each gene forest's _coalinfo vector stores a tuple for each internal node:
-                        // <1> height
-                        // <2> gene_index + 1
-                        // <3> left child species
-                        // <4> right child species
-                        gtp->buildCoalInfoVect();
-                    }
-#else
-                    vector<GeneForest> & gtvect = p.getGeneForests();
-                    for (auto & gt : gtvect) {
-                        // Each gene forest's _coalinfo vector stores a tuple for each internal node:
-                        // <1> height
-                        // <2> gene_index + 1
-                        // <3> left child species
-                        // <4> right child species
-                        gt.buildCoalInfoVect();
-                    }
-#endif
-                                            
-                    SMC smc2;
-                    smc2.setNParticles(G::_nparticles2, 1); //TODO: let 2nd level have subpops?
-                    smc2.setMode(SMC::SPECIES_GIVEN_GENE);
-                    smc2.initFromParticle(p);
-                    smc2.run();
-                    
-                    // Choose (discrete-uniform-randomly) G::_nkept2 2nd-level particles
-                    vector<unsigned> kept2;
-                    vector<Particle> & second_level_particles = smc2.getParticles();
-                    assert(second_level_particles.size() == G::_nparticles2);
-                    kept2.reserve(second_level_particles.size());
-                    for (unsigned k = 0; k < G::_nkept2; k++) {
-                        unsigned i = rng->randint(0, G::_nparticles2-1);
-                        kept2.push_back(i);
-                    }
-                    
-                    smc2.dumpParticles(ensemble, kept2);
+                unsigned nparticles = G::_nparticles2;
+                unsigned nkept = G::_nkept2;
+
+#if defined(USING_MULTITHREADING)
+                G::buildThreadSchedule(G::_nkept, "kept particle");
+                
+                vector<thread> threads;
+                for (unsigned i = 0; i < G::_nthreads; i++) {
+                    threads.push_back(thread(&Proj::secondLevelRange,
+                        this,
+                        ref(first_level_particles),
+                        ref(ensemble),
+                        nparticles,
+                        nkept,
+                        G::_thread_sched[i].first,
+                        G::_thread_sched[i].second)
+                    );
                 }
+
+                // The join function causes this loop to pause until
+                // the ith thread finishes
+                for (unsigned i = 0; i < threads.size(); i++) {
+                    threads[i].join();
+                }
+#else
+                secondLevelRange(first_level_particles, ensemble, nparticles, nkept, 0, G::_nkept);
+#endif
                 ensemble.summarize();
             }
+            
+            ps.debugReport();
         }
         else {
             throw XProj("This program currently only accepts \"sim\" and \"smc\" as start mode");

@@ -27,6 +27,7 @@ namespace proj {
             typedef map<unsigned,vector<unsigned> >       orig_site_lookup_t;
             typedef pair<unsigned, unsigned>              begin_end_pair_t;
             typedef std::shared_ptr<Data>                 SharedPtr;
+            typedef std::shared_ptr<const Data>           SharedPtrConst;
 
                                                         Data();
                                                         ~Data();

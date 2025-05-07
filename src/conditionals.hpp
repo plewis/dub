@@ -29,3 +29,7 @@
 
 #define OUTPUT_DEBUG(a)
 
+#if defined(DEBUGGING_INITFROMPARTICLE) && defined(USING_MULTITHREADING)
+#   error Cannot define both DEBUGGING_INITFROMPARTICLE and USING_MULTITHREADING at the same time
+#endif
+
