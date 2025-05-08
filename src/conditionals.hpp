@@ -26,6 +26,7 @@
 
 #define LAZY_COPYING
 #define USING_MULTITHREADING
+#define SPECIES_IN_CONF
 
 #define OUTPUT_DEBUG(a)
 

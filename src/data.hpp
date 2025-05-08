@@ -48,6 +48,11 @@ namespace proj {
             unsigned                                    setTaxonNames(const vector<string> & names);
             const taxon_names_t &                       getTaxonNames() const;
 
+#if defined(SPECIES_IN_CONF)
+            void                                        compareTaxonNames(const Data::taxon_names_t & cf) const;
+            void                                        checkTaxonNames(const taxon_names_t & cf) const;
+#endif
+
             void                                        copyTaxonNames(taxon_names_t & dest) const;
 
             unsigned                                    getNumPatterns() const;
@@ -130,6 +135,131 @@ namespace proj {
     inline const Data::taxon_names_t & Data::getTaxonNames() const {
         return _taxon_names;
     }
+
+#if defined(SPECIES_IN_CONF)
+    inline void Data::compareTaxonNames(const Data::taxon_names_t & cf) const {
+        vector<string> a = cf;
+        vector<string> b = _taxon_names;
+        sort(a.begin(), a.end());
+        sort(b.begin(), b.end());
+        
+        unsigned longest_name = 0;
+        for (auto nm : a) {
+            if (nm.length() > longest_name)
+                longest_name = (unsigned)nm.length();
+        }
+        for (auto nm : b) {
+            if (nm.length() > longest_name)
+                longest_name = (unsigned)nm.length();
+        }
+        longest_name++;
+        
+        string fmtstr = boost::str(format("  %%%ds %%%ds\n") % longest_name % longest_name);
+        output("\nTaxon names defined in data file vs conf file:\n", G::LogCateg::ALWAYS);
+        output(format(fmtstr) % "Data" % "Conf", G::LogCateg::ALWAYS);
+        
+        unsigned alen = (unsigned)a.size();
+        unsigned blen = (unsigned)b.size();
+            
+        unsigned ai = 0;
+        unsigned bi = 0;
+        while (ai < alen && bi < blen) {
+            if (a[ai] == b[bi]) {
+                output(format(fmtstr) % a[ai] % b[bi], G::LogCateg::ALWAYS);
+                ai++;
+                bi++;
+            }
+            else {
+                bool done = false;
+                
+                // Is a[ai] further along in b?
+                unsigned bi_next = blen;
+                for (unsigned i = bi+1; i < blen; i++) {
+                    if (a[ai] == b[i]) {
+                        bi_next = i;
+                        break;
+                    }
+                }
+                if (bi_next < blen) {
+                    // Yes, a[ai] found futher along in b, so output
+                    // b elements until caught up
+                    for (unsigned i = bi; i < bi_next; i++) {
+                        output(format(fmtstr) % "---" % b[i], G::LogCateg::ALWAYS);
+                    }
+                    output(format(fmtstr) % a[ai] % b[bi_next], G::LogCateg::ALWAYS);
+                    bi = bi_next;
+                    done = true;
+                }
+                
+                if (!done) {
+                    // Is b[bi] further along in a?
+                    unsigned ai_next = alen;
+                    for (unsigned i = ai+1; i < alen; i++) {
+                        if (a[i] == b[bi]) {
+                            ai_next = i;
+                            break;
+                        }
+                    }
+                    if (ai_next < alen) {
+                        // Yes, b[bi] found futher along in a, so output
+                        // a elements until caught up
+                        for (unsigned i = ai; i < ai_next; i++) {
+                            output(format(fmtstr) % a[i] % "---", G::LogCateg::ALWAYS);
+                        }
+                        output(format(fmtstr) % a[ai_next] % b[bi], G::LogCateg::ALWAYS);
+                        ai = ai_next;
+                        done = true;
+                    }
+                }
+                assert(done);
+            }
+        }
+//        output("\nTaxon names found in data file:\n");
+//        for (auto t : _taxon_names) {
+//            output(format("  %s\n") % t);
+//        }
+//        output("\nTaxon names found in conf file:\n");
+//        for (auto t : cf) {
+//            output(format("  %s\n") % t);
+//        }
+    }
+    
+    inline void Data::checkTaxonNames(const Data::taxon_names_t & cf) const {
+        set<string> cfset(cf.begin(), cf.end());
+        set<string> dfset(_taxon_names.begin(), _taxon_names.end());
+        unsigned ncf = (unsigned)cf.size();
+        unsigned ndf = (unsigned)_taxon_names.size();
+        if (cfset.size() < ncf) {
+            throw XProj("There are duplicate taxon names in the conf file species definitions");
+        }
+        if (dfset.size() < ndf) {
+            throw XProj("There are duplicate taxon names in the data file");
+        }
+        if (ncf != ndf) {
+            compareTaxonNames(cf);
+            throw XProj(format("There are %d taxa defined in the data file but %d defined in conf file species definitions") % ndf % ncf);
+        }
+        list<string> taxon_list(cf.begin(), cf.end());
+        for (auto t : _taxon_names) {
+            if (taxon_list.size() == 0) {
+                compareTaxonNames(cf);
+                throw XProj("More taxa are in the data set than are found in conf file species definitions");
+            }
+            auto it = find(taxon_list.begin(), taxon_list.end(), t);
+            if (it == taxon_list.end()) {
+                compareTaxonNames(cf);
+                throw XProj(format("Taxon \"%s\" from data set not found in conf file  species definitions") % t);
+            }
+            else {
+                taxon_list.erase(it);
+            }
+        }
+        if (taxon_list.size() > 0) {
+            compareTaxonNames(cf);
+            throw XProj("More taxa are in conf file species definitions than in the data file");
+        }
+    }
+#endif
 
     inline void Data::copyTaxonNames(Data::taxon_names_t & dest) const {
         dest.resize(_taxon_names.size());

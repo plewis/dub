@@ -99,6 +99,9 @@ namespace proj {
     inline void Proj::processCommandLineOptions(int argc, const char * argv[]) {
         vector<string> log_include;
         vector<string> partition_subsets;
+#if defined(SPECIES_IN_CONF)
+        vector<string> species_definitions;
+#endif
         vector<string> partition_relrates;
 #if defined(FOSSILS)
         vector<string> taxsets;
@@ -117,6 +120,9 @@ namespace proj {
         ("speciestreeref",  value(&G::_species_tree_ref_file_name), "name of a tree file containing a single reference species tree")
         ("genetreeref",  value(&G::_gene_trees_ref_file_name), "name of a tree file containing a reference gene tree for each locus")
         ("startmode", value(&_start_mode), "if 'sim', simulate gene trees, species tree, and data; if 'smc', estimate from supplied datafile; if 'chib', computes prior probability of species species and gene tree topologies; if 'spec', computes coalescent likelihood for specified speciestreeref and genetreeref; if '2ndlevel', tests second-level SMC from gene trees supplied by genetreeref")
+#if defined(SPECIES_IN_CONF)
+        ("species", value(&species_definitions), "a string defining a species, e.g. 'A:x,y,z' says that taxa x, y, and z are in species A")
+#endif
         ("subset",  value(&partition_subsets), "a string defining a partition subset, e.g. 'first:1-1234\3' or 'default[codon:standard]:1-3702'")
 #if defined(FOSSILS)
         ("fossil",  value(&fossils), "a string defining a fossil, e.g. 'Ursus_abstrusus         1.8–5.3 4.3' (4.3 is time, 1.8-5.3 is prior range)")
@@ -244,6 +250,14 @@ namespace proj {
                 _partition->parseSubsetDefinition(s);
             }
         }
+        
+#if defined(SPECIES_IN_CONF)
+        if (vm.count("species") > 0) {
+            for (auto s : species_definitions) {
+                G::parseSpeciesDefinition(s);
+            }
+        }
+#endif
         
 #if defined(FOSSILS)
         // If user specified --fossil on command line, break specified
@@ -1083,15 +1097,34 @@ namespace proj {
             assert(G::_nloci > 0);
             
             setRelativeRates();
-
-            // Copy taxon names to global variable _taxon_names
-            G::_ntaxa = _data->getNumTaxa();
-            _data->copyTaxonNames(G::_taxon_names);
             
-            // Save species names to global variable _species_names
-            // and create global _taxon_to_species map that provides
-            // the species index for each taxon name
-            G::_nspecies = buildSpeciesMap(/*taxa_from_data*/true);
+#if defined(SPECIES_IN_CONF)
+            if (G::_nspecies > 0) {
+                // Species specified in the conf file
+                // Check that taxon names are the same as those
+                // in the data file
+                _data->checkTaxonNames(G::_taxon_names);
+            }
+            else {
+                // Copy taxon names to global variable _taxon_names
+                G::_ntaxa = _data->getNumTaxa();
+                _data->copyTaxonNames(G::_taxon_names);
+                
+                // Save species names to global variable _species_names
+                // and create global _taxon_to_species map that provides
+                // the species index for each taxon name
+                G::_nspecies = buildSpeciesMap(/*taxa_from_data*/true);
+            }
+#else
+                // Copy taxon names to global variable _taxon_names
+                G::_ntaxa = _data->getNumTaxa();
+                _data->copyTaxonNames(G::_taxon_names);
+                
+                // Save species names to global variable _species_names
+                // and create global _taxon_to_species map that provides
+                // the species index for each taxon name
+                G::_nspecies = buildSpeciesMap(/*taxa_from_data*/true);
+#endif
             
             // Create global _species_mask that has "on" bits only for
             // the least significant _nspecies bits
@@ -1184,6 +1217,7 @@ namespace proj {
     }
     
     inline unsigned Proj::buildSpeciesMap(bool taxa_from_data) {
+        // Assumes G::_taxon_names is already filled.
         // Populates G::_species_names and G::_taxon_to_species
         // For example, given these taxon names
         //  t1^A, t2^A, t3^B, t4^B, t5^B, t6^C, t7^C, t8^D, t9^D, t10^D
@@ -1280,3 +1314,4 @@ namespace proj {
     }
     
 }
+

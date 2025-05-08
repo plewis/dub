@@ -98,7 +98,7 @@ namespace proj {
         static unsigned                 _nkept2;
         
         static unsigned                 _nsubpops;
-        
+                
 #if defined(USING_MULTITHREADING)
         static void     buildThreadSchedule(unsigned n, string entity_name);
 #endif
@@ -108,7 +108,9 @@ namespace proj {
         static double   inverseGammaVariate(double shape, double rate, Lot::SharedPtr lot);
         static void     getAllParamNames(vector<string> & names);
         static void     generateUpdateSeeds(unsigned num_seeds_needed);
-        //static double   calcLogSum(const vector<double> & log_values);
+#if defined(SPECIES_IN_CONF)
+        static void     parseSpeciesDefinition(string s);
+#endif
         static string   unsignedVectToString(const vector<unsigned> & v);
         static void     createDefaultGeneTreeNexusTaxonMap();
         static void     createDefaultSpeciesTreeNexusTaxonMap();
@@ -208,16 +210,78 @@ namespace proj {
         for_each(_seed_bank.begin(), _seed_bank.end(), [maxseed](unsigned & x){x = ::rng->randint(1,maxseed);});
     }
 
-    //inline double G::calcLogSum(const vector<double> & log_values) {
-    //    double max_logv = *max_element(log_values.begin(), log_values.end());
-    //
-    //    double factored_sum = 0.0;
-    //    for (auto & logv : log_values) {
-    //        factored_sum += exp(logv - max_logv);
-    //    }
-    //    double log_sum_values = max_logv + log(factored_sum);
-    //    return log_sum_values;
-    //}
+#if defined(SPECIES_IN_CONF)
+    inline void G::parseSpeciesDefinition(string s) {
+        // Given these definitions in the conf file:
+        //   species = A: a^A, b^A, c^A
+        //   species = B: d^B, e^B, f^B
+        //   species = C: g^C, h^C, i^C
+        //   species = D: j^D, k^D, l^D
+        //   species = E: m^E, n^E, o^E
+        // This would be the result:
+        //   G::_nspecies = 5
+        //   G::_species_names = ["A", "B", "C", "D", "E"]
+        //   G::_ntaxa = 15
+        //   G::_taxon_names = [
+        //      "a^A", "b^A", "c^A",
+        //      "d^B", "e^B", "f^B",
+        //      "g^C", "h^C", "i^C",
+        //      "j^D", "k^D", "l^D",
+        //      "m^E", "n^E", "o^E"]
+        //   G::_taxon_to_species["a^A"] = 0
+        //   G::_taxon_to_species["b^A"] = 0
+        //   G::_taxon_to_species["c^A"] = 0
+        //   G::_taxon_to_species["d^B"] = 1
+        //   G::_taxon_to_species["e^B"] = 1
+        //   G::_taxon_to_species["f^B"] = 1
+        //   G::_taxon_to_species["g^C"] = 2
+        //   G::_taxon_to_species["h^C"] = 2
+        //   G::_taxon_to_species["i^C"] = 2
+        //   G::_taxon_to_species["j^D"] = 3
+        //   G::_taxon_to_species["k^D"] = 3
+        //   G::_taxon_to_species["l^D"] = 3
+        //   G::_taxon_to_species["m^E"] = 4
+        //   G::_taxon_to_species["n^E"] = 4
+        //   G::_taxon_to_species["o^E"] = 4
+        //   G::_taxon_to_species["A"]   = 0
+        //   G::_taxon_to_species["B"]   = 1
+        //   G::_taxon_to_species["C"]   = 2
+        //   G::_taxon_to_species["D"]   = 3
+        //   G::_taxon_to_species["E"]   = 4
+        
+        vector<string> v;
+        
+        // First separate part before colon (stored in v[0])
+        // from the part after colon (stored in v[1])
+        split(v, s, boost::is_any_of(":"));
+        if (v.size() != 2)
+            throw XProj("Expecting exactly one colon in species definition");
+
+        string species_name = v[0];
+        string taxon_list = v[1];
+
+        // Now separate the part after the colon at commas to
+        // yield the taxa that are in that species
+        boost::trim(taxon_list);
+        split(v, taxon_list, boost::is_any_of(","));
+        for_each(v.begin(), v.end(), [](string & s){boost::trim(s);});
+        
+        //output(format("Species \"%s\":\n") % species_name, LogCateg::ALWAYS);
+        //for (string s : v) {
+        //    output(format("   Taxon \"%s\"\n") % s, LogCateg::ALWAYS);
+        //}
+        
+        G::_species_names.push_back(species_name);
+        G::_nspecies = (unsigned)G::_species_names.size();
+        unsigned i = (unsigned)(G::_nspecies - 1);
+        G::_taxon_to_species[species_name] = i;
+        for (auto t : v) {
+            G::_taxon_names.push_back(t);
+            G::_taxon_to_species[t] = i;
+            G::_ntaxa++;
+        }
+    }
+#endif
 
     inline string G::unsignedVectToString(const vector<unsigned> & v) {
         ostringstream oss;
