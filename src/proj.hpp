@@ -256,6 +256,8 @@ namespace proj {
             for (auto s : species_definitions) {
                 G::parseSpeciesDefinition(s);
             }
+        //temporary!
+        //G::debugShowSpeciesDefinitions();
         }
 #endif
         
@@ -1100,10 +1102,16 @@ namespace proj {
             
 #if defined(SPECIES_IN_CONF)
             if (G::_nspecies > 0) {
-                // Species specified in the conf file
+                // Species were specified in the conf file
+                
                 // Check that taxon names are the same as those
-                // in the data file
+                // in the data file (except possibly not the in
+                // same order)
                 _data->checkTaxonNames(G::_taxon_names);
+                
+                // Ensure that the order of taxon names is the same
+                // as in the data file
+                _data->copyTaxonNames(G::_taxon_names);
             }
             else {
                 // Copy taxon names to global variable _taxon_names

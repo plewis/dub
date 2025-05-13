@@ -508,6 +508,7 @@ namespace proj {
             else {
                 Node::setSpeciesBit(_nodes[i]._species, G::_taxon_to_species.at(taxon_name), /*init_to_zero_first*/true);
             }
+            
             if (compute_partials) {
                 assert(_data);
                 assert(_leaf_partials[_gene_index].size() > i);

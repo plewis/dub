@@ -109,6 +109,7 @@ namespace proj {
         static void     getAllParamNames(vector<string> & names);
         static void     generateUpdateSeeds(unsigned num_seeds_needed);
 #if defined(SPECIES_IN_CONF)
+        static void     debugShowSpeciesDefinitions();
         static void     parseSpeciesDefinition(string s);
 #endif
         static string   unsignedVectToString(const vector<unsigned> & v);
@@ -209,6 +210,20 @@ namespace proj {
         unsigned maxseed = num_seeds_needed*100 - 1;
         for_each(_seed_bank.begin(), _seed_bank.end(), [maxseed](unsigned & x){x = ::rng->randint(1,maxseed);});
     }
+
+#if defined(SPECIES_IN_CONF)
+    inline void G::debugShowSpeciesDefinitions() {
+        for (unsigned i = 0; i < G::_nspecies; i++) {
+            string s = G::_species_names[i];
+            output(format("Species \"%s\":\n") % s);
+            for (auto ts : G::_taxon_to_species) {
+                if (ts.second == i) {
+                    output(format("  \"%s\"\n") % ts.first);
+                }
+            }
+        }
+    }
+#endif
 
 #if defined(SPECIES_IN_CONF)
     inline void G::parseSpeciesDefinition(string s) {

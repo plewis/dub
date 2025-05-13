@@ -225,21 +225,40 @@ namespace proj {
     }
     
     inline void Data::checkTaxonNames(const Data::taxon_names_t & cf) const {
+        // Create a set of taxon names supplied in the conf file
         set<string> cfset(cf.begin(), cf.end());
+
+        // Create a set of taxon names supplied in the data file
         set<string> dfset(_taxon_names.begin(), _taxon_names.end());
+
+        // Store the lengths of the two vectors
         unsigned ncf = (unsigned)cf.size();
         unsigned ndf = (unsigned)_taxon_names.size();
+        
+        // Compare the number of taxon names in the conf file to its
+        // set to check for duplicates (in which case the set will be smaller)
         if (cfset.size() < ncf) {
             throw XProj("There are duplicate taxon names in the conf file species definitions");
         }
+
+        // Compare the number of taxon names in the data file to its
+        // set to check for duplicates (in which case the set will be smaller)
         if (dfset.size() < ndf) {
             throw XProj("There are duplicate taxon names in the data file");
         }
+        
+        // The number of taxon names defined in the conf file should be
+        // the same as the number defined in the data file
         if (ncf != ndf) {
             compareTaxonNames(cf);
             throw XProj(format("There are %d taxa defined in the data file but %d defined in conf file species definitions") % ndf % ncf);
         }
+        
+        // Create a list of taxon names from the conf file
         list<string> taxon_list(cf.begin(), cf.end());
+        
+        // Gradually whittle down taxon_list as taxon names
+        // from the data file are encountered
         for (auto t : _taxon_names) {
             if (taxon_list.size() == 0) {
                 compareTaxonNames(cf);
@@ -254,7 +273,10 @@ namespace proj {
                 taxon_list.erase(it);
             }
         }
-        if (taxon_list.size() > 0) {
+        
+        // If taxon_list is now empty, it means every taxon name from
+        // the data file was also found in the conf file
+        if (!taxon_list.empty()) {
             compareTaxonNames(cf);
             throw XProj("More taxa are in conf file species definitions than in the data file");
         }
