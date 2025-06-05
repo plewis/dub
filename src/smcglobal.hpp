@@ -48,7 +48,9 @@ namespace proj {
                 
         static string                   _species_tree_ref_file_name;
         static string                   _gene_trees_ref_file_name;
-        
+
+        static bool                     _save_gene_trees;
+        static bool                     _save_species_trees;
         static unsigned                 _treefile_compression;
         
         static unsigned                 _rnseed;
@@ -97,7 +99,11 @@ namespace proj {
         static unsigned                 _nkept;
         static unsigned                 _nkept2;
         
+        static vector<vector<double> >  _second_level_log_likes;
+        
         static unsigned                 _nsubpops;
+        
+        static void     saveSecondLevelReport(string fn);
                 
 #if defined(USING_MULTITHREADING)
         static void     buildThreadSchedule(unsigned n, string entity_name);
@@ -433,6 +439,51 @@ namespace proj {
             }
         }
         return s;
+    }
+    
+    inline void G::saveSecondLevelReport(string fn) {
+        unsigned n = (unsigned)G::_second_level_log_likes.size();
+        assert(n > 0);
+        assert(n == G::_nkept);
+        
+        // This vector will hold p(D|G) p(G) for each 1st-level kept particle
+        vector<double> log_values(n);
+
+        ofstream outf(fn);
+        
+        // Save headers
+        outf << "log-marg-like\t";
+        for (unsigned i = 0; i < G::_nloci; i++) {
+            outf << str(format("locus-%d\t") % (i+1));
+        }
+        outf << "\n";
+        
+        // Save likelihoods
+        unsigned i = 0;
+        for (auto & v : G::_second_level_log_likes) {
+            double sum_log_likes = 0.0;
+            for (auto logL : v) {
+                outf << setprecision(9) << logL << "\t";
+                sum_log_likes += logL;
+            }
+            log_values[i++] = sum_log_likes;
+            outf << "\n";
+        }
+        
+        outf.close();
+        
+        // Calculate log sum of elements in log_values
+        double max_logv = *max_element(log_values.begin(), log_values.end());
+        
+        double factored_sum = 0.0;
+        for (auto & logv : log_values) {
+            factored_sum += exp(logv - max_logv);
+        }
+        double log_sum_values = max_logv + log(factored_sum);
+        
+        double log_marg_like = log_sum_values - log(n);
+        
+        output(format("%20.9f Log marginal likelihood (2nd-level estimate)") % log_marg_like, LogCateg::INFO);
     }
     
 #if defined(USING_MULTITHREADING)

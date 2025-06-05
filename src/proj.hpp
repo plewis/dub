@@ -135,6 +135,8 @@ namespace proj {
         ("nkept",  value(&G::_nkept)->default_value(0), "number of particles from joint smc kept for conditional (2nd level) smc")
         ("nspeciesparticles",  value(&G::_nparticles2)->default_value(0), "number of particles in a population for (2nd level) species tree only estimation")
         ("nspecieskept",  value(&G::_nkept2)->default_value(0), "number of particles from conditional smc kept")
+        ("savespeciestrees", value(&G::_save_species_trees)->default_value(false), "if true, species trees will be saved")
+        ("savegenetrees", value(&G::_save_gene_trees)->default_value(false), "if true, gene trees for each locus will be saved in separate files")
         ("treefilecompression", value(&do_compress)->default_value(0), "no=no compression, yes=maximum compression")
         ("lambda",  value(&G::_lambda)->default_value(10.0), "per lineage speciation rate assumed for the species tree")
         ("simnspecies",  value(&_nsimspecies)->default_value(1), "number of species (only used if startmode is 'sim')")
@@ -165,31 +167,31 @@ namespace proj {
 
         if (vm.count("help") > 0) {
             output(format("%s\n") % desc, G::LogCateg::ALWAYS);
-            exit(1);
+            exit(0);
         }
 
         if (vm.count("version") > 0) {
-            output(format("This is %s version %d.%d\n") % _program_name % _major_version % _minor_version);
-            exit(1);
+            output(format("This is %s version %d.%d\n") % _program_name % _major_version % _minor_version, G::LogCateg::ALWAYS);
+            exit(0);
         }
         
 #if defined(USING_MULTITHREADING)
         if (vm.count("nthreads") > 0) {
             if (G::_nthreads < 1) {
-                output(format("Number of threads specified cannot be less than 1 (you specified %d)\n") % G::_nthreads);
-                exit(1);
+                output(format("Number of threads specified cannot be less than 1 (you specified %d)\n") % G::_nthreads, G::LogCateg::ALWAYS);
+                exit(0);
             }
         }
 #endif
 
         if (vm.count("nspeciesparticles") > 0 || vm.count("nspecieskept") > 0) {
             if (G::_nparticles2 > 0 && G::_nkept2 == 0) {
-                output(format("You specified nspeciesparticles = %d but nspecieskept is still set to default value 0\n") % G::_nparticles2);
-                exit(1);
+                output(format("You specified nspeciesparticles = %d but nspecieskept is still set to default value 0\n") % G::_nparticles2, G::LogCateg::ALWAYS);
+                exit(0);
             }
             else if (G::_nparticles2 == 0 && G::_nkept2 > 0) {
-                output(format("You specified nspecieskept = %d but nspeciesparticles is still set to default value 0\n") % G::_nkept2);
-                exit(1);
+                output(format("You specified nspecieskept = %d but nspeciesparticles is still set to default value 0\n") % G::_nkept2, G::LogCateg::ALWAYS);
+                exit(0);
             }
         }
         
@@ -715,6 +717,12 @@ namespace proj {
             }
             unsigned locus = locus_ordering[step_modulus].second;
             particle.proposeCoalescence(step, locus, G::_seed_bank[step], /*rebuild_species_tree*/locus == locus_ordering[0].second);
+            
+#if defined(LAZY_COPYING)
+            if (G::_simulating) {
+                particle.finalizeLatestJoinSimulating(locus);
+            }
+#endif
         }
         
         particle.refreshHeightsInternalsPreorders();
@@ -823,6 +831,8 @@ namespace proj {
         output(format("  theta  = %.5f\n") % G::_theta);
         output(format("  lambda = %.5f\n") % G::_lambda);
         output(format("  Number of species = %d\n") % _nsimspecies);
+        
+        output(format("  Edge relative rate variance = %d\n") % G::_edge_rate_variance);        
         
         // Expected height of species tree is (1/2 + 1/3 + ... + 1/nspecies)/lambda
         // Approximation to (1/2 + 1/3 + ... + 1/nspecies) is
@@ -1019,6 +1029,13 @@ namespace proj {
 #if defined(USING_MULTITHREADING)
             lock_guard<mutex> guard(G::_mutex);
 #endif
+            // Save second-level log marginal likelihood and log likelihoods for each gene tree
+            // to allow a total marginal likelihood to be computed from second-level analysis
+            vector<double> log_likes;
+            log_likes.push_back(smc2.getLogMarginalLikelihood());
+            p.pushLogLikelihoods(log_likes);
+            G::_second_level_log_likes.push_back(log_likes);
+            
             smc2.dumpParticles(ensemble, kept2);
         }
     }
@@ -1124,16 +1141,21 @@ namespace proj {
                 G::_nspecies = buildSpeciesMap(/*taxa_from_data*/true);
             }
 #else
-                // Copy taxon names to global variable _taxon_names
-                G::_ntaxa = _data->getNumTaxa();
-                _data->copyTaxonNames(G::_taxon_names);
-                
-                // Save species names to global variable _species_names
-                // and create global _taxon_to_species map that provides
-                // the species index for each taxon name
-                G::_nspecies = buildSpeciesMap(/*taxa_from_data*/true);
-#endif
+            // Copy taxon names to global variable _taxon_names
+            G::_ntaxa = _data->getNumTaxa();
+            _data->copyTaxonNames(G::_taxon_names);
             
+            // Save species names to global variable _species_names
+            // and create global _taxon_to_species map that provides
+            // the species index for each taxon name
+            G::_nspecies = buildSpeciesMap(/*taxa_from_data*/true);
+#endif
+
+            unsigned bits_avail = 8 * (unsigned)sizeof(G::species_t);
+            if (G::_nspecies > bits_avail) {
+                throw XProj(format("Number of species (%d) exceeds maximum number of species (%d) that this program can currently handle") % G::_nspecies % bits_avail);
+            }
+
             // Create global _species_mask that has "on" bits only for
             // the least significant _nspecies bits
             Node::setSpeciesMask(G::_species_mask, G::_nspecies);
@@ -1152,6 +1174,10 @@ namespace proj {
             smc.init();
             smc.run();
             smc.summarize();
+            smc.saveGeneTrees();
+            smc.saveSpeciesTrees();
+            smc.saveReport();
+            smc.saveParamsForLoRaD("xxx");
             
             bool second_level = (G::_nparticles2 > 0 && G::_nkept2 > 0);
             if (second_level) {
@@ -1179,6 +1205,14 @@ namespace proj {
                 }
 
                 // Second-level particle filtering
+                
+                // This vector of vectors will hold a vector of log likelihoods for
+                // each second-level SMC. The individual vectors contain the 2nd-level
+                // log marginal likelihood and the Felsenstein log likelihood for each
+                // gene tree assumed in that conditional SMC analysis
+                G::_second_level_log_likes.clear();
+                
+                // The ensemble will store particles kept from the second-level analysis
                 SMC ensemble;
                 ensemble.setMode(SMC::SPECIES_GIVEN_GENE);
                 
@@ -1213,6 +1247,11 @@ namespace proj {
                 secondLevelRange(first_level_particles, ensemble, nparticles, nkept, 0, G::_nkept);
 #endif
                 ensemble.summarize();
+                ensemble.saveGeneTrees();
+                ensemble.saveSpeciesTrees();
+                ensemble.saveReport();
+                
+                G::saveSecondLevelReport("2nd-level-likelihoods.txt");
             }
             
             ps.debugReport();

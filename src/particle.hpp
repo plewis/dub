@@ -28,6 +28,7 @@ namespace proj {
             void buildEnsembleCoalInfo();
             void rebuildCoalInfo();
             void recordAllForests(vector<Forest::coalinfo_t> & coalinfo_vect) const;
+            void pushLogLikelihoods(vector<double> & v) const;
             
             double calcLogLikelihood();
             double calcTotalPrevLogLikelihood();
@@ -81,6 +82,7 @@ namespace proj {
             const vector<GeneForest::SharedPtr> & getGeneForestPtrsConst() const;
             GeneForest::SharedPtr getGeneForestPtr(unsigned locus);
             const GeneForest::SharedPtr getGeneForestPtrConst(unsigned locus) const;
+            void finalizeLatestJoinSimulating(int locus);
             void finalizeLatestJoin(int locus, unsigned index, map<const void *, list<unsigned> > & nonzero_map);
 #else
             vector<GeneForest>       & getGeneForests();
@@ -115,6 +117,10 @@ namespace proj {
             void stowAllPartials(unsigned locus);
             
             void setRandomNumberSeed(unsigned rnseed);
+            
+#if defined(LAZY_COPYING) && defined(PLOT_INCREMENT_DISTRIBUTIONS)
+            double getProposedIncrement(unsigned locus) const;
+#endif
             
             typedef shared_ptr<Particle> SharedPtr;
                                 
@@ -337,6 +343,21 @@ namespace proj {
         sort(_ensemble_coalinfo.begin(), _ensemble_coalinfo.end());
     }
     
+    inline void Particle::pushLogLikelihoods(vector<double> & v) const {
+        for (unsigned g = 0; g < G::_nloci; g++) {
+#if defined(LAZY_COPYING)
+                GeneForest::SharedPtr gfp = _gene_forest_ptrs[g];
+                assert(gfp->getNumLineages() == 1);
+                v.push_back(gfp->getLogLikelihood());
+#else
+                const GeneForest & gf = _gene_forests[g];
+                assert(gf.getNumLineages() == 1);
+                gf.saveCoalInfo(coalinfo_vect);
+                v.push_back(gf.getLogLikelihood());
+#endif
+        }
+    }
+
     inline void Particle::recordAllForests(vector<Forest::coalinfo_t> & coalinfo_vect) const {
     
         // Record gene trees if not already done
@@ -1148,7 +1169,10 @@ namespace proj {
             // without touching existing forest (which may be used
             // by many particles)
             assert(_gene_forest_extensions.size() == G::_nloci);
-            _gene_forest_extensions[locus].dock(_gene_forest_ptrs[locus], pullPartial(locus), _lot);
+            if (G::_simulating)
+                _gene_forest_extensions[locus].dock(_gene_forest_ptrs[locus], nullptr, _lot);
+            else
+                _gene_forest_extensions[locus].dock(_gene_forest_ptrs[locus], pullPartial(locus), _lot);
         }
         GeneForestExtension & gfx = _gene_forest_extensions[locus];
 #else
@@ -1268,6 +1292,42 @@ namespace proj {
     }
 
 #if defined(LAZY_COPYING)
+    inline void Particle::finalizeLatestJoinSimulating(int locus) {
+        // Makes join closest to leaf-level in _gene_forest_extensions[locus]
+        // permanent, then undocks _gene_forest_extensions[locus]
+        assert(G::_simulating);
+
+        // Get reference to gene forest extension for this locus
+        GeneForestExtension & gfx = _gene_forest_extensions[locus];
+        
+        // Get pointer to gene forest for this locus
+        GeneForest::SharedPtr gfp = _gene_forest_ptrs[locus];
+
+        // log likelihood zero because simulating
+        gfp->setLogLikelihood(0.0);
+                        
+        // Get splits for children of _proposed_anc
+        const Node * anc = gfx.getProposedAnc();
+        assert(anc);
+        const Node * lchild = gfx.getProposedLChild();
+        assert(lchild);
+        const Node * rchild = gfx.getProposedRChild();
+        assert(rchild);
+        Split lsplit = lchild->_split;
+        Split rsplit = rchild->_split;
+        
+        assert(anc->_split.isEquivalent(lsplit + rsplit));
+        
+        // Recreate extension's join in the actual gene forest
+        double incr = gfx.getProposedDelta();
+        assert(incr > 0.0);
+        
+        gfp->addIncrAndJoin(incr, lsplit, rsplit, gfx);
+                
+        // Can now get rid of extension
+        _gene_forest_extensions[locus].undock();
+    }
+    
     inline void Particle::finalizeLatestJoin(int locus, unsigned index, map<const void *, list<unsigned> > & nonzero_map) {
         // Makes join closest to leaf-level in _gene_forest_extensions[locus]
         // permanent, then undocks _gene_forest_extensions[locus]
@@ -1493,4 +1553,11 @@ namespace proj {
         }
         return maxh;
     }
+    
+#if defined(LAZY_COPYING) && defined(PLOT_INCREMENT_DISTRIBUTIONS)
+    inline double Particle::getProposedIncrement(unsigned locus) const {
+        return _gene_forest_extensions[locus].getProposedDelta();
+    }
+#endif
+    
 }

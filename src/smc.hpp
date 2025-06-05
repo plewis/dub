@@ -21,6 +21,8 @@ namespace proj {
             bool                     isJointMode() const        {return _mode == SPECIES_AND_GENE;}
             bool                     isConditionalMode() const  {return _mode == SPECIES_GIVEN_GENE;}
 
+            double                   calcPercentSpeciesTreeCompletion() const;
+
             void                     setNParticles(unsigned nparticles, unsigned nsubpops)  {_nparticles = nparticles; _nsubpops = nsubpops; }
 
 #if defined(USING_MULTITHREADING)
@@ -40,6 +42,8 @@ namespace proj {
             void                     init();
             void                     run();
             void                     keepSecondLevel(vector<unsigned> & kept);
+            
+            double                   getLogMarginalLikelihood() const;
 
 #if defined(LAZY_COPYING)
             void                    buildNonzeroMap(unsigned locus,
@@ -60,10 +64,14 @@ namespace proj {
             void                     outputAnnotatedNexusTreefile(string fn, const vector<tuple<unsigned, double, string, string, string> > & treeinfo) const;
             void                     saveAllSpeciesTrees(string fn, const vector<Particle> & particles, unsigned compression_level = 2);
             void                     saveAllGeneTrees(unsigned gene, string fn, vector<Particle> & particles, unsigned compression_level = 2);
+            void                     saveReport();
+            void                     saveGeneTrees();
+            void                     saveSpeciesTrees();
             void                     summarize();
             void                     dumpParticles(SMC & ensemble, vector<unsigned> & kept);
             void                     clear();
             unsigned                 countDistinctGeneTreeTopologies();
+            void                     saveParamsForLoRaD(string prefix);
             
             typedef shared_ptr<SMC>  SharedPtr;
             
@@ -234,6 +242,17 @@ namespace proj {
         _nsteps = G::_nloci*(G::_ntaxa - 1);
     }
         
+    inline double SMC::calcPercentSpeciesTreeCompletion() const {
+        unsigned ncomplete = 0;
+        for (unsigned i = 0; i < _nparticles; i++) {
+            const SpeciesForest & sf = _particles[i].getSpeciesForestConst();
+            if (sf.isComplete())
+                ncomplete++;
+        }
+        double percent = 100.0*ncomplete/_nparticles;
+        return percent;
+    }
+        
 #if defined(USING_MULTITHREADING)
     inline void SMC::advanceParticleRange(unsigned step, unsigned locus, bool rebuild_species_tree, unsigned first_particle, unsigned last_particle) {
         for (unsigned i = first_particle; i < last_particle; i++) {
@@ -249,13 +268,13 @@ namespace proj {
 #endif
 
 #if defined(USING_MULTITHREADING)
-    //*****************************************************************************************
-    //********** runFirstLevelMultithread *****************************************************
-    //*****************************************************************************************
+    //**********************************************
+    //********** runFirstLevelMultithread **********
+    //**********************************************
     inline void SMC::runFirstLevelMultithread() {
         G::buildThreadSchedule(_nparticles, "particle");
                 
-        output(format("\nSMC (level 1) will require %d steps.\n") % _nsteps, 1);
+        output(format("\nSMC (level 1) will require %d steps.\n") % _nsteps, G::LogCateg::INFO);
         
         G::showSettings();
         
@@ -323,9 +342,9 @@ namespace proj {
         }
     }
 
-    //*****************************************************************************************
-    //********** runSecondLevelMultithread ****************************************************
-    //*****************************************************************************************
+    //***********************************************
+    //********** runSecondLevelMultithread **********
+    //***********************************************
     inline void SMC::runSecondLevelMultithread() {
         _log_marg_like = 0.0;
         for (unsigned step = 0; step < _nsteps; ++step) {
@@ -343,16 +362,16 @@ namespace proj {
         }
     }
 #else
-    //*****************************************************************************************
-    //********** runFirstLevelSerial **********************************************************
-    //*****************************************************************************************
+    //*****************************************
+    //********** runFirstLevelSerial **********
+    //*****************************************
     inline void SMC::runFirstLevelSerial() {
-        output(format("\nSMC (level 1) will require %d steps.\n") % _nsteps, 1);
+        output(format("\nSMC (level 1) will require %d steps.\n") % _nsteps, G::LogCateg::INFO);
         
         G::showSettings();
         
         // Display header for progress table
-        output(format("\n%12s %12s  %24s %12s %12s\n") % "Step" % "ESS" % "logml" % "secs" % "wait");
+        output(format("\n%12s %12s %12s %24s %12s %12s\n") % "Step" % "ESS" % "spp. tree %" % "logml" % "secs" % "wait");
         
         _log_marg_like = 0.0;
         double cum_secs = 0.0;
@@ -370,6 +389,55 @@ namespace proj {
             // Replace seeds in seed bank
             G::generateUpdateSeeds(_nparticles);
 
+#if defined(LAZY_COPYING) && defined(PLOT_INCREMENT_DISTRIBUTIONS)
+            // Propose increment from prior for each particle
+#error begin again here
+            double log_mean = -1.0;
+            double log_sd = -1.0;
+            for (unsigned i = 0; i < _nparticles; i++) {
+                // Advance each particle by one coalescent event in one locus
+                _particles[i].proposeCoalescence(
+                    step,
+                    locus,
+                    G::_seed_bank[i],
+                    log_mean,
+                    log_sd,
+                    /*rebuild_species_tree*/ locus == 0
+                );
+            }
+
+            // Filter particles using normalized weights and multinomial sampling
+            // The _counts vector will be filled with the number of times each particle was chosen.
+            double ess = _nparticles;
+            if (_nsubpops == 1)
+                ess = filterParticles(step, locus, log_mean, log_sd);
+            else {
+                throw XProj("subpops not yet implemented for PLOT_INCREMENT_DISTRIBUTIONS");
+                ess = filterParticlesWithinSubpops(step, locus);
+            }
+
+            // Propose increment from empirical distribution for each particle
+            
+            for (unsigned i = 0; i < _nparticles; i++) {
+                // Advance each particle by one coalescent event in one locus
+                _particles[i].proposeCoalescence(
+                    step,
+                    locus,
+                    G::_seed_bank[i],
+                    log_mean,
+                    log_sd,
+                    locus == 0 /*rebuild_species_tree*/
+                );
+            }
+
+            // Filter particles using normalized weights and multinomial sampling
+            // The _counts vector will be filled with the number of times each particle was chosen.
+            double ess = _nparticles;
+            if (_nsubpops == 1)
+                ess = filterParticles(step, locus, log_mean, log_sd);
+            else
+                ess = filterParticlesWithinSubpops(step, locus);
+#else
             for (unsigned i = 0; i < _nparticles; i++) {
                 // Advance each particle by one coalescent event in one locus
                 _particles[i].proposeCoalescence(
@@ -387,6 +455,7 @@ namespace proj {
                 ess = filterParticles(step, locus);
             else
                 ess = filterParticlesWithinSubpops(step, locus);
+#endif
 
             VALGRIND_PRINTF("~~> post 1st-level step %d at time %d\n", step, (unsigned)clock());
             VALGRIND_MONITOR_COMMAND(str(format("detailed_snapshot stepsnaps-%d.txt") % step).c_str());
@@ -398,13 +467,14 @@ namespace proj {
             unsigned steps_to_go = _nsteps - (step + 1);
             double wait = avg_per_step*steps_to_go;
             
-            output(format("%12d %12.3f %24.6f %12.3f %12.3f\n") % (step+1) % ess % _log_marg_like % secs % wait, G::LogCateg::INFO);
+            double spp_tree_pct = calcPercentSpeciesTreeCompletion();
+            output(format("%12d %12.3f %12.3f %24.6f %12.3f %12.3f\n") % (step+1) % ess % spp_tree_pct % _log_marg_like % secs % wait, G::LogCateg::INFO);
         }
     }
 
-    //*****************************************************************************************
-    //********** runSecondLevelSerial *********************************************************
-    //*****************************************************************************************
+    //******************************************
+    //********** runSecondLevelSerial **********
+    //******************************************
     inline void SMC::runSecondLevelSerial() {
         output(format("\nSMC (level 2) will require %d steps.\n") % _nsteps, G::LogCateg::SECONDLEVEL);
         output(format("\n%12s %12s %24s %12s %12s\n") % "Step" % "ESS" % "logml" % "secs" % "wait", G::LogCateg::SECONDLEVEL);
@@ -456,40 +526,48 @@ namespace proj {
 #endif
     }
     
-    inline void SMC::summarize() {
+    inline void SMC::saveGeneTrees() {
         assert(_particles.size() > 0);
         
-        string prefix = "1st";
-        if (isConditionalMode())
-            prefix = "2nd";
-                            
-        output("\nSpecies trees saved to file \"final-species-trees.tre\"\n", G::LogCateg::VERBOSE);
-        string sfn = str(format("%s-final-species-trees") % prefix);
-        saveAllSpeciesTrees(sfn, _particles, G::_treefile_compression);
-        
-        if (isJointMode()) {
+        if (G::_save_gene_trees && isJointMode()) {
+            string prefix = "1st";
+            if (isConditionalMode())
+                prefix = "2nd";
+
+            // Save all gene trees for each locus in a separate *.tre file
+            // and, if G::_treefile_compression == 2, in a long-format *.txt file
+            // that reports the frequency and log likelihood of each
             for (unsigned g = 0; g < G::_nloci; g++) {
-                output(format("Gene trees for locus %d saved to file \"final-gene%d-trees.tre\"\n") % (g+1) % (g+1), G::LogCateg::VERBOSE);
+                output(format("Gene trees for locus %d saved to file \"%s-final-gene%d-trees.tre\"\n") % prefix % (g+1) % (g+1), G::LogCateg::VERBOSE);
                 
                 string fnprefix = str(format("%s-final-gene%d-trees") % prefix % (g+1));
                 saveAllGeneTrees(g, fnprefix, _particles, G::_treefile_compression);
             }
         }
+    }
+    
+    inline void SMC::saveSpeciesTrees() {
+        assert(_particles.size() > 0);
         
-        if (!isConditionalMode()) {
-            unsigned long min_partials_needed = 0;
-            unsigned long k = G::_ntaxa - 1;
-            min_partials_needed = k*G::_nparticles*G::_nloci;
-        
-            output(str(format("%20d %s\n") % G::_nspecies % "Species"), G::LogCateg::INFO);
-            output(str(format("%20d %s\n") % G::_ntaxa % "Taxa"), G::LogCateg::INFO);
-            output(str(format("%20d %s\n") % G::_nloci % "Loci"), G::LogCateg::INFO);
-            output(str(format("%20d %s\n") % _nsteps % "Steps"), G::LogCateg::INFO);
-            output(str(format("%20d %s\n") % G::_npartials_calculated % "Number of partials calculated"), G::LogCateg::INFO);
-            output(str(format("%20d %s\n") % min_partials_needed % "Minimum partials needed"), G::LogCateg::INFO);
-            output(str(format("%20.5f %s\n") % _log_marg_like % "Log marginal likelihood"), G::LogCateg::INFO);
+        if (G::_save_species_trees) {
+            string prefix = "1st";
+            if (isConditionalMode())
+                prefix = "2nd";
+
+            // Save all species trees as both *.tre file and,
+            // if G::_treefile_compression == 2, as a long-format *.txt file
+            // that reports the frequency and log coalescent likelihood of each
+            output("\nSpecies trees saved to file \"final-species-trees.tre\"\n", G::LogCateg::VERBOSE);
+            string sfn = str(format("%s-final-species-trees") % prefix);
+            saveAllSpeciesTrees(sfn, _particles, G::_treefile_compression);
         }
-        
+    }
+    
+    inline void SMC::saveReport() {
+        string prefix = "1st";
+        if (isConditionalMode())
+            prefix = "2nd";
+
         map<string, tuple<unsigned, double, double, double, double> > m;
         bool ok = compareToReferenceTrees(_particles, m);
         
@@ -585,6 +663,24 @@ namespace proj {
             
         }
     }
+    
+    inline void SMC::summarize() {
+        assert(_particles.size() > 0);
+
+        if (!isConditionalMode()) {
+            unsigned long min_partials_needed = 0;
+            unsigned long k = G::_ntaxa - 1;
+            min_partials_needed = k*G::_nparticles*G::_nloci;
+        
+            output(str(format("%20d %s\n") % G::_nspecies % "Species"), G::LogCateg::INFO);
+            output(str(format("%20d %s\n") % G::_ntaxa % "Taxa"), G::LogCateg::INFO);
+            output(str(format("%20d %s\n") % G::_nloci % "Loci"), G::LogCateg::INFO);
+            output(str(format("%20d %s\n") % _nsteps % "Steps"), G::LogCateg::INFO);
+            output(str(format("%20d %s\n") % G::_npartials_calculated % "Number of partials calculated"), G::LogCateg::INFO);
+            output(str(format("%20d %s\n") % min_partials_needed % "Minimum partials needed"), G::LogCateg::INFO);
+            output(str(format("%20.5f %s\n") % _log_marg_like % "Log marginal likelihood"), G::LogCateg::INFO);
+        }
+    }
 
 #if defined(LAZY_COPYING)
     inline void SMC::buildNonzeroMap(unsigned locus,
@@ -622,11 +718,17 @@ namespace proj {
         
         // Build vector log_weights
         vector<double> log_weights(_nparticles, 0.0);
+#if defined(LAZY_COPYING) && defined(PLOT_INCREMENT_DISTRIBUTIONS)
+        vector<double> incr(_nparticles, 0.0);
+#endif
         for (unsigned i = 0; i < _particles.size(); i++) {
 #if defined(USE_HEATING)
             log_weights[i] = _particles[i].getPrevLogWeight() + G::_heating_power*_particles[i].getLogWeight();
 #else
             log_weights[i] = _particles[i].getLogWeight();
+#endif
+#if defined(LAZY_COPYING) && defined(PLOT_INCREMENT_DISTRIBUTIONS)
+            incr[i] = _particles[i].getProposedIncrement(locus);
 #endif
         }
                         
@@ -644,6 +746,64 @@ namespace proj {
         // Compute effective sample size
         double ess = computeEffectiveSampleSize(probs);
         
+#if defined(LAZY_COPYING) && defined(PLOT_INCREMENT_DISTRIBUTIONS)
+        // Compute weighted mean increment length
+        double mean_incr = 0.0;
+        vector<pair<double,double> > tmp;
+        for (unsigned i = 0; i < _particles.size(); i++) {
+            mean_incr += probs[i]*incr[i];
+            tmp.push_back(make_pair(incr[i], probs[i]));
+        }
+
+        ofstream tmpf(str(format("incr-%d-%d.R") % step % locus));
+        
+        // save increments
+        tmpf << "incr <- c(";
+        tmpf << tmp[0].first;
+        for (unsigned i = 1; i < tmp.size(); i++) {
+            tmpf << "," << tmp[i].first;
+        }
+        tmpf << ")\n";
+        
+        // save probs
+        tmpf << "prob <- c(";
+        tmpf << tmp[0].second;
+        for (unsigned i = 1; i < tmp.size(); i++) {
+            tmpf << "," << tmp[i].second;
+        }
+        tmpf << ")\n";
+        
+        // plot kernel density
+        tmpf << "plot(density(incr, from=0.0))\n";
+        
+        // plot points with prob > 0.0001 as vertical dotted lines
+        double log_sum_incr = 0.0;
+        double log_sumsq_incr = 0.0;
+        double log_n_incr = 0.0;
+        for (unsigned i = 0; i < tmp.size(); i++) {
+            if (tmp[i].second > 0.0001) {
+                double log_incr = log(tmp[i].first);
+                log_n_incr += 1.0;
+                log_sum_incr += log_incr;
+                log_sumsq_incr += pow(log_incr, 2.0);
+                tmpf << "abline(v=" << tmp[i].first << ", lwd=2, lty=\"dotted\", col=\"navy\")\n";
+            }
+        }
+        
+        // Calculate parameters of empirical lognormal distribution
+        if (log_n_incr > 1) {
+            double log_mean_incr = log_sum_incr/log_n_incr;
+            double log_var_incr = (log_sumsq_incr - log_n_incr*pow(log_mean_incr,2.0))/(log_n_incr - 1.0);
+            double log_sd_incr = sqrt(log_var_incr);
+            tmpf << "x <- seq(0.0, max(incr), 0.01)\n";
+            tmpf << "curve(dlnorm(x, meanlog=" << log_mean_incr << ", sdlog=" << log_sd_incr << "), lwd=2, lty=\"solid\", col=\"navy\", add=T)\n";
+        }
+        
+        tmpf.close();
+
+        output(format("~~> step %d, locus %d, mean incr = %.5f\n") % step % locus % mean_incr, G::LogCateg::INFO);
+#endif
+
         // Zero vector of counts storing number of darts hitting each particle
         _counts.assign(_nparticles, 0);
                 
@@ -925,6 +1085,170 @@ namespace proj {
         return (unsigned)unique_topologies.size();
     }
         
+    inline void SMC::saveParamsForLoRaD(string prefix) {
+        output("Saving parameters for LoRaD...\n", G::LogCateg::INFO);
+        output("  Parameter file is \"params-lorad.txt\"\n", G::LogCateg::INFO);
+        output("  Run LoRaD using \"rscript lorad.R\"\n", G::LogCateg::INFO);
+        unsigned num_distinct = countDistinctGeneTreeTopologies();
+        if (num_distinct == 1) {
+            output("  Topology identical for all gene trees in all particles\n", G::LogCateg::INFO);
+        }
+        else {
+            output(format("  *** warning ***: %d distinct gene tree topologies (LoRaD assumes 1)\n") % num_distinct, G::LogCateg::INFO);
+        }
+        
+        // Open the file into which parameters will be saved
+        // in a format useful to LoRaD
+        ofstream loradf(str(format("%s-params-lorad.txt") % prefix));
+
+        // Save column names on first line
+        vector<string> names;
+        names.push_back("index");
+        //names.push_back("particle");
+        names.push_back("logFelsL");
+        names.push_back("logCoalL");
+        names.push_back("logPrior");
+        G::getAllParamNames(names);
+        loradf << boost::join(names, "\t") << endl;
+        
+        unsigned particle_object_index = 0;
+        unsigned particle_index = 0;
+        
+        // //temporary!
+        //unsigned tmp_nparticle_objects = (unsigned)_particle_list.size();
+        
+        for (auto & p : _particles) {
+            // Stores tuple (height, gene + 1, left species, right species)
+            // for each join in either species tree or any gene tree.
+            // To get 0-offset gene index, subtract
+            // one from second element of tuple (0 means tuple represents a
+            // species tree join).
+            vector<Forest::coalinfo_t> coalinfo_vect;
+            
+            // Add species tree joins to coalinfo_vect
+            SpeciesForest & sf = p.getSpeciesForest();
+            sf.heightsInternalsPreorders();
+            sf.buildCoalInfoVect();
+            sf.saveCoalInfo(coalinfo_vect);
+
+            // Add gene tree joins to coalinfo_vect
+            double log_likelihood = 0.0;
+            for (unsigned g = 0; g < G::_nloci; g++) {
+                GeneForest::SharedPtr gfp = p.getGeneForestPtr(g);
+                gfp->heightsInternalsPreorders();
+                gfp->buildCoalInfoVect();
+                //gfp->forgetSpeciesTreeAbove(0.0);
+                gfp->saveCoalInfo(coalinfo_vect);
+                log_likelihood += gfp->calcLogLikelihood();
+            }
+            log_likelihood *= G::_phi;
+            
+            // Sort coalinfo_vect from smallest to largest height
+            sort(coalinfo_vect.begin(), coalinfo_vect.end());
+            
+            //Forest::debugShowCoalInfo("SMC::saveParamsForLoRaD", coalinfo_vect);
+            
+            // Calculate log coalescent likelihood (joint prior for gene trees)
+            double log_gene_tree_prior = p.calcLogCoalescentLikelihood(coalinfo_vect,
+                /*integrate_out_thetas*/true, /*verbose*/false);
+                        
+            // Calculate log species tree prior
+            double log_species_tree_prior = calcLogSpeciesTreePrior(coalinfo_vect, /*include_join_probs*/false);
+                        
+            // This vector will hold all increments from the species tree
+            // and all gene trees (in order)
+            vector<string> params;
+            
+            // Calculate increments in species tree
+            double hprev = 0.0;
+            for (auto cinfo : coalinfo_vect) {
+                unsigned gene_plus_1 = get<1>(cinfo);
+                if (gene_plus_1 == 0) {
+                    double h = get<0>(cinfo);
+                    params.push_back(str(format("%.9f") % (h - hprev)));
+                    hprev = h;
+                }
+            }
+            
+            for (unsigned g = 0; g < G::_nloci; g++) {
+                // Map to store previous height for each species
+                //map<G::species_t, double> height_map;
+                hprev = 0.0;
+                for (auto cinfo : coalinfo_vect) {
+                    unsigned gene_plus_1 = get<1>(cinfo);
+                    double               h      = get<0>(cinfo);
+                    //G::species_t sleft  = get<2>(cinfo);
+                    //G::species_t sright = get<3>(cinfo);
+                    if (gene_plus_1 > 0) {
+                        unsigned gene_index = gene_plus_1 - 1;
+                        if (gene_index == g) {
+                            // coalescence event in gene g
+                            //assert(sleft == sright);
+                            params.push_back(str(format("%.9f") % (h - hprev)));
+                            hprev = h;
+                        }
+                    }
+                }
+            }
+
+            // Second element of pair is number of copies of particle
+            //unsigned n = p.getCount();
+            //for (unsigned i = 0; i < n; i++) {
+                particle_index++;
+                //loradf << str(format("%d\t%d\t%.9f\t%.9f\t%.9f\t%s")
+                //    % particle_index
+                //    % particle_object_index
+                //    % log_likelihood
+                //    % log_gene_tree_prior
+                //    % log_species_tree_prior
+                //    % boost::join(params, "\t")) << endl;
+                loradf << str(format("%d\t%.9f\t%.9f\t%.9f\t%s")
+                    % particle_index
+                    % log_likelihood
+                    % log_gene_tree_prior
+                    % log_species_tree_prior
+                    % boost::join(params, "\t")) << endl;
+            //}
+            //particle_object_index++;
+        }
+        loradf.close();
+        
+        ofstream loradRf("lorad.R");
+        loradRf << "library(lorad)\n";
+        loradRf << "colspec <- c(";
+        loradRf << "\"index\" = \"iteration\",";
+        //loradRf << "\"particle\" = \"ignore\",";
+        loradRf << " \"logFelsL\" = \"posterior\",";
+        loradRf << " \"logCoalL\" = \"posterior\",";
+        loradRf << " \"logPrior\" = \"posterior\",";
+        for (unsigned i = 4; i < names.size(); i++) {
+            loradRf << " \"" << names[i] << "\" = \"positive\"";
+            if (i < names.size() - 1)
+                loradRf << ",";
+        }
+        loradRf << ")\n";
+        loradRf << "params <- read.table(\"params-lorad.txt\", header=TRUE)\n";
+        loradRf << "results <- lorad_estimate(params, colspec, 0.5, \"random\", 0.1)\n";
+        loradRf << "lorad_summary(results)\n";
+        
+        loradRf.close();
+        
+        // ofstream conf("loradml.conf");
+        // conf << "paramfile = params-lorad.txt\n";
+        // conf << "plotfprefix = lnlplot\n";
+        // conf << "trainingfrac = 0.5\n";
+        // conf << "coverage = 0.1\n";
+        // conf << "colspec = iteration index\n";
+        // //conf << "colspec = ignore particle\n";
+        // conf << "colspec = posterior logFelsL\n";
+        // conf << "colspec = posterior logCoalL\n";
+        // conf << "colspec = posterior logPrior\n";
+        // for (unsigned i = 4; i < names.size(); i++) {
+        //     conf << "colspec = positive " << names[i] << "\n";
+        // }
+        // conf.close();
+    }
+
     struct SpeciesTreeDetails {
         unsigned _count;
         map<G::species_t, double> _theta_map;
@@ -1269,5 +1593,9 @@ namespace proj {
             unsigned i = _lot->randint(0, G::_nparticles2 - 1);
             kept.push_back(i);
         }
+    }
+    
+    inline double SMC::getLogMarginalLikelihood() const {
+        return _log_marg_like;
     }
 }

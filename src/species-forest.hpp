@@ -17,6 +17,8 @@ namespace proj {
             
             Node * findSpecies(G::species_t spp);
                                                 
+            bool isComplete() const;
+
             void fixupCoalInfo(vector<coalinfo_t> & coalinfo_vect, vector<coalinfo_t> & sppinfo_vect, bool capstone) const;
             tuple<double,double,double> drawTruncatedIncrement(Lot::SharedPtr lot, double truncate_at);
             pair<double,double> drawIncrement(Lot::SharedPtr lot);
@@ -47,6 +49,7 @@ namespace proj {
             double advanceSpeciesForest(unsigned particle, unsigned step);
             
             // NOTE: any variables added must be copied in operator=
+            bool _is_complete;
     };
     
     inline SpeciesForest::SpeciesForest() {
@@ -58,6 +61,7 @@ namespace proj {
 
     inline void SpeciesForest::clear() {
         Forest::clear();
+        _is_complete = false;
     }
     
     inline Node * SpeciesForest::findSpecies(G::species_t spp) {
@@ -321,8 +325,13 @@ namespace proj {
         refreshAllPreorders();
     }
         
+    inline bool SpeciesForest::isComplete() const {
+        return _is_complete;
+    }
+        
     inline void SpeciesForest::operator=(const SpeciesForest & other) {
         Forest::operator=(other);
+        _is_complete = other._is_complete;
     }
     
     inline void SpeciesForest::addCoalInfoElem(const Node * nd, vector<coalinfo_t> & recipient) {
@@ -491,6 +500,10 @@ namespace proj {
                         nd->setLeftChild(nullptr);
                         assert(!nd->getRightSib());
                     }
+                }
+                
+                if (nodes_to_remove.size() == 0) {
+                    _is_complete = true;
                 }
                 
                 for (auto nd : nodes_to_remove) {

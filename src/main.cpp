@@ -116,6 +116,8 @@ unsigned                            G::_nthreads                    = 1;
 mutex                               G::_mutex;
 #endif
 
+bool                                G::_save_gene_trees             = false;
+bool                                G::_save_species_trees          = false;
 unsigned                            G::_treefile_compression        = 0;
 
 unsigned                            G::_nstates                     = 4;
@@ -151,6 +153,8 @@ unsigned                            G::_nparticles                  = 500;
 unsigned                            G::_nparticles2                 = 0;
 unsigned                            G::_nkept                       = 0;
 unsigned                            G::_nkept2                      = 0;
+
+vector<vector<double> >             G::_second_level_log_likes;
 
 #if defined(FOSSILS)
 vector<Fossil>                      G::_fossils;
